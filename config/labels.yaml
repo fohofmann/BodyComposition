@@ -1,0 +1,39 @@
+LBL_VERTEBRALBODIES:
+  1: T1
+  2: T2
+  3: T3
+  4: T4
+  5: T5
+  6: T6
+  7: T7
+  8: T8
+  9: T9
+  10: T10
+  11: T11
+  12: T12
+  13: L1
+  14: L2
+  15: L3
+  16: L4
+  17: L5
+  18: L6
+  19: SACRUM
+  20: COCCYX
+  21: T13
+
+LBL_TISSUE:
+  1: SM
+  2: BONE
+  3: SAT
+  4: aVAT
+  5: tVAT
+  6: HEART
+  7: LUNG
+  8: IMAT
+
+LBL_TISSUE_TSEG:
+  1: SAT
+  2: VAT
+  3: SM
+  4: PSOAS
+  5: IMAT

@@ -1,0 +1,10 @@
+# overwriting to increase speed, and decrease footprint
+segmentation:
+  save: False
+  tseg_fast: True
+
+vertebrae:
+  save_mask: False
+
+tissue:
+  save_mask: False

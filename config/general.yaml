@@ -1,0 +1,72 @@
+paths:
+  workspace: ./data/{method} #./data/output/{method} # available: method, filter, timestamp; if None = input.parent.parent
+  logs: ./data/{method}/logs/{timestamp}.log # available: method, filter, timestamp
+  weights:
+    totalsegmentator: None # totalsegmentator identifies subdirectory using nnunet routines by itself
+  tseg_config: None # path to directory that includes tseg config file, e.g. w/ license number
+
+logging_level:
+  file: INFO
+  console: WARNING
+
+run:
+  reset: False # removes all outputs at initialization
+  skip: True # skips segmentations and mask generation if present
+  timeout: 3600
+
+segmentation:
+  save: True
+  tseg_fast: False
+
+vertebrae:
+  save_mask: True
+  min_voxels_per_vertebra: 20
+  fill_undefined_levels: True
+  correct_monotonicity: True
+  correct_monotonicity_max_windowsize: 10
+  center_of_mass: True
+  deprioritize_labels: [19] # Sacrum
+
+tissue:
+  save_mask: True
+
+  hu_ranges:
+    all: [-1024, 3071] # clipping metal implants and noisy outliers
+    adipose_tissue: [-190, -30]
+    skeletal_muscle: [-29, 150]
+
+  hu_filters:
+    imat: True
+    vat: True
+    sm: True
+
+  hu_denoise:
+    median_filter: True
+    median_filter_kernel: [3,3,1] # RAS+
+    clip_outliers: True
+
+  size_limit_AT:
+    enabled: True
+    version: 3D # options: 2D, 3D
+    limit_2D: 5 # mm^2
+    limit_3D: 80 # mm^3
+
+  size_limit_SM:
+    enabled: True
+    version: 3D # options: 2D, 3D
+    limit_2D: 10 # mm^2
+    limit_3D: 80 # mm^3
+
+crop:
+  SpineCranioCaudal:
+    roi: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21] # labels
+    axes: [False, False, False, False, True, True]
+    margin: [0, 0, 0, 0, -20, -20] # in mm, is transformed to px later
+  L3CranioCaudal:
+    roi: [15] # labels
+    axes: [False, False, False, False, True, True] # RAS+: left -> right, posterior -> anterior, inferor -> superior
+    margin: [0, 0, 0, 0, 0, 0] # RAS+: left -> right, posterior -> anterior, inferor -> superior
+  L234CranioCaudal:
+    roi: [14,15,16] # labels
+    axes: [False, False, False, False, True, True] # RAS+: left -> right, posterior -> anterior, inferor -> superior
+    margin: [0, 0, 0, 0, 0, 0] # RAS+: left -> right, posterior -> anterior, inferor -> superior
