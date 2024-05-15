@@ -8,13 +8,13 @@ from scipy.ndimage import label as ndi_label, sum as ndi_sum, median_filter as n
 # function to remove small objects, per slice (2d)
 def _remove_small_objects_2d(mask, min_size=10):
     components, output, stats, centroids = cv2.connectedComponentsWithStats(
-        mask, connectivity=8
+        mask.astype(np.uint8), connectivity=8
     )
     sizes = stats[1:, -1]
-    mask = np.zeros(output.shape)
+    mask = np.zeros(output.shape, dtype=bool)
     for i in range(0, components - 1):
         if sizes[i] >= min_size:
-            mask[output == i + 1] = 1
+            mask[output == i + 1] = True
     return mask
 
 # function to remove small objects, 3d volume
