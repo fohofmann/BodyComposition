@@ -28,11 +28,8 @@ def SarcopeniaTotalSegmentator(pipeline):
         # postprocessing and export
         LoadMetadata(pipeline, input='metadata/{caseid}.csv'),
         DataCombine(pipeline),
-        DataExport(pipeline),
-        DataSubset(pipeline, ref='Level', level=['L2','L3','L4']),
-        DataAggregate(pipeline, method='mean', ref='Level'),
-        DataExport(pipeline, file='exports/{caseid}_bc_L234Mean.csv', append=False, add_metadata=True),
-        DataExport(pipeline, file='exports/all_bc_L234Mean.csv', append=True, add_metadata=True),
+        DataExport(pipeline, file='exports/{caseid}.csv', append=False, add_metadata=True),
+        DataExport(pipeline, file='exports/all.csv', append=True, add_metadata=True),
     ]
     return pipeline_definition
 
@@ -75,6 +72,6 @@ def SarcopeniaTotalSegmentatorFast(pipeline):
         DataExport(pipeline),
         DataSubset(pipeline, ref='Level', level=['L3']),
         DataAggregate(pipeline, method='mean', ref='Level'),
-        DataExport(pipeline, file='exports/all_bc_L3Mean.csv', append=True, add_metadata=True),
+        DataExport(pipeline, file='exports/all_L3Mean.csv', append=True, add_metadata=True),
     ]
     return pipeline_definition

@@ -142,34 +142,91 @@ class MasksTotalSegmentatorTissue(PipelineAction):
             input_label_iliopsoas = memory[self.input_label_iliopsoas_name]
             tmp_np = np.isin(input_label_iliopsoas.data_np, self.LBL_PSOAS)
             output_np[tmp_np] = self.LBL_TISSUE_R['PSOAS']
-            logging.info(f' added label PSOAS (={self.LBL_TISSUE_R["PSOAS"]})')
+            logging.info(f' added new label for PSOAS (={self.LBL_TISSUE_R["PSOAS"]})')
 
-        # imat
-        if self.config_tissue['hu_filters']['imat']:
-            logging.info(f" adding label IMAT (={self.LBL_TISSUE_R['IMAT']})")
+        # if any HU-based filter active:
+        if any([self.config_tissue[tissue]['filter_hu'] for tissue in ['imat', 'sm', 'vat', 'sat']]):
+            
+            # load image np
             input_image = memory[self.input_image_name]
             image_np = input_image.data_np
+            logging.debug(f'  HU filter(s) active, loaded image')
 
-            # filters for denoising
-            if self.config_tissue['hu_denoise']['clip_outliers']:
-                hu_range = self.config_tissue['hu_ranges']['all']
+            # denoising: clip outliers
+            if self.config_tissue['hu_denoise']['filter_outliers']:
+                hu_range = self.config_tissue['hu_denoise']['filter_outliers_range']
                 image_np = np.clip(image_np, min(hu_range), max(hu_range))
-            if self.config_tissue['hu_denoise']['median_filter']:
-                image_np = ndi_median_filter(image_np, size=self.config_tissue['hu_denoise']['median_filter_kernel'])      
+                logging.debug(f'  clipped HU values, range {hu_range}')
+            
+            # denoising: median filter
+            if self.config_tissue['hu_denoise']['filter_median']:
+                image_np = ndi_median_filter(image_np, size=self.config_tissue['hu_denoise']['filter_median_kernel'])   
+                logging.debug(f'  applied HU median filter, kernel={self.config_tissue["hu_denoise"]["filter_median_kernel"]}')
 
-            # create masks
-            mask_hu_at = filter_hu(image_np, self.config_tissue['hu_ranges']['adipose_tissue'])
-            if self.config_tissue['size_limit_AT']['enabled']:
-                remove_small_objects(mask_np = mask_hu_at,
-                                     image_zooms=input_image.spacing, 
-                                     limit_size_version=self.config_tissue['size_limit_AT']['version'], 
-                                     limit_size_2D=self.config_tissue['size_limit_AT']['limit_2D'], 
-                                     limit_size_3D=self.config_tissue['size_limit_AT']['limit_3D'])
-            tmp_mask = np.isin(output_np, [self.LBL_TISSUE_R['SM'],self.LBL_TISSUE_R['PSOAS']]) & mask_hu_at # = SM (=SM + psoas) & AT (larger than limit)
-            output_np[tmp_mask] = self.LBL_TISSUE_R['IMAT']
-            logging.info(f"  added label (={self.LBL_TISSUE_R['IMAT']})")
+        # filter: intermuscular adipose tissue IMAT; special case as introducing extra label
+        if self.config_tissue['imat']['filter_hu']:
+            logging.info(f" HU filter muscle compartment")
+            # create AT mask, doing this first to account for smaller objects at the edge of SM segmentation
+            mask_tmp = filter_hu(image_np, self.config_tissue['imat']['filter_hu_range'])
+            if self.config_tissue['imat']['filter_size']:
+                remove_small_objects(mask_np = mask_tmp,
+                                     image_zooms=input_image.spacing,
+                                     limit_size_version=self.config_tissue['imat']['filter_size_version'],
+                                     limit_size_2D=self.config_tissue['imat']['filter_size_2D'],
+                                     limit_size_3D=self.config_tissue['imat']['filter_size_3D'])
+                
+            # intersection of AT and SMTOTAL (= SM + PSOAS) -> IMAT
+            mask_tmp = np.isin(output_np, [self.LBL_TISSUE_R['SM'],self.LBL_TISSUE_R['PSOAS']]) & mask_tmp
+            output_np[mask_tmp] = self.LBL_TISSUE_R['IMAT']
+            logging.info(f"  positive filter -> added new label for IMAT (={self.LBL_TISSUE_R['IMAT']})")
 
-        # bodytrunk
+
+        # filter: skeletal muscle SM
+        if self.config_tissue['sm']['filter_hu']:
+            logging.info(f" HU filter muscle compartment(s)")
+            mask_tmp = filter_hu(image_np, self.config_tissue['sm']['filter_hu_range'])
+            mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['SM'], self.LBL_TISSUE_R['PSOAS']]) & np.logical_not(mask_tmp)
+            if self.config_tissue['sm']['filter_hu_size']:
+                remove_small_objects(mask_np = mask_tmp_not,
+                                     image_zooms=input_image.spacing,
+                                     limit_size_version=self.config_tissue['sm']['filter_hu_size_version'],
+                                     limit_size_2D=self.config_tissue['sm']['filter_hu_size_2D'],
+                                     limit_size_3D=self.config_tissue['sm']['filter_hu_size_3D'])
+            output_np[mask_tmp_not] = 0
+            logging.info(f"  negative filter -> SM")
+
+
+        # filter: visceral adipose tissue VAT 
+        if self.config_tissue['vat']['filter_hu']:
+            logging.info(f" HU filter visceral compartment")
+            mask_tmp = filter_hu(image_np, self.config_tissue['vat']['filter_hu_range'])
+            mask_tmp_not = np.isin(output_np, self.LBL_TISSUE_R['VAT']) & np.logical_not(mask_tmp)
+            if self.config_tissue['vat']['filter_hu_size']:
+                remove_small_objects(mask_np = mask_tmp_not,
+                                     image_zooms=input_image.spacing,
+                                     limit_size_version=self.config_tissue['vat']['filter_hu_size_version'],
+                                     limit_size_2D=self.config_tissue['vat']['filter_hu_size_2D'],
+                                     limit_size_3D=self.config_tissue['vat']['filter_hu_size_3D'])
+            output_np[mask_tmp_not] = 0
+            logging.info(f"  negative filter -> VAT")
+
+
+        # filter: subcutaneous adipose tissue SAT
+        if self.config_tissue['sat']['filter_hu']:
+            logging.info(f" HU filter subcutaneous compartment")
+            mask_tmp = filter_hu(image_np, self.config_tissue['sat']['filter_hu_range'])
+            mask_tmp_not = np.isin(output_np, self.LBL_TISSUE_R['SAT']) & np.logical_not(mask_tmp)
+            if self.config_tissue['sat']['filter_hu_size']:
+                remove_small_objects(mask_np = mask_tmp_not,
+                                     image_zooms=input_image.spacing,
+                                     limit_size_version=self.config_tissue['sat']['filter_hu_size_version'],
+                                     limit_size_2D=self.config_tissue['sat']['filter_hu_size_2D'],
+                                     limit_size_3D=self.config_tissue['sat']['filter_hu_size_3D'])
+            output_np[mask_tmp_not] = 0
+            logging.info(f"  negative filter -> SAT")
+
+
+        # remove extremities, ignore everything but bodytrunk
         if self.bodytrunk:
             input_label_bodytrunk = memory[self.input_label_bodytrunk_name]
             tmp_mask = (input_label_bodytrunk.data_np==self.LBL_BODYTRUNK) # 1=bodytrunk, remove other labels

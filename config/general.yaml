@@ -30,32 +30,46 @@ vertebrae:
 tissue:
   save_mask: True
 
-  hu_ranges:
-    all: [-1024, 3071] # clipping metal implants and noisy outliers
-    adipose_tissue: [-190, -30]
-    skeletal_muscle: [-29, 150]
-
-  hu_filters:
-    imat: True
-    vat: True
-    sm: True
-
   hu_denoise:
-    median_filter: True
-    median_filter_kernel: [3,3,1] # RAS+
-    clip_outliers: True
+    filter_outliers: False
+    filter_outliers_range: [-1024, 3071] # clipping metal implants and noisy outliers
+    filter_median: False
+    filter_median_kernel: [3,3,1] # RAS+
 
-  size_limit_AT:
-    enabled: True
-    version: 3D # options: 2D, 3D
-    limit_2D: 5 # mm^2
-    limit_3D: 80 # mm^3
+  imat:
+    filter_hu: True
+    filter_hu_range: [-190, -30]
 
-  size_limit_SM:
-    enabled: True
-    version: 3D # options: 2D, 3D
-    limit_2D: 10 # mm^2
-    limit_3D: 80 # mm^3
+    # special case: positive & negative filter: -SM, +IMAT:
+    filter_size: False
+    filter_size_version: 2D # options: 2D, 3D
+    filter_size_2D: 10 # mm^2
+    filter_size_3D: 80 # mm^3
+
+  sm:
+    filter_hu: True
+    filter_hu_range: [-29, 150]
+    filter_hu_size: False
+    filter_hu_size_version: 2D # options: 2D, 3D
+    filter_hu_size_2D: 10 # mm^2
+    filter_hu_size_3D: 80 # mm^3
+
+  vat: # in some studies differently defined than sat
+    filter_hu: True
+    filter_hu_range: [-190, -30]
+    filter_hu_size: False
+    filter_hu_size_version: 2D # options: 2D, 3D
+    filter_hu_size_2D: 20 # mm^2
+    filter_hu_size_3D: 80 # mm^3
+
+  sat:
+    filter_hu: True
+    filter_hu_range: [-190, -30]
+    filter_hu_size: False
+    filter_hu_size_version: 2D # options: 2D, 3D
+    filter_hu_size_2D: 20 # mm^2
+    filter_hu_size_3D: 80 # mm^3
+
 
 crop:
   SpineCranioCaudal:

@@ -1,5 +1,5 @@
 # BodyComposition v0.1
-This package combines model weights of [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) with pre- and postprocessing steps to calculate the areas of skeletal muscle (SM), psoas muscle (PSOAS), visceral adipose tissue (VAT), subcutaneous adipose tissue (SAT) and intramuscular adipose tissue (IMAT) from routine computed tomographies.
+This package combines model weights of [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) with pre- and postprocessing steps to calculate the cross-sectional areas of skeletal muscle (SM<sub>total</sub>), psoas muscle (SM<sub>psoas</sub>), visceral adipose tissue (VAT), subcutaneous adipose tissue (SAT) and intermuscular adipose tissue (IMAT) from routine computed tomographies.
 
 ## Installation
 
