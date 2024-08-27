@@ -1,0 +1,31 @@
+# Ignore the .git directory
+.git
+
+# Ignore specific directories
+data/
+docs/
+logs/
+models/
+
+# Ignore temporary files
+*.log
+*.tmp
+
+# Ignore all .env files except .env.example
+.env
+!.env.example
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore Mac-specific files
+.DS_Store
+
+# Ignore IDE/editor-specific files
+.vscode/
+.idea/
+
+# Ignore build artifacts
+build/
+dist/
