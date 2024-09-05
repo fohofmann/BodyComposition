@@ -1,0 +1,54 @@
+totalsegmentator:
+  title: 'TotalSegmentator dataset & model weights'
+  link:
+    - 'https://zenodo.org/records/10047292'
+    - 'https://github.com/wasserth/TotalSegmentator'
+  license: 'CC BY 4.0'
+  citation: 'Wasserthal, J., Breit, H.-C., Meyer, M.T., Pradella, M., Hinck, D., Sauter, A.W., Heye, T., Boll, D., Cyriac, J., Yang, S., Bach, M., Segeroth, M., 2023. TotalSegmentator: Robust Segmentation of 104 Anatomic Structures in CT Images. Radiology: Artificial Intelligence. https://doi.org/10.1148/ryai.230024'
+
+totalsegmentator_nc: 
+  title: 'TotalSegmentator model weights (non-commercial)'
+  link: 'https://backend.totalsegmentator.com/license-academic/'
+  license: 'non-commercial license'
+  citation: 'Wasserthal, J., Breit, H.-C., Meyer, M.T., Pradella, M., Hinck, D., Sauter, A.W., Heye, T., Boll, D., Cyriac, J., Yang, S., Bach, M., Segeroth, M., 2023. TotalSegmentator: Robust Segmentation of 104 Anatomic Structures in CT Images. Radiology: Artificial Intelligence. https://doi.org/10.1148/ryai.230024'
+
+comp2comp:
+  title: 'Comp2Comp model weights'
+  link: 'https://huggingface.co/louisblankemeier/stanford_spine'
+  license: 'Apache-2.0'
+  citation: 'Blankemeier, L., Desai, A., Zambrano Chaves, J.M., Wentland, A., Yao, S., Reis, E., Jensen, M., Bahl, B., Arora, K., Patel, B.N., Lenchik, L., Willis, M., Boutin, R.D., Chaudhari, A.S., 2023. Comp2Comp: Open-Source Body Composition Assessment on Computed Tomography. arXiv preprint arXiv:2302.06568. https://doi.org/10.48550/arXiv.2302.06568'
+
+nnunet:
+  title: 'nnU-Net framework'
+  link: 'https://github.com/MIC-DKFZ/nnUNet'
+  license: 'Apache-2.0'
+  citation: 'Isensee, F., Jaeger, P.F., Kohl, S. A., Petersen, J., Maier-Hein, K.H., 2021. nnU-Net: a self-configuring method for deep learning-based biomedical image segmentation. Nature methods, 18(2), 203-211. https://doi.org/10.1038/s41592-020-01008-z'
+
+nnunet_resenc:
+  title: 'nnU-Net framework, residual encoder presets'
+  link: 'https://github.com/MIC-DKFZ/nnUNet/blob/master/documentation/resenc_presets.md'
+  license: 'Apache-2.0'
+  citation: 'Isensee, F., Wald, T., Ulrich, C., Baumgartner, M. , Roy, S., Maier-Hein, K., Jaeger, P., 2024. nnU-Net Revisited: A Call for Rigorous Validation in 3D Medical Image Segmentation. arXiv preprint arXiv:2404.09556. https://doi.org/10.48550/arXiv.2404.09556'
+
+verse:
+  title: 'VerSe dataset'
+  link: 
+    - 'https://github.com/anjany/verse'
+    - 'https://osf.io/nqjyw/'
+    - 'https://osf.io/nqjyw/'
+  license: 'CC BY SA 4.0'
+  citation: 'Sekuboyina, A., Husseini, M.E., Bayat, A., Löffler, M., Liebl, H., Li, H., Tetteh, G., Kukačka, J., Payer, C., Štern, D., Urschler, M., Chen, M., Cheng, D., Lessmann, N., Hu, Y., Wang, T., Yang, D., Xu, D., Ambellan, F., Amiranashvili, T., Ehlke, M., Lamecker, H., Lehnert, S., Lirio, M., Pérez de Olaguer, N., Ramm, H., Sahu, M., Tack, A., Zachow, S., Jiang, T., Ma, X., Angerman, C., Wang, X., Brown, K., Kirszenberg, A., Puybareau, É., Chen, D., Bai, Y., Rapazzo, B.H., Yeah, T., Zhang, A., Xu, S., Hou, F., He, Z., Zeng, C., Xiangshang, Z., Liming, X., Netherton, T.J., Mumme, R.P., Court, L.E., Huang, Z., He, C., Wang, L.-W., Ling, S.H., Huỳnh, L.D., Boutry, N., Jakubicek, R., Chmelik, J., Mulay, S., Sivaprakasam, M., Paetzold, J.C., Shit, S., Ezhov, I., Wiestler, B., Glocker, B., Valentinitsch, A., Rempfler, M., Menze, B.H., Kirschke, J.S. (2021). VerSe: A Vertebrae labelling and segmentation benchmark for multi-detector CT images. Medical Image Analysis. https://doi.org/10.1016/j.media.2021.102166'
+
+intvertebrae:
+  title: 'VertebralBodiesCT dataset & model weights'
+  link: 'https://huggingface.co/collections/fhofmann/'
+  license: 'CC BY SA 4.0'
+  citation: 'Hofmann, F.O. et al. 2024. VertebralBodiesCT dataset & model weights. https://huggingface.co/fhofmann'
+
+BOA:
+  title: 'Body-and-Organ-Analysis model weights'
+  link:
+    - 'https://github.com/UMEssen/Body-and-Organ-Analysis'
+    - 'https://zenodo.org/records/7918824'
+  license: 'Apache-2.0/MIT'
+  citation: 'Haubold, J., Baldini, G., Parmar, V., Schaarschmidt, B.M., Koitka, S., Kroll, L., van Landeghem, N., Umutlu, L., Forsting, M., Nensa, F., & Hosch, R. (2023). BOA: A CT-Based Body and Organ Analysis for Radiologists at the Point of Care. Investigative Radiology. https://doi.org/10.1097/RLI.0000000000001040'

@@ -1,9 +1,12 @@
 paths:
   workspace: ./data/{method} #./data/output/{method} # available: method, filter, timestamp; if None = input.parent.parent
-  logs: ./data/{method}/logs/{timestamp}.log # available: method, filter, timestamp
+  logs: ./logs/{method}_{timestamp}.log # available: method, filter, timestamp
   weights:
-    totalsegmentator: None # totalsegmentator identifies subdirectory using nnunet routines by itself
-  tseg_config: None # path to directory that includes tseg config file, e.g. w/ license number
+    int-vertebrae: ./models/Dataset601_VertebralBodies
+    stanford-spine: ./models/Task252_Stanford_Spine
+    totalsegmentator: ./models # totalsegmentator identifies subdirectory using nnunet routines by itself
+  totalsegmentator_config: ./models/totalsegmentator_config # path to directory that includes tseg config file, e.g. w/ license number
+  huggingface_cache: ./models/tmp
 
 logging_level:
   file: INFO
@@ -12,11 +15,10 @@ logging_level:
 run:
   reset: False # removes all outputs at initialization
   skip: True # skips segmentations and mask generation if present
-  timeout: 3600
+  timeout: 1200
 
 segmentation:
-  save: True
-  tseg_fast: False
+  save_label: True
 
 vertebrae:
   save_mask: True

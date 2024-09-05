@@ -8,7 +8,7 @@ import re
 
 # specific imports
 from BodyComposition.utils.config import update_config
-from BodyComposition.utils.logging import init_logging
+from BodyComposition.utils.logging import init_logging, log_license
 from BodyComposition.pipeline import PipelineBuilder, run_file, run_batch
 from BodyComposition.utils.datalist import DatalistBuilder
 
@@ -36,7 +36,7 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
     input_filter_simple = re.sub(r'\W+', '', input_filter)
     
     # load config: general < pipeline specific < input
-    config_dict = update_config({}, Path('./config/general.yaml'))
+    config_dict = update_config({}, Path('./config/config.yaml'))
     config_dict = update_config(config_dict, Path('./config/labels.yaml'))
     config_dict = update_config(config_dict, Path('./config') / f'{method}.yaml')
     if config is not None:
@@ -64,6 +64,9 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
     
     # get input and output files, inputs = requirements, outputs = relevant if overwrite is set
     io_inputs, io_outputs = pipeline.get_io()
+
+    # get licenses and print
+    log_license(pipeline.get_licenses())
     
     # if input is nifti, single execution and return
     if isinstance(input, Nifti1Image):
