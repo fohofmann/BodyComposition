@@ -3,7 +3,7 @@ import logging
 from BodyComposition.pipeline import PipelineAction
 from time import time
 import numpy as np
-from scipy.ndimage.measurements import center_of_mass
+from scipy.ndimage import center_of_mass
 
 # action class
 class CalcVertebralLevel(PipelineAction):
