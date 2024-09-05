@@ -98,7 +98,7 @@ class NiftiDataContainer():
         if self._bbox is None:
             # check affine and spacing
             # data_np setter checks shape
-            if self._affine is not None and self._affine != value.affine:
+            if self._affine is not None and not np.array_equal(self._affine, value.affine):
                 raise ValueError(f'Affines do not match: {self._affine} != {value.affine}')
             elif self._spacing is not None and self._spacing != value.header.get_zooms():
                 raise ValueError(f'Spacings do not match: {self._spacing} != {value.header.get_zooms()}')
@@ -112,7 +112,7 @@ class NiftiDataContainer():
 
             # check affine and spacing
             # data_np setter checks shape
-            if self.affine != value.affine:
+            if not np.array_equal(self._affine, value.affine):
                 raise ValueError(f'Affines do not match: {self.affine} != {value.affine}')
             elif self.spacing != value.header.get_zooms():
                 raise ValueError(f'Shapes do not match: {self.spacing} != {value.header.get_zooms()}')
