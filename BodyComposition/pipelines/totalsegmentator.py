@@ -2,15 +2,16 @@ import os
 
 def SarcopeniaTotalSegmentator(pipeline):
     """Pipeline definition for body composition analysis."""
-    from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentator
+    from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentatorConfig, SegmTotalSegmentator
     from BodyComposition.actions.calc_vertebrallevel import CalcVertebralLevel
     from BodyComposition.actions.calc_csa import CalcCSA
-    from BodyComposition.actions.data_postprocessing import DataCombine, DataSubset, DataAggregate, DataExport
+    from BodyComposition.actions.data_postprocessing import DataCombine, DataExport
     from BodyComposition.actions.masks_totalsegmentator import MasksTotalSegmentatorSpine, MasksTotalSegmentatorTissue
     from BodyComposition.actions.data_loading import LoadMetadata
    
     # pipeline step definition
     pipeline_definition = [
+        SegmTotalSegmentatorConfig(pipeline),
         SegmTotalSegmentator(pipeline, image='tmp/index', task='spine'),
         SegmTotalSegmentator(pipeline, image='tmp/index', task='vertebralbodies'),
         SegmTotalSegmentator(pipeline, image='tmp/index', task='bodytrunk'),
@@ -37,7 +38,7 @@ def SarcopeniaTotalSegmentator(pipeline):
 
 def SarcopeniaTotalSegmentatorFast(pipeline):
     """Pipeline definition for body composition analysis using Cropping."""
-    from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentator
+    from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentatorConfig, SegmTotalSegmentator
     from BodyComposition.actions.crop import CreateBoundingBox, ApplyBoundingBox
     from BodyComposition.actions.calc_vertebrallevel import CalcVertebralLevel
     from BodyComposition.actions.calc_csa import CalcCSA
@@ -48,7 +49,8 @@ def SarcopeniaTotalSegmentatorFast(pipeline):
     # pipeline step definition
     pipeline_definition = [
         # localization vertebrae
-        SegmTotalSegmentator(pipeline, image='tmp/index', task='spine'),
+        SegmTotalSegmentatorConfig(pipeline),
+        SegmTotalSegmentator(pipeline, image='tmp/index', task='spine', fast=True),
 
         # crop to L2-4
         MasksTotalSegmentatorSpine(pipeline, reduce_to_vb=False),
@@ -57,7 +59,7 @@ def SarcopeniaTotalSegmentatorFast(pipeline):
         ApplyBoundingBox(pipeline, input='masks/{caseid}_tseg-vertebrae.nii.gz'),
         
         # segmentation area
-        SegmTotalSegmentator(pipeline, image='tmp/index', task='tissue'),
+        SegmTotalSegmentator(pipeline, image='tmp/index', task='tissue', fast=True),
 
         # postprocessing TotalSegmentator masks
         MasksTotalSegmentatorTissue(pipeline, image='tmp/index', iliopsoas=False, bodytrunk=False),
