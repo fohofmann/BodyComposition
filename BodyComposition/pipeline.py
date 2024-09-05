@@ -132,6 +132,17 @@ class PipelineBuilder():
             io_outputs.extend(new_outputs)
             io_outputs_set.update(new_outputs)
         return io_inputs, io_outputs
+    
+    def get_licenses(self) -> List[str]:
+        """
+        get licenses for built pipeline
+        returns: list of licenses required by pipeline
+        """
+        licenses = []
+        for action in self.actions:
+            if hasattr(action, 'licenses'):
+                licenses.extend(action.licenses)
+        return list(set(licenses))
 
 
     def __call__(self, memory):
