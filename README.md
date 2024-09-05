@@ -1,4 +1,4 @@
-# BodyComposition v0.1
+# BodyComposition v0.2
 This package combines existing models of [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) or the [Comp2Comp pipeline](https://huggingface.co/louisblankemeier/stanford_spine) or [modified models](https://huggingface.co/fhofmann) (based on labels from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator/) and [VerSe](https://github.com/anjany/verse)), with pre- and postprocessing steps to calculate the cross-sectional areas of skeletal muscle (SM<sub>total</sub>), psoas muscle (SM<sub>psoas</sub>), visceral adipose tissue (VAT), subcutaneous adipose tissue (SAT) and intermuscular adipose tissue (IMAT) from routine computed tomography (CT) scans.
 
 ## Installation
@@ -35,9 +35,9 @@ This pipeline uses model weights derived from [TotalSegmentator](https://github.
   - **If you use TotalSegmentator models only,** you can skip this. TotalSegmentator will download the models automatically, if not available.
   - **Alternatively, you can download the model weights using `bodycomposition_download_models`**:
     ```bash
-    bodycomposition_download_models -pipeline BodyCompositionFast
+    bodycomposition_download_models --pipeline BodyCompositionFast
     ```
-    This script will download the models and store them in the directories as defined in `config/config.yaml`. You can download single models (using `-model`), or all models required for a specific pipeline (using `-pipeline`).
+    This script will download the models and store them in the directories as defined in `config/config.yaml`. You can download single models (using `--model`), or all models required for a specific pipeline (using `--pipeline`).
   
 
 ## Usage
