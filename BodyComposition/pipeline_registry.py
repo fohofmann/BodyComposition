@@ -4,14 +4,18 @@
 # different executers can be used to process the pipeline
 
 # pipeline definitions import
+from BodyComposition.pipelines.bodycomposition import BodyComposition, BodyCompositionFast
 from BodyComposition.pipelines.totalsegmentator import SarcopeniaTotalSegmentator, SarcopeniaTotalSegmentatorFast
+from BodyComposition.pipelines.stanford import SarcopeniaStanford
 
 # add other pipelines to import here
 
 # dictionary of pipeline definitions
 pipeline_registry = {
-    'SarcopeniaTotalSegmentatorFast': SarcopeniaTotalSegmentatorFast,
+    'BodyComposition': BodyComposition,
+    'BodyCompositionFast': BodyCompositionFast,
     'SarcopeniaTotalSegmentator': SarcopeniaTotalSegmentator,
-
+    'SarcopeniaTotalSegmentatorFast': SarcopeniaTotalSegmentatorFast,
+    'SarcopeniaStanford': SarcopeniaStanford,
     # add new pipelines here
 }
