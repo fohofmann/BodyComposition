@@ -1,17 +1,17 @@
 # Configuration File
 
-Frequently changing parameters are adapted using configuration files or dictionaries. The pipeline is loading
+Frequently changing parameters can be adapted using configuration files or dictionaries. The pipeline is loading
 - `config/config.yaml`, and
 - the `config/*.yaml` file with the same name as the current pipeline (e.g., `BodyCompositionFast.yaml`), and
-- the argument `config` when calling the pipeline, which can either be a path to a file (e.g. `bodycomposition --config path/to/new/config.yaml`) or a dictionary (e.g. `bodycomposition --config '{"segmentation": {"save_label": True}"}'`).
+- the argument `config`, which can either be a path to a file (e.g. `bodycomposition --config path/to/new/config.yaml`) or a dictionary (e.g. `bodycomposition --config '{"segmentation": {"save_label": True}"}'`).
 
-Parameters are replaced in the following order: `config/config.yaml` < `config/*.yaml` < `--config` argument. This means that parameters in the `--config` argument will overwrite parameters defined in the other files.
+Parameters are replaced in the following order: `config/config.yaml` < `config/*.yaml` < `--config` argument. This means that parameters in the `--config`/`-c` argument will overwrite parameters defined in the other files.
 
 ## Paramenters
 
 ### Paths
-- `workspace`: Path to the workspace where the data (e.g. `labels`, `masks`, `exports`) is stored. The path can include placeholders for the method, filter, and timestamp. If `None`, the parent directory of the input data is used.
-- `logs`: Path to the log file. The path can include placeholders for the method, filter, and timestamp.
+- `workspace`: Path to the workspace where the data (e.g., the directories `labels`, `masks`, `exports`) is stored. The path can include placeholders for `method` (= name of the current pipeline), `filter` (= regex filter used for input filtering), and `timestamp` (= int time). If `None`, the parent directory of the input data is used.
+- `logs`: Path to the log file. The path can include placeholders for `method` (= name of the current pipeline), `filter` (= regex filter used for input filtering), and `timestamp` (= int time).
 - `weights`: Path to the weights of the nnU-Net models. For `totalsegmentator`, the path should be the directory that includes all different models ("tasks" in TotalSegementator), as TotalSegmentator identifies the subdirectory by itself.
 - `totalsegmentator_config`: Path to the directory that includes the TotalSegmentator configuration file, including your license number.
 
@@ -24,11 +24,11 @@ Parameters are replaced in the following order: `config/config.yaml` < `config/*
 - `timeout`: Timeout in seconds for **each case** in the pipeline. Can be used to prevent the pipeline from getting stuck on a single case.
 
 ### Segmentation
-- `save_label`: If `True`, the segmentation labels are saved. If `False`, the labels are just transferred to the next step of the pipeline.
+- `save_label`: If `True`, the segmentation labels are saved. If `False`, the labels are just saved to the temporary pipeline memory.
 
 ### Vertebrae
 
-- `save_mask`: If `True`, the vertebrae masks are saved. If `False`, the masks are just transferred to the next step of the pipeline.
+- `save_mask`: If `True`, the vertebrae masks are saved. If `False`, the masks are just saved to the temporary pipeline memory.
 - `min_voxels_per_vertebra`: Minimum number of voxels per vertebra. If (the dominating) vertebra in a slice has less voxels, the label is ignored. This reduces the number of artifacts.
 - `fill_undefined_levels`: If `True`, slices between vertebra, in which no dominating vertebra was detected, are filled considering the neighbouring vertebrae in stepwise growing windows along the cranio-caudal axis.
 - `correct_monotonicity`: If `True`, the labels are corrected to be monotonically increasing along the cranio-caudal axis. To do so, the labels are corrected by using stepwise growing windows along the cranio-caudal axis.
@@ -37,7 +37,7 @@ Parameters are replaced in the following order: `config/config.yaml` < `config/*
 - `deprioritize_labels`: We determine the *dominating vertebra* in each slice, which is the vertebra with the highest number of voxels in the slice. Due to its size, the cranial parts of the sacrum can dominate the lower lumbar vertebrae. Therefore, this option allows to deprioritize the sacrum.
 
 ### Tissue
-- `save_mask`: If `True`, the tissue masks are saved. If `False`, the masks are just transferred to the next step of the pipeline.
+- `save_mask`: If `True`, the [tissue masks](labels.md) are saved. If `False`, the masks are just saved to the temporary pipeline memory.
 
 #### Filter: HU Denoise
 - `filter_outliers`: If `True`, outliers are clipped. If `False`, no clipping is performed.
@@ -78,7 +78,7 @@ Parameters are replaced in the following order: `config/config.yaml` < `config/*
 - `filter_size_3D`: Size for the 3D filter, e.g. 80 mm^3 (calculated based on voxel spacing). Only volumes larger than this are considered as SAT.
 
 ### Crop
-For the fast versions of the pipeline, we perform segmentation of the vertebrae, and then crop the image to the region of interest. The region of interest can be defined in this section of the configuration file, and is then used by the [CreateBoundingBox](../BodyComposition/actions/crop.py) class. For each region of interest, the following parameters can be defined:
+For the fast versions of the pipeline, we segment the vertebrae, and then crop the image to the region of interest for all further analyses. The region of interest can be defined in this section of the configuration file, and is then used by the [CreateBoundingBox](../BodyComposition/actions/crop.py) class. For each region of interest, the following parameters can be defined:
 
 - `roi`: List of labels that define the region of interest.
 - `axes`: List of boolean values that define the axes along which the cropping is performed. The order is [left, right, posterior, anterior, inferior, superior].
