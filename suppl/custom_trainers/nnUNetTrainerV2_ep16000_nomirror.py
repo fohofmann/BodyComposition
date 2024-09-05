@@ -1,7 +1,7 @@
 from nnunet.training.network_training.nnUNetTrainerV2 import nnUNetTrainerV2
 
 
-class nnUNetTrainerV2_ep4000_nomirror(nnUNetTrainerV2):
+class nnUNetTrainerV2_ep16000_nomirror(nnUNetTrainerV2):
     def __init__(
         self,
         plans_file,
