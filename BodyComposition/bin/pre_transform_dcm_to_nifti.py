@@ -15,6 +15,11 @@ import os
 # config
 config_min_num_slices = 30
 
+# function to write to error csv, add new line
+def track_warnings_as_csv(path, id, error):
+    with open(path, 'a') as f:
+        f.write(id + ',' + error + '\n')
+
 # function to extract metadata up to a certain key
 def extract_metadata(dicom):
     metadata = {}
@@ -30,27 +35,45 @@ def extract_metadata(dicom):
                 pass  # Ignore attributes that don't exist
     return metadata
 
-def main(path_root: str = None, path_input: str = None, path_output: str = None, 
-         override: bool = False, overwrite: bool = False):
-    
+def main():
+    """
+    Toolkit for transforming DICOM files to NIfTI files, and extracting metadata.
+    Usage: bin/prepare_dcm_to_nifti.py -w /path/to/root/dir/ -i input/dcm -o input/nii
+    """
+        
     # start timer
     glob_time = time()
 
+    # argument parser
+    parser = argparse.ArgumentParser(description='toolkit to transform DICOM files to NIfTI files, and extract metadata.')
+    parser.add_argument('--workspace', '-w', type=str,
+                        required=True, help='path to workspace.')
+    parser.add_argument('--input', '-i', type=str,
+                        required=True, help='path to subdirectory selected for processing, relative to workspace.')
+    parser.add_argument('--output', '-o', type=str,
+                        required=True, help='path to subdirectory for processed files, relative to workspace.')
+    parser.add_argument('--override', action='store_true', 
+                        default=False, help='Override warnings and errors.')
+    parser.add_argument('--overwrite', action='store_true',
+                        default=False, help='Overwrite existing files.')
+    args = parser.parse_args()
+
     # logging
-    path_log = Path(path_root, path_output, 'DcmToNifti.log')
+    path_log = Path(args.workspace, args.output, 'DcmToNifti.log')
+    path_warnings = Path(args.workspace, args.output, 'DcmToNifti_warnings.csv')
     path_log.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, 
                         format='%(asctime)s - %(levelname)s - %(message)s',
-                        filename=Path(path_root, path_output, 'DcmToNifti.log'))
+                        filename=path_log)
 
     # logging.info
     logging.info('DATA PREPROCESSING')
-    logging.info(f' workspace: {path_root}')
-    logging.info(f' input: {path_input}')
-    logging.info(f' output: {path_output}')
+    logging.info(f' workspace: {args.workspace}')
+    logging.info(f' input: {args.input}')
+    logging.info(f' output: {args.output}')
 
     # full paths, create output directories
-    path_input = Path(path_root, path_input)
+    path_input = Path(args.workspace, args.input)
 
     # check if input directory exists
     if not path_input.exists():
@@ -64,12 +87,12 @@ def main(path_root: str = None, path_input: str = None, path_output: str = None,
     logging.info(f' found {len(path_input_dirs)} directories containing more than one file')
 
     # remove all cases, that are already processed
-    if not overwrite:
-        path_input_dirs = [path_input_dir for path_input_dir in path_input_dirs if not Path(path_root, path_output, 'images', path_input_dir.parent.name + '.nii.gz').exists()]
+    if not args.overwrite:
+        path_input_dirs = [path_input_dir for path_input_dir in path_input_dirs if not Path(args.workspace, args.output, 'images', path_input_dir.parent.name + '.nii.gz').exists()]
         logging.info(f' found {len(path_input_dirs)} directories that are not processed yet')
 
     # multiprocessing
-    process = ProcessLoader(path_root, path_output, override=override)
+    process = ProcessLoader(args.workspace, args.output, path_warnings=path_warnings, override=args.override)
     n_processes = min(multiprocessing.cpu_count(), len(path_input_dirs))
     logging.info(f" spawn processes at {n_processes}/{multiprocessing.cpu_count()} CPUs\n")
     with multiprocessing.Pool(processes=n_processes, maxtasksperchild=20) as p:
@@ -80,16 +103,17 @@ def main(path_root: str = None, path_input: str = None, path_output: str = None,
 
 
 class ProcessLoader:
-    def __init__(self, path_root, path_output, override=False):
+    def __init__(self, path_data, path_output, path_warnings, override=False):
 
-        path_output_images = Path(path_root, path_output, 'images')
-        path_output_metadata = Path(path_root, path_output, 'metadata')
+        path_output_images = Path(path_data, path_output, 'images')
+        path_output_metadata = Path(path_data, path_output, 'metadata')
         path_output_images.mkdir(parents=True, exist_ok=True)
         path_output_metadata.mkdir(parents=True, exist_ok=True)
 
-        self.root = path_root
+        self.root = path_data
         self.output_images = path_output_images
         self.output_metadata = path_output_metadata
+        self.path_warnings = path_warnings
         self.override = override
 
         logging.info(f" initializing method process, creating directories")
@@ -127,6 +151,7 @@ class ProcessLoader:
 
             # if no series with axial orientation, select series with primary image type, assuming that it is axial
             if not series_selected:
+                track_warnings_as_csv(self.path_warnings, input_pat_id, 'no axial orientation')
                 if not self.override:
                     logging.warning(f" {input_pat_id}: no series with axial orientation found, skipping. Use --override if you wanna try anyway.")
                     return
@@ -137,6 +162,7 @@ class ProcessLoader:
             
             # if no series with primary image type, select all
             if not series_selected:
+                track_warnings_as_csv(self.path_warnings, input_pat_id, 'no primary image')
                 if not self.override:
                     logging.warning(f" {input_pat_id}: no series with axial orientation or primary image type found, skipping. Use --override if you wanna try anyway.")
                     return
@@ -147,6 +173,7 @@ class ProcessLoader:
 
             # skip if series contains less than files than needed
             if len(series_selected) < config_min_num_slices:
+                track_warnings_as_csv(self.path_warnings, input_pat_id, 'too few slices')
                 logging.info(f" {input_pat_id}: number of slices is {len(series_selected)}, < {config_min_num_slices}, skipping\n")
                 return
 
@@ -171,26 +198,5 @@ class ProcessLoader:
         except Exception as e:
             logging.error(f"{path_image} failed:\n {e}\n {traceback.format_exc()}\n")
 
-
-
 if __name__ == "__main__":
-    """
-    Toolkit for transforming DICOM files to NIfTI files, and extracting metadata.
-
-    Usage:
-    bin/PrepareDcmToNifti -d /path/to/root/dir/ -i input/dcm -o input/nii
-    """
-
-    # argument parser
-    parser = argparse.ArgumentParser(description='toolkit to transform DICOM files to NIfTI files, and extract metadata.')
-    parser.add_argument('--data', '-d', type=str,
-                        required=True, help='path to workspace.')
-    parser.add_argument('--input', '-i', type=str,
-                        required=True, help='path to subdirectory selected for processing, relative to workspace.')
-    parser.add_argument('--output', '-o', type=str,
-                        required=True, help='path to subdirectory for processed files, relative to workspace.')
-    parser.add_argument('--override', action='store_true', 
-                        default=False, help='Override warnings and errors.')
-    args = parser.parse_args()
-
-    main(path_root=args.data, path_input=args.input, path_output=args.output, override=args.override)
+    main() # parser is in main to be available when using pyproject.toml entrypoint

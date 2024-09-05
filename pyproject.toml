@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "BodyComposition"
+version = "0.2"
+description = "Pipeline for the segmentation of muscle and adipose tissue with postprocessing for mapping to vertebral levels and calculation of cross-sectional areas."
+authors = [
+    { name = "Felix Hofmann", email = "felix.hofmann@med.lmu.de" }
+]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.9"
+keywords = ["segmentation", "muscle", "adipose tissue", "medical imaging"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Topic :: Scientific/Engineering :: Medical Science Apps."
+]
+dependencies = [
+    "huggingface_hub",
+    "nibabel",
+    "numpy",
+    "opencv-python-headless",
+    "pandas",
+    "psutil",
+    "pydicom",
+    "pyradiomics",
+    "requests == 2.27.1",
+    "scipy",
+    "scikit-image",
+    "SimpleITK",
+    "tqdm",
+    "nnunet",
+    "nnunetv2",
+    "torch",
+    "TotalSegmentator"
+]
+
+[project.urls]
+Homepage = "https://github.com/fohofmann/BodyComposition"
+Source = "https://github.com/fohofmann/BodyComposition"
+Issues = "https://github.com/fohofmann/BodyComposition/issues"
+
+[project.scripts]
+bodycomposition_transform_dcm_to_nifti = "BodyComposition.bin.pre_transform_dcm_to_nifti:main"
+bodycomposition_download_models = "BodyComposition.bin.pre_download_models:main"
+bodycomposition = "BodyComposition.bin.run_batch:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["data", "docs", "logs", "models", "suppl"]

@@ -19,7 +19,7 @@ def looks_like_path(s):
 def main():
     """
     Effectively just a parser using the bodycomposition python API.
-    Usage: bin/RunBatch -i ./data/images -f '^ct_.*\.nii\.gz$' -m SarcopeniaTotalSegmentator
+    Usage: bin/run_batch.py -i ./data/images -f '^ct_.*\.nii\.gz$' -m BodyCompositionFast
     """
 
     # parse arguments
@@ -30,7 +30,7 @@ def main():
                         help='Filter to subset input files.')   
     parser.add_argument('--config', '-c', type=str, default=None,
                         help='Path to configuration file (*.yaml), or dictionary. Can be used to update the default configuration.')
-    parser.add_argument('--method', '-m', type=str, default='SarcopeniaTotalSegmentator',
+    parser.add_argument('--method', '-m', type=str, default='BodyCompositionFast',
                         help='Name of pipeline method to be run.')
     args = parser.parse_args()
 
@@ -51,4 +51,4 @@ def main():
                     method = args.method)
             
 if __name__ == "__main__":
-    main()
+    main() # parser is in main to be available when using pyproject.toml entrypoint
