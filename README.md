@@ -11,13 +11,13 @@ This package combines existing models of [TotalSegmentator](https://github.com/w
    cd BodyComposition
    pip install --no-cache-dir -e .
    ```
-4. Make sure, the TotalSegmentator model weights are available:
+4. Make sure, the model weights are available:
 
 ## Model weights
 
-This pipeline uses model weights derived from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) for tissue segmentation, amd model weights from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) or [Comp2Comp](https://huggingface.co/louisblankemeier/stanford_spine) or [an modified model](https://huggingface.co/fhofmann), based on labels from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator/) and [VerSe](https://github.com/anjany/verse), for spine segmentation. The pipeline combines these models with pre- and postprocessing steps. Details on the models can be found in [docs/models.md](docs/models.md), and how to combine them in [docs/pipeline.md](docs/pipeline.md).
+This pipeline uses model weights derived from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) for tissue segmentation, and model weights from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) or [Comp2Comp](https://huggingface.co/louisblankemeier/stanford_spine) or [an modified model](https://huggingface.co/fhofmann), based on labels from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator/) and [VerSe](https://github.com/anjany/verse), for spine segmentation. The pipeline combines these models with pre- and postprocessing steps. Details on the models can be found in [docs/models.md](docs/models.md), and how to combine them in [docs/pipeline.md](docs/pipeline.md).
 
-**BodyComposition v0.2 requires the `tissue_types` (and `vertebrae_body`) tasks from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator). We do not provide these weights directly, instead you must acquire a license available from [J. Wasserthal / TotalSegmentator](https://github.com/wasserth/TotalSegmentator).**
+**BodyComposition v0.2 requires the `tissue_types` (and for some configurations `vertebrae_body`) tasks from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator). We do not provide these weights directly, instead you must acquire a license available from [J. Wasserthal / TotalSegmentator](https://github.com/wasserth/TotalSegmentator).**
 
 1. Set your TotalSegmentator license.
   - **If you are already using TotalSegmentator in your current environment**, and have set a license, skip this.
