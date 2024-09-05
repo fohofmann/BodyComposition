@@ -6,15 +6,38 @@ import logging
 
 # specific libraries
 from totalsegmentator.python_api import totalsegmentator
+from totalsegmentator.config import setup_nnunet, setup_totalseg
 from BodyComposition.utils.logging import LoggingWriter, log_gpu_usage
 import contextlib
 import os
 
 # class
+class SegmTotalSegmentatorConfig(PipelineAction):
+    """Must run before other nnUNet actions to set up TotalSegmentator."""
+
+    def __init__(self, pipeline):
+        super().__init__(pipeline)
+
+        # set tseg paths if defined in config
+        path_tseg_config = str(self.config['paths']['totalsegmentator_config'])
+        path_tseg_weights = str(self.config['paths']['weights']['totalsegmentator'])
+        if path_tseg_config not in ('None', ''):
+            os.environ["TOTALSEG_HOME_DIR"] = path_tseg_config
+        if path_tseg_weights not in ('None', ''):
+            os.environ["TOTALSEG_WEIGHTS_PATH"] = path_tseg_weights
+        setup_nnunet()
+        setup_totalseg()
+
+    def __call__(self, memory):
+        # nothing to do
+        pass
+
+
+# class
 class SegmTotalSegmentator(PipelineAction):
     """Segmentation class"""
 
-    def __init__(self, pipeline, image: str, task: str):
+    def __init__(self, pipeline, image: str, task: str, fast: bool = False):
         super().__init__(pipeline, task)
 
         # define io
@@ -22,49 +45,42 @@ class SegmTotalSegmentator(PipelineAction):
         self.output_label_name = 'labels/{{caseid}}_tseg-{task}.nii.gz'.format(task=task)
         self.io_inputs = [image]
         self.io_outputs = [self.output_label_name]
-
-        # set tseg paths if defined in config
-        path_tseg_config = str(self.config['paths']['tseg_config'])
-        path_tseg_weights = str(self.config['paths']['weights']['totalsegmentator'])
-        if path_tseg_config not in ('None', ''):
-            os.environ["TOTALSEG_HOME_DIR"] = path_tseg_config
-        if path_tseg_weights not in ('None', ''):
-            os.environ["TOTALSEG_WEIGHTS_PATH"] = path_tseg_weights
+        self.licenses = ['totalsegmentator', 'nnunet']
 
         # dictionary for task settings
         tasks = {
             'iliopsoas': {
                 'task': 'total',
-                'fast': self.config['segmentation']['tseg_fast'],
+                'fast': fast,
                 'roi_subset': ["iliopsoas_left", "iliopsoas_right"],
-                'license_warning': False,
+                'license_nc': False,
             },
             'spine': {
                 'task': 'total',
-                'fast': self.config['segmentation']['tseg_fast'],
+                'fast': fast,
                 'roi_subset': ["sacrum", "vertebrae_S1", "vertebrae_L5", "vertebrae_L4", "vertebrae_L3", "vertebrae_L2", "vertebrae_L1",
                                "vertebrae_T12", "vertebrae_T11", "vertebrae_T10", "vertebrae_T9", "vertebrae_T8", "vertebrae_T7", "vertebrae_T6",
                                "vertebrae_T5", "vertebrae_T4", "vertebrae_T3", "vertebrae_T2", "vertebrae_T1",
                                "vertebrae_C7", "vertebrae_C6", "vertebrae_C5", "vertebrae_C4", "vertebrae_C3", "vertebrae_C2", "vertebrae_C1"],
-                'license_warning': False,
+                'license_nc': False,
             },
             'bodytrunk': {
                 'task': 'body',
-                'fast': self.config['segmentation']['tseg_fast'],
+                'fast': fast,
                 'roi_subset': None,
-                'license_warning': False,
+                'license_nc': False,
             },
             'tissue': {
                 'task': 'tissue_types',
                 'fast': False, # not available
                 'roi_subset': None,
-                'license_warning': True,
+                'license_nc': True,
             },
             'vertebralbodies': {
                 'task': 'vertebrae_body',
                 'fast': False, # not available
                 'roi_subset': None,
-                'license_warning': True,
+                'license_nc': True,
             },
         }
 
@@ -73,8 +89,8 @@ class SegmTotalSegmentator(PipelineAction):
         
         self.task = task
         self.task_config = tasks[task]
-        if self.task_config['license_warning']:
-            logging.warning(f'Using TotalSegmentator/{task}: RESPECT THE LICENSE! Info: https://github.com/wasserth/TotalSegmentator / J. Wasserthal')
+        if self.task_config['license_nc']:
+            self.licenses.append('totalsegmentator_nc')
 
 
     def __call__(self, memory):
@@ -130,6 +146,6 @@ class SegmTotalSegmentator(PipelineAction):
             logging.info(f' output: memory:{output_label.path}')
 
             # saving
-            if self.config['segmentation']['save']:
+            if self.config['segmentation']['save_label']:
                 output_label.save_to_file()
                 logging.info(f' saved file')
