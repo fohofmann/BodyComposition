@@ -4,6 +4,7 @@ import sys
 import torch.cuda as cuda
 from psutil import virtual_memory
 from pathlib import Path
+import yaml
 
 # function to initialze logging handlers (file and console)
 def init_logging(file: str = None, level_file: int = logging.INFO, level_console: int = logging.WARNING):
@@ -44,3 +45,22 @@ def log_gpu_usage(device=None):
     if cuda.is_available():
         msg += f' | VRAM {round(cuda.max_memory_allocated(device)/(1024**3),1)}/{round(cuda.max_memory_reserved(device)/(1024**3),1)}GB'
     logging.info(msg)
+
+# function for license messages
+def log_license(licenses):
+
+    # define meassges
+    with open(Path('./BodyComposition/utils/licenses.yaml')) as f:
+        dict_licenses = yaml.safe_load(f)
+
+    # generate license text
+    text_license = "The configured pipeline is based on frameworks, data or models from multiple authors. You should cite their work, and respect the individual licenses: \n\n"
+    for license in licenses:
+        if license in dict_licenses:
+            license_info = dict_licenses[license]
+            text_license += f"{license_info['title']} [{license_info['license']}]: {license_info['citation']}.\n\n"
+        else:
+            text_license += f"{license}: No license information available.\n\n"
+
+    # log the license messages
+    logging.warning(text_license)
