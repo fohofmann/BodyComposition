@@ -1,16 +1,15 @@
 from typing import Union
 from pathlib import Path
-from nibabel import Nifti1Image, load as nib_load, save as nib_save, as_closest_canonical
+import SimpleITK as sitk
+from nibabel import Nifti1Image
 import numpy as np
 
 class NiftiDataContainer():
     """
-    Class for loading and handling the Nifti data.
-    Principles: 
-    - data stored as numpy only, nibabel object is not stored.
-    - orientation is as in original file
-    - metadata stored separetely, and used to for exports and imports (especially to bbox)
-    - data are not loaded upon initialization, but only when needed; some actions only require file path.
+    Class for loading and handling Nifti data using SimpleITK.
+    The origin, direction, and spacing properties of the image are stored and used for file handling.
+    If a bounding box (bbox) is set, the image data is cropped, and the origin is adjusted accordingly.
+    directions: np: z, y, x, sitk: x, y, z, nifti: x, y, z
     """
     
     def __init__(self, path: Union[str, Path]):
@@ -19,9 +18,9 @@ class NiftiDataContainer():
         self._path = Path(path)
 
         # empty data and metadata
-        self._data_np = None
-        self._affine = None
-        self._shape = None
+        self._data = None
+        self._origin = None
+        self._direction = None
         self._spacing = None
         self._bbox = None
 
@@ -29,7 +28,7 @@ class NiftiDataContainer():
         if any(keyword in path.parent.name for keyword in ['label', 'mask']):
             self.dtype = np.uint8
         else:
-            self.dtype = np.int16 # enough for CT scans, but flexibility if using other dtypes
+            self.dtype = np.int16 # int8 would be enough for CT scans, but flexibility if using other dtypes
 
 
     def __repr__(self):
@@ -47,117 +46,167 @@ class NiftiDataContainer():
     
     @property
     def shape(self):
-        if self.data_np is None:
+        if self.data is None:
             return None
         else:
-            return self.data_np.shape
+            return self.data.shape # if bbox: inside only
         
     @property
-    def affine(self):
-        # not available: try to load from file
-        if self._affine is None and self.path.exists():
+    def origin(self):
+        if self._origin is None and self.path.exists():
             self.load_from_file()
 
-        bbox = self._bbox
-        if bbox is None:
-            return self._affine
+        if self._bbox is None:
+            return self._origin
         else:
-            affine_cropped = self._affine.copy()
-            bbox_ras = np.array([bbox[0], bbox[2], bbox[4]])
-            affine_cropped[:3, 3] = np.dot(self._affine[:3, :3], bbox_ras) + self._affine[:3, 3]
-            return affine_cropped
-        
+            # Compute the new origin: the start of the bounding box in physical space
+            bbox = self._bbox
+            # Bounding box is in the order (z, y, x) for numpy arrays, convert to (x, y, z) for physical space
+            new_origin_offset = np.array([bbox[4], bbox[2], bbox[0]]) * self._spacing[::-1]
+            # Convert self._direction (which is a tuple) into a numpy array and reshape to 3x3
+            direction_matrix = np.array(self._direction).reshape(3, 3)
+            # Apply the direction matrix to the new offset in physical space
+            new_origin = np.array(self._origin) + np.dot(direction_matrix, new_origin_offset)
+
+            return new_origin
+
+    @property
+    def direction(self):
+        if self._direction is None and self.path.exists():
+            self.load_from_file()
+        return self._direction
     
     def exists(self):
-        return self._data_np is not None or self.path.exists()
+        return self._data is not None or self.path.exists()
         
     def clear(self):
-        """Clears data_np, usefull for making some space, keeps metadata."""
-        self._data_np = None
+        """Clears _data, usefull for making some space, keeps metadata."""
+        self._data = None
 
 
 
     @property
-    def data_nib(self):
-        """Get nibabel: transforms np to nib, if bbox adjust affine"""
-
-        # some checks
-        if self.data_np is None:
-            return None
-        if self._affine is None:
-            raise ValueError(f'metadata missing, can not create nibabel object.')
-        
-        # export
-        return Nifti1Image(self.data_np, self.affine)
-            
-
-    @data_nib.setter
-    def data_nib(self, value: Nifti1Image):
-        """Set nibabel: depending on bbox, check adjust affine and shape."""
+    def img(self):
+        """Get SimpleITK image: if bbox is set, export only region within bbox and adjust origin accordingly."""
+        if self.data is None:
+            return None   
+        elif self._origin is None or self._direction is None or self._spacing is None:
+            raise ValueError(f'metadata missing, can not create SimpleITK object.')
 
         if self._bbox is None:
-            # check affine and spacing
-            # data_np setter checks shape
-            if self._affine is not None and not np.array_equal(self._affine, value.affine):
-                raise ValueError(f'Affines do not match: {self._affine} != {value.affine}')
-            elif self._spacing is not None and self._spacing != value.header.get_zooms():
-                raise ValueError(f'Spacings do not match: {self._spacing} != {value.header.get_zooms()}')
-            
+            # No bbox, return the full image
+            img_tmp = sitk.GetImageFromArray(self.data)
+            img_tmp.SetDirection(self._direction)
+            img_tmp.SetOrigin(self._origin)
+            img_tmp.SetSpacing(self._spacing)
+        else:
+            # If bbox is set, extract the subregion
+            bbox = self._bbox
+            cropped_np = self._data[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] # np: z, y, x
+
+            # Create sitk image from cropped data
+            img_tmp = sitk.GetImageFromArray(cropped_np)
+            img_tmp.SetDirection(self._direction)
+            img_tmp.SetOrigin(self.origin) # origin is adjusted to bbox
+            img_tmp.SetSpacing(self._spacing)
+
+        return img_tmp
+    
+
+    @img.setter
+    def img(self, value: Union[sitk.Image, Nifti1Image]):
+        """Load Image, either SimpleITK or Nifti1Image: check and adjust origin, direction, and shape if needed."""
+
+        # load data and metadata
+        if isinstance(value, Nifti1Image):
+            tmp_data = value.get_fdata().transpose((2, 1, 0)) # Nifti1Image = physical space -> SITK np: z, y, x
+            tmp_affine = value.affine
+            tmp_direction = tmp_affine[:3, :3] 
+            tmp_origin = tmp_affine[:3, 3].tolist()
+            tmp_direction = (tmp_direction / value.header.get_zooms()).flatten().tolist() # adjust the direction matrix for spacing, physical space
+            tmp_spacing = [float(i) for i in value.header.get_zooms()[::-1]] # Nifti1Image = physical space -> SITK np: z, y, x
+        elif isinstance(value, sitk.Image):
+            tmp_data = sitk.GetArrayFromImage(value)
+            tmp_direction = self._direction = value.GetDirection()
+            tmp_origin = self._origin = value.GetOrigin()
+            tmp_spacing = value.GetSpacing()
+        else:
+            raise ValueError(f'Unknown type for image: {type(value)}')
+        
+        # checks
+        if self._bbox is not None and (self._origin is None or self._spacing is None or self._direction is None):
+            raise ValueError(f'Bounding box can only be set, if metadata are available.')
+        if self._direction is not None and not np.allclose(self._direction, tmp_direction):
+            raise ValueError(f'Directions do not match: {self._direction} != {tmp_direction}')
+        if self._origin is not None and not np.allclose(self._origin, tmp_origin):
+            raise ValueError(f'Origins do not match: {self._origin} != {tmp_origin}')
+        if self._spacing is not None and not np.allclose(self._spacing, tmp_spacing):
+            raise ValueError(f'Spacings do not match: {self._spacing} != {tmp_spacing}')
+
+
+        if self._bbox is None:
             # save data & metadata
-            self._affine = value.affine
-            self._spacing = value.header.get_zooms()
-            self.data_np = value.get_fdata()
+            self._direction = tmp_direction
+            self._origin = tmp_origin
+            self._spacing = tmp_spacing
+            self.data = tmp_data
         
         else:
-
-            # check affine and spacing
-            # data_np setter checks shape
-            if not np.array_equal(self._affine, value.affine):
-                raise ValueError(f'Affines do not match: {self.affine} != {value.affine}')
-            elif self.spacing != value.header.get_zooms():
-                raise ValueError(f'Shapes do not match: {self.spacing} != {value.header.get_zooms()}')
-        
-            # save data
-            # metadata are already available (requirement of bbox)
-            self.data_np = value.get_fdata()
-
+            # save data numpy only, metadata are already available (requirement of bbox)
+            self.data = tmp_data
 
 
     @property
-    def data_np(self):
+    def imgNifti1(self):
+        """Get Nifti1Image: if bbox is set, export only region within bbox and adjust origin accordingly."""
+        if self.data is None:
+            return None   
+        elif self._origin is None or self._direction is None or self._spacing is None:
+            raise ValueError(f'metadata missing, can not create Nifti1Image object.')
+
+        # Create the affine matrix
+        tmp_direction = np.array(self.direction).reshape(3, 3)  # Reshape into a 3x3 matrix
+        tmp_origin = self.origin  # Origin is a 3-element vector
+        tmp_spacing = self.spacing[::-1]  # Spacing is a 3-element vector, reverse it to match the physical space
+        affine_tmp = np.eye(4)  # Initialize a 4x4 identity matrix
+        affine_tmp[:3, :3] = tmp_direction * tmp_spacing # Set the upper 3x3 part to the scaled direction matrix
+        affine_tmp[:3, 3] = tmp_origin  # Set the translation (origin) part
+        
+        # transpose data np
+        data_tmp = self.data.transpose((2, 1, 0)) # SITK np: z, y, x -> Nifti1Image = physical space
+
+        return Nifti1Image(data_tmp, affine_tmp)
+    
+
+    @property
+    def data(self):
         """Get numpy: if no bbox: all. if bbox: only inside."""
 
-        if self._data_np is None:
+        if self._data is None:
             if self.path.exists():
                 self.load_from_file()
             else:
                 return None
 
         if self._bbox is None:
-            return self._data_np
+            return self._data
         else:
             bbox = self._bbox
-            return self._data_np[bbox[0]:bbox[1],
-                                 bbox[2]:bbox[3],
-                                 bbox[4]:bbox[5]]
+            return self._data[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]]
 
-    @data_np.setter
-    def data_np(self, value: np.ndarray):
+    @data.setter
+    def data(self, value: np.ndarray):
         """Set numpy: check shape. if no bbox: all. if bbox: only inside."""
-
         bbox = self._bbox
         if bbox is None:
-            if self._shape is None:
-                self._shape = value.shape
-            elif self._shape != value.shape:
-                raise ValueError(f'Numpy shapes do not match: {self._shape} != {value.shape}')
-            self._data_np = value.astype(self.dtype)
-
+            if self._data is not None and self._data.shape != value.shape:
+                raise ValueError(f'Numpy shapes do not match: {self._data.shape} != {value.shape}')
+            self._data = value.astype(self.dtype)
         else:
-            bbox_shape = (bbox[1]-bbox[0], bbox[3]-bbox[2], bbox[5]-bbox[4]) # RAS+
+            bbox_shape = (bbox[1]-bbox[0], bbox[3]-bbox[2], bbox[5]-bbox[4]) # np: z, y, x
             if bbox_shape != value.shape:
                 raise ValueError(f'Numpy shapes do not match: {bbox_shape} != {value.shape}')
-            self._data_np[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] = value.astype(self.dtype)
+            self._data[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] = value.astype(self.dtype)
 
 
 
@@ -166,13 +215,13 @@ class NiftiDataContainer():
         return self._bbox
 
     @bbox.setter
-    def bbox(self, value: np.ndarray):
+    def bbox(self, value: Union[np.ndarray, list]):
         """Sets or resets bounding box: check (array (2,3), metadata must be av."""
         if value is None:
             self._bbox = None
-        elif not isinstance(value, list) or len(value)!=6: 
+        elif not isinstance(value, (list, np.ndarray)) or len(value) != 6:
             raise ValueError(f'Bounding box must be a list of 6 elements or None.')
-        elif any(element is None for element in self.meta):
+        elif self.origin is None or self.spacing is None or self.direction is None:
             raise ValueError(f'Bounding box can only be set, if metadata of original image already available.')
         else:
             self._bbox = value
@@ -182,52 +231,54 @@ class NiftiDataContainer():
     @property
     def meta(self):
         """Return metadata as tuple, used during import by other instances."""
-        return (self.affine, self.shape, self.spacing)
+        return (self.origin, self.spacing, self.direction)
 
 
     @meta.setter
     def meta(self, value: tuple):
         """Set metadata. If already set, check if consistent. If not set, set it."""
-        if self._affine is not None and self._affine != value[0]:
-            raise ValueError(f'Affines do not match: {self._affine} != {value[0]}')
-        elif self._shape is not None and self._shape != value[1]:
-            raise ValueError(f'Shapes do not match: {self._shape} != {value[1]}')
-        elif self._spacing is not None and self._spacing != value[2]:
-            raise ValueError(f'Spacings do not match: {self._spacing} != {value[2]}')
-        self._affine, self._shape, self._spacing = value
+        if self._origin is not None and self._origin != value[0]:
+            raise ValueError(f'Origins do not match: {self._origin} != {value[0]}')
+        elif self._spacing is not None and self._spacing != value[1]:
+            raise ValueError(f'Spacings do not match: {self._spacing} != {value[1]}')
+        elif self._direction is not None and self._direction != value[2]:
+            raise ValueError(f'Directions do not match: {self._direction} != {value[2]}')
+
+        self._origin, self._spacing, self._direction = value
 
 
 
     def save_to_file(self):
-        """Save data to nifti file: if NA, error. if AV, use nib getter."""
-        data_nib = self.data_nib
-        if data_nib is None:
-            raise ValueError(f'Nothing to save.')  
+        """Save data to nifti file: if NA, error. if AV, use sitk getter."""
+        img_tmp = self.img
+        if img_tmp is None:
+            raise ValueError(f'Nothing to save.')
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            nib_save(data_nib, self.path)
+            sitk.WriteImage(img_tmp, str(self.path))
 
     def load_from_file(self):
-        """Load data from nifti file: if NA, error. if AV, use nib setter"""
+        """Load data from nifti file: if NA, error. if AV, use sitk setter"""
         if not self.path.exists():
             raise FileNotFoundError(f'File not available at {self.path}.')
-        else:       
-            self.data_nib = nib_load(self.path)
+        else:
+            img_tmp = sitk.ReadImage(str(self.path))
+            self.img = img_tmp
 
 
 
     def remap(self, mapping: dict):
-        """Remap labels: replace values in data_np usimg mapping dictionary."""
-        tmp_data_np = self.data_np # load np
-        if tmp_data_np is None:
+        """Remap labels: replace values in data numpy usimg mapping dictionary."""
+        data_tmp = self.data # load np
+        if data_tmp is None:
             raise ValueError(f'No data available for remapping.')
         else:
             # create mapping array for relabeling, not existing labels are replaced with 0, then fancy indexing
-            labels_max = max(max(mapping.keys()), np.max(tmp_data_np))
+            labels_max = max(max(mapping.keys()), np.max(data_tmp))
             relabel_array = np.zeros(labels_max+1, dtype=np.uint8)
             for key, value in mapping.items():
                 relabel_array[key] = value
-            self.data_np = relabel_array[tmp_data_np]
+            self.data = relabel_array[data_tmp]
 
 
 
@@ -237,20 +288,20 @@ class NiftiDataContainer():
         Multiple reorientations should be avoided to reduce affine inaccuracies that are caused by rounding."""
 
         # load nib
-        if self._data_np is not None and self._affine is not None:
-            data_nib = self.data_nib
+        if self._data is not None and self._origin is not None and self._direction is not None:
+            img_tmp = self.img
         elif self.path.exists():
-            data_nib = nib_load(self.path)
+            img_tmp = sitk.ReadImage(str(self.path))
         else:
             raise ValueError(f'Data not complete, can not reorientate')
 
-        # reorientate nib
-        data_reoriented_nib = as_closest_canonical(data_nib)
-        data_reoriented_np = data_reoriented_nib.get_fdata().astype(self.dtype)
+        # reorientate sitk
+        img_tmp_reoriented = sitk.DICOMOrient(img_tmp, 'RAS')
+        data_tmp_reoriented = sitk.GetArrayFromImage(img_tmp_reoriented).astype(self.dtype)
 
         # reset existing bbox & metadata, set np
         self.bbox = None
-        self._affine = data_reoriented_nib.affine
-        self._shape = data_reoriented_np.shape
-        self._spacing = data_reoriented_nib.header.get_zooms()
-        self._data_np = data_reoriented_np
+        self._origin = img_tmp_reoriented.GetOrigin()
+        self._direction = img_tmp_reoriented.GetDirection()
+        self._spacing = img_tmp_reoriented.GetSpacing()
+        self._data = data_tmp_reoriented

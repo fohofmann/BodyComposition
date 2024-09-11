@@ -39,7 +39,7 @@ def run_file(pipeline, input_file, workspace=None):
         memory = {'id': 'tmp',
                   'workspace': workspace or Path(path_tmp),
                   'tmp/index': NiftiDataContainer(Path(path_tmp)/'input/tmp.nii.gz'),}
-        memory['tmp/index'].data_nib = input_file
+        memory['tmp/index'].img = input_file
         output = _run_case(pipeline, memory)
     logging.info("FINISHED PIPELINE.")
     return output

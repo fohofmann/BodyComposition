@@ -57,14 +57,14 @@ class MasksTotalSegmentatorSpine(PipelineAction):
         logging.info(f' loaded and remapped {input_label}')
 
         # copy content and header from input
-        output_mask.data_np = input_label.data_np
+        output_mask.data = input_label.data
         output_mask.meta = input_label.meta
 
         # remove all but vertebral bodies
         if self.reduce_to_vb:
             input_label_vb = memory[self.input_label_vb_name]
-            output_mask.data_np[input_label_vb.data_np != self.LBL_VERTEBRALBODIESONLY] = 0 # set everything outside of vertebralbodies to zero
-            output_mask.data_np[input_label.data_np == self.LBL_VERTEBRALBODIES_SACRUM] = self.LBL_VERTEBRALBODIES_SACRUM # include sacrum and S1 to mask vertebralbodies
+            output_mask.data[input_label_vb.data != self.LBL_VERTEBRALBODIESONLY] = 0 # set everything outside of vertebralbodies to zero
+            output_mask.data[input_label.data == self.LBL_VERTEBRALBODIES_SACRUM] = self.LBL_VERTEBRALBODIES_SACRUM # include sacrum and S1 to mask vertebralbodies
             logging.info(f'  removed everything except vertebral bodies')
 
         # save output
@@ -134,13 +134,13 @@ class MasksTotalSegmentatorTissue(PipelineAction):
         logging.info(f' load {input_label_tissue}')
 
         # copy content and header from input
-        output_np = input_label_tissue.data_np
+        output_np = input_label_tissue.data
         output_mask.meta = input_label_tissue.meta
         
         # iliopsoas
         if self.iliopsoas:
             input_label_iliopsoas = memory[self.input_label_iliopsoas_name]
-            tmp_np = np.isin(input_label_iliopsoas.data_np, self.LBL_PSOAS)
+            tmp_np = np.isin(input_label_iliopsoas.data, self.LBL_PSOAS)
             output_np[tmp_np] = self.LBL_TISSUE_R['PSOAS']
             logging.info(f' added new label for PSOAS (={self.LBL_TISSUE_R["PSOAS"]})')
 
@@ -149,7 +149,7 @@ class MasksTotalSegmentatorTissue(PipelineAction):
             
             # load image np
             input_image = memory[self.input_image_name]
-            image_np = input_image.data_np
+            image_np = input_image.data
             logging.debug(f'  HU filter(s) active, loaded image')
 
             # denoising: clip outliers
@@ -229,14 +229,14 @@ class MasksTotalSegmentatorTissue(PipelineAction):
         # remove extremities, ignore everything but bodytrunk
         if self.bodytrunk:
             input_label_bodytrunk = memory[self.input_label_bodytrunk_name]
-            tmp_mask = (input_label_bodytrunk.data_np==self.LBL_BODYTRUNK) # 1=bodytrunk, remove other labels
+            tmp_mask = (input_label_bodytrunk.data==self.LBL_BODYTRUNK) # 1=bodytrunk, remove other labels
             filter_keep_largest(tmp_mask)
             fill_holes(tmp_mask)
             output_np[np.logical_not(tmp_mask)] = 0
             logging.info(f" removed extremities")
 
         # logging
-        output_mask.data_np = output_np
+        output_mask.data = output_np
         logging.info(f' output: memory:{output_mask} ({time()-time_start:.2f}s)')
 
         # save mask if active

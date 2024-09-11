@@ -33,18 +33,18 @@ class CalcCSA(PipelineAction):
         logging.info(f' loaded {input_mask}, reorientated to canonical')
 
         # load spacing
-        spacing = input_mask.spacing # RAS+
-        pix_area = spacing[0] * spacing[1]
-        memory['slicethickness'] = spacing[2]
+        spacing = input_mask.spacing # SITK: z, y, x
+        pix_area = spacing[1] * spacing[2]
+        memory['slicethickness'] = spacing[0]
         logging.info(f' spacing: {spacing}')
 
-        # RAS+ format: 2 = -1 = inferior to superior, starting w 0
+        # SITK: SAR+ format: 0 = inferior to superior, starting w 0
         # create empty output array
-        res_csa_np = np.zeros(shape=(input_mask.shape[-1], len(self.LBL_TISSUE)), dtype=np.uint32)
+        res_csa_np = np.zeros(shape=(input_mask.shape[0], len(self.LBL_TISSUE)), dtype=np.uint32)
 
         # loop through tissue labels, run vectorized operation
         for i, key in enumerate(self.LBL_TISSUE):
-            res_csa_np[:, i] = np.round(np.sum(input_mask.data_np == key, axis=(0, 1)) * pix_area)
+            res_csa_np[:, i] = np.round(np.sum(input_mask.data == key, axis=(1, 2)) * pix_area)
 
         # save data to pipeline
         memory['tmp/tissue_values'] = res_csa_np

@@ -35,11 +35,11 @@ class DataCombine(PipelineAction):
         tissue_meta = memory['tmp/tissue_meta']
         vertebrae_meta = memory['tmp/vertebrae_meta']
         if not np.allclose(tissue_meta[0], vertebrae_meta[0]):
-            raise ValueError(f'Affines of tissue and vertebrae masks do not match:\n{tissue_meta[0]} vs \n{vertebrae_meta[0]}')
+            raise ValueError(f'Origin of tissue and vertebrae masks do not match:\n{tissue_meta[0]} vs \n{vertebrae_meta[0]}')
         elif not np.array_equal(tissue_meta[1], vertebrae_meta[1]):
-            raise ValueError(f'Shapes of tissue and vertebrae masks do not match:\n{tissue_meta[1]} vs \n{vertebrae_meta[1]}')
+            raise ValueError(f'Spacing of tissue and vertebrae masks do not match:\n{tissue_meta[1]} vs \n{vertebrae_meta[1]}')
         elif not np.allclose(tissue_meta[2], vertebrae_meta[2]):
-            raise ValueError(f'Spacings of tissue and vertebrae masks do not match:\n{tissue_meta[2]} vs \n{vertebrae_meta[2]}')
+            raise ValueError(f'Direction of tissue and vertebrae masks do not match:\n{tissue_meta[2]} vs \n{vertebrae_meta[2]}')
 
         # transform labels numpy to pandas
         vertebrae_df = pd.DataFrame(memory['tmp/vertebrae_values'], columns=["Slice", "Level", "Center", "Centroid"])

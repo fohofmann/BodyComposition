@@ -72,8 +72,8 @@ class SegmStanfordSpine(PipelineAction):
                 logging.debug(f" temporary directory: {tmp_dir}")
 
                 # load, reorientate & save image temporarily
-                input_image_nib = input_image.data_nib
-                nib_save(as_closest_canonical(input_image_nib), tmp_dir / "s01_0000.nii.gz")
+                imgNifti1 = input_image.imgNifti1
+                nib_save(as_closest_canonical(imgNifti1), tmp_dir / "s01_0000.nii.gz")
 
                 # redirect stdout and stderr from nnunet to logging
                 sl = LoggingWriter(logging.DEBUG)
@@ -101,7 +101,7 @@ class SegmStanfordSpine(PipelineAction):
                         multiprocessing.set_start_method('spawn', force=True)
                 
                 # load and save output
-                output_label.data_nib = nib_load(tmp_dir/'s01.nii.gz')
+                output_label.img = nib_load(tmp_dir/'s01.nii.gz')
 
             # logging
             logging.info(f' finished segmentation ({time() - time_start:.2f}s)')

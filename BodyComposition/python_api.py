@@ -1,5 +1,6 @@
 # general imports
 from nibabel import Nifti1Image
+import SimpleITK as sitk
 from pathlib import Path
 from typing import Union
 from time import time
@@ -16,7 +17,7 @@ from BodyComposition.utils.datalist import DatalistBuilder
 def bodycomposition(input: Union[str, Path, Nifti1Image],
                     input_filter: str = r'.*\.nii\.gz$',
                     workspace: Union[str, Path] = None,
-                    method: str = 'bodycomposition',
+                    method: str = 'BodyCompositionFast',
                     config: Union[dict, Path] = None,
                     ):
     """python API for body composition analysis.
@@ -69,7 +70,7 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
     log_license(pipeline.get_licenses())
     
     # if input is nifti, single execution and return
-    if isinstance(input, Nifti1Image):
+    if isinstance(input, (Nifti1Image, sitk.Image)):
         if len(io_inputs) != 1 or io_inputs[0] != "tmp/index": 
             raise ValueError(f'Pipeline requires more than just a single nifti ({io_inputs}). Use an input directory instead.')
         else:

@@ -35,14 +35,14 @@ def filter_hu(image_np: np.ndarray, hu_range: list):
 def remove_small_objects(mask_np, image_zooms, limit_size_version,
                          limit_size_2D = 0, limit_size_3D = 0):
 
-    # calculate pixel volume (RAS+)
-    pix_area = image_zooms[0] * image_zooms[1]
-    pix_vol = pix_area * image_zooms[2]
+    # calculate pixel volume; np & spacing in zyx
+    pix_area = image_zooms[1] * image_zooms[2]
+    pix_vol = pix_area * image_zooms[0]
     
     # remove small objects, 2d or 3d
     if limit_size_version == '2D' and limit_size_2D > 0:
-        for i in range(mask_np.shape[-1]):
-            mask_np[:, :, i][~_remove_small_objects_2d(mask_np[:, :, i], limit_size_2D/pix_area)] = 0
+        for i in range(mask_np.shape[0]):
+            mask_np[i, :, :][~_remove_small_objects_2d(mask_np[i, :, :], limit_size_2D/pix_area)] = 0
         logging.info(f"  removed small objects (2D size < {limit_size_2D} mm^2)")
     elif limit_size_version == '3D' and limit_size_3D > 0:
         mask_np[:] = _remove_small_objects_3d(mask_np,

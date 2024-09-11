@@ -30,14 +30,14 @@ class CalcVertebralLevel(PipelineAction):
         else:
             helper_start = index-window_size
 
-        if index+window_size+1 > data.shape[2]:
-            helper_end = data.shape[2]
+        if index+window_size+1 > data.shape[0]:
+            helper_end = data.shape[0]
         else:
             helper_end = index+window_size+1
 
         # select window 
         indices = range(helper_start, helper_end)
-        data_window = data[:, :, indices]
+        data_window = data[indices, :, :]
 
         # count values
         values, counts = np.unique(data_window, return_counts=True)
@@ -87,19 +87,18 @@ class CalcVertebralLevel(PipelineAction):
         logging.info(f' loaded {input_mask}, reorientated to canonical')
         
         # create empty output array
-        # RAS+ format
-        #   rows: 2 = inferior to superior, starting w 0
-        #   4 columns: 0=slice, 1=dominating vertebrae, 2=median of distr in cranio-caudal direction, 3=vertebrea center of mass
-        res_labels_np = np.zeros(shape=(input_mask.shape[-1], 4), dtype=np.uint16) 
-        res_labels_np[:, 0] = range(input_mask.shape[-1]) # column 0: slice
+        # SITK format, SAR+, col 0 = inferior to superior, starting w 0
+        #  4 columns: 0=slice, 1=dominating vertebrae, 2=median of distr in cranio-caudal direction, 3=vertebrea center of mass
+        res_labels_np = np.zeros(shape=(input_mask.shape[0], 4), dtype=np.uint16) 
+        res_labels_np[:, 0] = range(input_mask.shape[0]) # column 0: slice
 
         # load vertrebrae as numpy
         time_start_i = time()
         labels_all = res_labels_np[:, 1] # column 1: dominating vertebrae
 
         # STEP 1: find value with max counts without using windows
-        for z in range(input_mask.shape[2]):
-            labels_all[z] = self.get_max_counts(input_mask.data_np, z, 0, self.config_vertebrae['min_voxels_per_vertebra'], self.config_vertebrae['deprioritize_labels'])
+        for z in range(input_mask.shape[0]):
+            labels_all[z] = self.get_max_counts(input_mask.data, z, 0, self.config_vertebrae['min_voxels_per_vertebra'], self.config_vertebrae['deprioritize_labels'])
         logging.info(f' computed dominating vertebrae levels ({time() - time_start_i:.1f}s)')
 
         # vertebrae between first and last defined level to subarray
@@ -107,7 +106,7 @@ class CalcVertebralLevel(PipelineAction):
         if helper_localizer.size == 0:
             raise ValueError(f' No vertebrae found in {self.input_mask_name}. A common cause is, that the image is not properly aligned or oriented.')
         labels_vertebrae = labels_all[helper_localizer[0]:helper_localizer[-1]+1]
-        data_vertebrae = input_mask.data_np[:, :, helper_localizer[0]:helper_localizer[-1]+1]
+        data_vertebrae = input_mask.data[helper_localizer[0]:helper_localizer[-1]+1, :, :]
 
         # STEP 2: fill undefined levels between first and last defined level
         if self.config_vertebrae['fill_undefined_levels']:
@@ -165,12 +164,12 @@ class CalcVertebralLevel(PipelineAction):
         labels_all = res_labels_np[:, 2] # column 2: vertebrae center
 
         # select all identified vertrebrae
-        vertebrae = np.unique(input_mask.data_np)
+        vertebrae = np.unique(input_mask.data)
         vertebrae = vertebrae[vertebrae != 0]
 
         # loop through all vertrebrae, find median of voxel distribution in cranio-caudal direction
         for vertebra in vertebrae:
-            helper_counts = np.sum(input_mask.data_np == vertebra, axis=(0, 1))
+            helper_counts = np.sum(input_mask.data == vertebra, axis=(1,2))
             helper_cumsum = np.cumsum(helper_counts)
             helper_total = np.sum(helper_counts)
             helper_index = np.where(helper_cumsum >= helper_total/2)[0][0]
@@ -189,13 +188,13 @@ class CalcVertebralLevel(PipelineAction):
         labels_all = res_labels_np[:, 3] # column 3: vertebrae center of mass / centroid
 
         # select all identified vertrebrae, not needed as already done in step 4
-        # vertebrae = np.unique(input_mask.data_np)
+        # vertebrae = np.unique(input_mask.data)
         # vertebrae = vertebrae[vertebrae != 0]
 
         # loop through all vertrebrae, find center of mass in cranio-caudal direction
         if self.config_vertebrae['center_of_mass']:
             for vertebra in vertebrae:
-                _, _, helper_index = center_of_mass(input_mask.data_np == vertebra)
+                helper_index, _, _ = center_of_mass(input_mask.data == vertebra)
                 helper_index = int(round(helper_index))
                 # skip if not dominating vertebrae
                 if res_labels_np[helper_index,1] != vertebra:

@@ -12,7 +12,7 @@ from BodyComposition.utils.logging import LoggingWriter, log_gpu_usage
 class SegmIntVertebrae(PipelineAction):
     """
     Spine Segmentation using nnUNet
-    Ref: https://huggingface.co/fhofmann/VertebralBodies-nnUNet-Task601
+    Ref: https://huggingface.co/collections/fhofmann/vertebralbodiesct-66d86af4969c767addb20869
 
     """
 
@@ -83,24 +83,19 @@ class SegmIntVertebrae(PipelineAction):
 
             # load metadata from input image
             output_label.meta = input_image.meta
-
-            # transpose image for SITK:
-            # models were trained using SimpleITKIO, NiftiDataContainer currently uses nibabel.
-            # ToDo: use SimpleITKIO for all nifti operations, also in NiftiDataContainer
-            # but: TotalSegmentator only takes Nifti1Imag directly -> transformations there, or only paths
-            tmp_img = input_image.data_np.transpose((2, 1, 0))[None]
-            tmp_props = {'spacing': [float(i) for i in input_image.spacing[::-1]]}
             
             # do segmentation
             logging.info(f' running segmentation using nnUNetv2|internal-vertebrae')
             sl = LoggingWriter(logging.DEBUG)
             with contextlib.redirect_stdout(sl), contextlib.redirect_stderr(sl):
 
-                tmp_segm = self.predictor.predict_single_npy_array(tmp_img, tmp_props, None, None, False)
+                tmp_segm = self.predictor.predict_single_npy_array(input_image.data[None], 
+                                                                   {'spacing': input_image.spacing}, 
+                                                                   None, None, False)
                 log_gpu_usage()
 
-            # revert transpose, save segmentation
-            output_label.data_np = tmp_segm.transpose((2, 1, 0))
+            # save segmentation
+            output_label.data = tmp_segm
 
             # logging
             logging.info(f' finished segmentation ({time() - time_start:.2f}s)')

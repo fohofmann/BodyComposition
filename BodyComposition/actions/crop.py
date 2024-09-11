@@ -46,7 +46,7 @@ class CreateBoundingBox(PipelineAction):
         logging.info(f' margins: {self.task_config["margin"]}mm -> {margin}vx')
 
         # create bounding box for cropping
-        label_roi = np.isin(input_label.data_np, self.task_config['roi']) # only roi
+        label_roi = np.isin(input_label.data, self.task_config['roi']) # only roi
 
         # create bounding box
         bbox = []
@@ -109,7 +109,7 @@ class ApplyBoundingBox(PipelineAction):
             output_path = memory['workspace']/self.output_name.format(caseid=memory['id'])
             output = memory[self.output_name] = NiftiDataContainer(output_path)
             output.meta = memory[self.input_name].meta
-            output.data_np = memory[self.input_name].data_np
+            output.data = memory[self.input_name].data
             logging.info(f' copied container: {memory[self.input_name]} -> {output}')
 
         # apply bounding box, log

@@ -55,13 +55,13 @@ class MasksStanfordSpine(PipelineAction):
         logging.info(f' loaded and remapped {input_label}')
 
         # copy content and header from input
-        output_mask.data_np = input_label.data_np
+        output_mask.data = input_label.data
         output_mask.meta = input_label.meta
 
         # remove all but vertebral bodies
         if self.reduce_to_vb:
             input_label_vb = memory[self.input_label_vb_name]
-            output_mask.data_np[input_label_vb.data_np != self.LBL_VERTEBRALBODIESONLY] = 0 # set everything outside of vertebralbodies to zero
+            output_mask.data[input_label_vb.data != self.LBL_VERTEBRALBODIESONLY] = 0 # set everything outside of vertebralbodies to zero
             logging.info(f'  removed everything except vertebral bodies')
 
         # save output

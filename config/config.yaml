@@ -3,6 +3,7 @@ paths:
   logs: ./logs/{method}_{timestamp}.log # available: method, filter, timestamp
   weights:
     int-vertebrae: ./models/Dataset601_VertebralBodies
+    int-bodycomposition: ./models/Dataset601_VertebralBodies
     stanford-spine: ./models/Task252_Stanford_Spine
     totalsegmentator: ./models # totalsegmentator identifies subdirectory using nnunet routines by itself
   totalsegmentator_config: ./models/totalsegmentator_config # path to directory that includes tseg config file, e.g. w/ license number
@@ -76,13 +77,13 @@ tissue:
 crop:
   SpineCranioCaudal:
     roi: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21] # labels
-    axes: [False, False, False, False, True, True]
-    margin: [0, 0, 0, 0, -20, -20] # in mm, is transformed to px later
+    axes: [True, True, False, False, False, False]
+    margin: [-20, -20, 0, 0, 0, 0] # in mm, is transformed to px later
   L3CranioCaudal:
     roi: [15] # labels
-    axes: [False, False, False, False, True, True] # RAS+: left -> right, posterior -> anterior, inferor -> superior
-    margin: [0, 0, 0, 0, 0, 0] # RAS+: left -> right, posterior -> anterior, inferor -> superior
+    axes: [True, True, False, False, False, False] # SAR+: inferor -> superior, posterior -> anterior, left -> right
+    margin: [0, 0, 0, 0, 0, 0] # SAR+: inferor -> superior, posterior -> anterior, left -> right
   L234CranioCaudal:
     roi: [14,15,16] # labels
-    axes: [False, False, False, False, True, True] # RAS+: left -> right, posterior -> anterior, inferor -> superior
-    margin: [0, 0, 0, 0, 0, 0] # RAS+: left -> right, posterior -> anterior, inferor -> superior
+    axes: [True, True, False, False, False, False] # SAR+: inferor -> superior, posterior -> anterior, left -> right
+    margin: [0, 0, 0, 0, 0, 0] # SAR+: inferor -> superior, posterior -> anterior, left -> right
