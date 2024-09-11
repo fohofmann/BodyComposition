@@ -47,9 +47,12 @@ Source = "https://github.com/fohofmann/BodyComposition"
 Issues = "https://github.com/fohofmann/BodyComposition/issues"
 
 [project.scripts]
-bodycomposition_transform_dcm_to_nifti = "BodyComposition.bin.pre_transform_dcm_to_nifti:main"
-bodycomposition_download_models = "BodyComposition.bin.pre_download_models:main"
 bodycomposition = "BodyComposition.bin.run_batch:main"
+bodycomposition_download_models = "BodyComposition.bin.pre_download_models:main"
+bodycomposition_segmentation = "BodyComposition.bin.run_segmentation_only:main"
+bodycomposition_transform_dcm_to_nifti = "BodyComposition.bin.pre_transform_dcm_to_nifti:main"
+bodycomposition_transform_dcm_rotate = "BodyComposition.bin.pre_correct_orientation:main"
+
 
 [tool.setuptools.packages.find]
 where = ["."]
