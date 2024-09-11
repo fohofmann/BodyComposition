@@ -91,6 +91,10 @@ def main():
         path_input_dirs = [path_input_dir for path_input_dir in path_input_dirs if not Path(args.workspace, args.output, 'images', path_input_dir.parent.name + '.nii.gz').exists()]
         logging.info(f' found {len(path_input_dirs)} directories that are not processed yet')
 
+    # add warning header
+    with open(path_warnings, 'w') as f:
+        f.write('patient_id,warning\n')
+
     # multiprocessing
     process = ProcessLoader(args.workspace, args.output, path_warnings=path_warnings, override=args.override)
     n_processes = min(multiprocessing.cpu_count(), len(path_input_dirs))
