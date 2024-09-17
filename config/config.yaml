@@ -34,7 +34,6 @@ vertebrae:
 
 tissue:
   save_mask: True
-  calculate_contour: True
 
   hu_denoise:
     filter_outliers: False
@@ -47,34 +46,34 @@ tissue:
     filter_hu_range: [-190, -30]
 
     # special case: positive & negative filter: -SM, +IMAT:
-    filter_size: False
-    filter_size_version: 2D # options: 2D, 3D
+    filter_size: True
+    filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 10 # mm^2
-    filter_size_3D: 80 # mm^3
+    filter_size_3D: 20 # mm^3
 
   sm:
     filter_hu: True
     filter_hu_range: [-29, 150]
-    filter_hu_size: False
-    filter_hu_size_version: 2D # options: 2D, 3D
+    filter_hu_size: Trze
+    filter_hu_size_version: 3D # options: 2D, 3D
     filter_hu_size_2D: 10 # mm^2
-    filter_hu_size_3D: 80 # mm^3
+    filter_hu_size_3D: 20 # mm^3
 
   vat: # in some studies differently defined than sat
     filter_hu: True
     filter_hu_range: [-190, -30]
-    filter_hu_size: False
-    filter_hu_size_version: 2D # options: 2D, 3D
+    filter_hu_size: True
+    filter_hu_size_version: 3D # options: 2D, 3D
     filter_hu_size_2D: 20 # mm^2
-    filter_hu_size_3D: 80 # mm^3
+    filter_hu_size_3D: 20 # mm^3
 
   sat:
     filter_hu: True
     filter_hu_range: [-190, -30]
-    filter_hu_size: False
-    filter_hu_size_version: 2D # options: 2D, 3D
+    filter_hu_size: True
+    filter_hu_size_version: 3D # options: 2D, 3D
     filter_hu_size_2D: 20 # mm^2
-    filter_hu_size_3D: 80 # mm^3
+    filter_hu_size_3D: 50 # mm^3
 
 
 crop:

@@ -25,11 +25,6 @@ class DataCombine(PipelineAction):
         self.LBL_VERTEBRALBODIES = pipeline.config['LBL_VERTEBRALBODIES']
         self.LBL_TISSUE = pipeline.config['LBL_TISSUE']
 
-        # optional: circumferences
-        self.config_calc_contours = pipeline.config['tissue']['calculate_contour']
-        if self.config_calc_contours:
-            self.io_inputs.append('tmp/tissue_contour')
-
     def __call__(self, memory):
         """Combine, filter, aggregate and exporting data."""
         super().__call__(memory)
@@ -57,8 +52,8 @@ class DataCombine(PipelineAction):
         # concatenate
         results_df = pd.concat([vertebrae_df, tissue_df], axis=1)
 
-        # calculate circumferences if requested
-        if self.config_calc_contours:
+        # calculate circumferences if available
+        if 'tmp/tissue_contour' in memory:
             time_start = time()
             circumferences_np = memory['tmp/tissue_contour']
             circumferences_df = pd.DataFrame(circumferences_np, columns=["CIR_contour", "CSA_contour"])

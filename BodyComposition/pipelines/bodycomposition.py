@@ -1,11 +1,9 @@
-import os
-
 def BodyComposition(pipeline):
     """Pipeline definition for body composition analysis."""
     from BodyComposition.actions.segm_int import SegmIntVertebrae, SegmIntBodyComposition
     from BodyComposition.actions.masks_int import MasksInternalTissue
     from BodyComposition.actions.calc_vertebrallevel import CalcVertebralLevel
-    from BodyComposition.actions.calc_measures import CalcMeasures
+    from BodyComposition.actions.calc_measures import CalcCSA, CalcCRI
     from BodyComposition.actions.data_postprocessing import DataCombine, DataExport
     from BodyComposition.actions.data_loading import LoadMetadata
    
@@ -20,7 +18,8 @@ def BodyComposition(pipeline):
 
         # calculations
         CalcVertebralLevel(pipeline, mask='labels/{caseid}_int-vertebrae.nii.gz'),
-        CalcMeasures(pipeline, mask='masks/{caseid}_int-bodycomposition.nii.gz'),
+        CalcCSA(pipeline, mask='masks/{caseid}_int-bodycomposition.nii.gz'),
+        CalcCRI(pipeline, mask='labels/{caseid}_int-bodycomposition.nii.gz'),
 
         # postprocessing and export
         LoadMetadata(pipeline, input='metadata/{caseid}.csv'),
@@ -31,14 +30,13 @@ def BodyComposition(pipeline):
     return pipeline_definition
 
 
-
 def BodyCompositionFast(pipeline):
     """Pipeline definition for body composition analysis."""
     from BodyComposition.actions.segm_int import SegmIntVertebrae, SegmIntBodyComposition
     from BodyComposition.actions.masks_int import MasksInternalTissue
     from BodyComposition.actions.crop import CreateBoundingBox, ApplyBoundingBox
     from BodyComposition.actions.calc_vertebrallevel import CalcVertebralLevel
-    from BodyComposition.actions.calc_measures import CalcMeasures
+    from BodyComposition.actions.calc_measures import CalcCSA
     from BodyComposition.actions.data_postprocessing import DataCombine, DataSubset, DataAggregate, DataExport
     from BodyComposition.actions.data_loading import LoadMetadata
    
@@ -60,7 +58,7 @@ def BodyCompositionFast(pipeline):
 
         # calculations
         CalcVertebralLevel(pipeline, mask='labels/{caseid}_int-vertebrae.nii.gz'),
-        CalcMeasures(pipeline, mask='masks/{caseid}_int-bodycomposition.nii.gz'),
+        CalcCSA(pipeline, mask='masks/{caseid}_int-bodycomposition.nii.gz'),
 
         # postprocessing and export
         LoadMetadata(pipeline, input='metadata/{caseid}.csv'),

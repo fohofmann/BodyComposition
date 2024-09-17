@@ -24,6 +24,9 @@ class NiftiDataContainer():
         self._spacing = None
         self._bbox = None
 
+        # status canonical
+        self._canonical = False
+
         # set datatype
         if any(keyword in path.parent.name for keyword in ['label', 'mask']):
             self.dtype = np.uint8
@@ -316,14 +319,18 @@ class NiftiDataContainer():
             img_tmp = sitk.ReadImage(str(self.path))
         else:
             raise ValueError(f'Data not complete, can not reorientate')
+        
+        if not self._canonical:
+            # reorientate sitk
+            img_tmp_reoriented = sitk.DICOMOrient(img_tmp, 'RAS')
+            data_tmp_reoriented = sitk.GetArrayFromImage(img_tmp_reoriented).astype(self.dtype)
 
-        # reorientate sitk
-        img_tmp_reoriented = sitk.DICOMOrient(img_tmp, 'RAS')
-        data_tmp_reoriented = sitk.GetArrayFromImage(img_tmp_reoriented).astype(self.dtype)
-
-        # reset existing bbox & metadata, set np
-        self.bbox = None
-        self._origin = img_tmp_reoriented.GetOrigin()
-        self._direction = img_tmp_reoriented.GetDirection()
-        self._spacing = img_tmp_reoriented.GetSpacing()
-        self._data = data_tmp_reoriented
+            # reset existing bbox & metadata, set np
+            self.bbox = None
+            self._origin = img_tmp_reoriented.GetOrigin()
+            self._direction = img_tmp_reoriented.GetDirection()
+            self._spacing = img_tmp_reoriented.GetSpacing()
+            self._data = data_tmp_reoriented
+        
+            # set canonical status
+            self._canonical = True

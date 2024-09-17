@@ -83,7 +83,7 @@ class SegmIntVertebrae(PipelineAction):
             output_label.meta = input_image.meta
             
             # do segmentation
-            logging.info(f' running segmentation using nnUNetv2|internal-vertebrae')
+            logging.info(f' running segmentation using nnUNetv2|VertebralBodiesCT')
             sl = LoggingWriter(logging.DEBUG)
             with contextlib.redirect_stdout(sl), contextlib.redirect_stderr(sl):
 
@@ -118,7 +118,7 @@ class SegmIntBodyComposition(PipelineAction):
         self.output_label_name = 'labels/{caseid}_int-bodycomposition.nii.gz'
         self.io_inputs = [image]
         self.io_outputs = [self.output_label_name]
-        self.licenses = ['nnunet', 'nnunet_resenc', 'intbodycomposition', 'BOA', 'totalsegmentator']
+        self.licenses = ['nnunet', 'nnunet_resenc', 'intbodycomposition', 'boa', 'totalsegmentator']
 
         # select correct model
         if model == 'ResEncM':
@@ -179,7 +179,7 @@ class SegmIntBodyComposition(PipelineAction):
             output_label.meta = input_image.meta
             
             # do segmentation
-            logging.info(f' running segmentation using nnUNetv2|internal-bodycomposition')
+            logging.info(f' running segmentation using nnUNetv2|BodyCompositionCT')
             sl = LoggingWriter(logging.DEBUG)
             with contextlib.redirect_stdout(sl), contextlib.redirect_stderr(sl):
 
