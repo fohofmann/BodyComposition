@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "BodyComposition"
-version = "0.2"
+version = "0.3"
 description = "Pipeline for the segmentation of muscle and adipose tissue with postprocessing for mapping to vertebral levels and calculation of cross-sectional areas."
 authors = [
     { name = "Felix Hofmann", email = "felix.hofmann@med.lmu.de" }
