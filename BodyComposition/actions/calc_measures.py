@@ -76,8 +76,8 @@ class CalcMeasures(PipelineAction):
                     scaled_contour = largest_contour.astype(np.float32) # Adjust the contour points by voxel size to calculate circumference in physical units
                     scaled_contour[:, 0, 0] *= spacing[2]  # Adjust x-coordinates (columns) by x_spacing
                     scaled_contour[:, 0, 1] *= spacing[1]  # Adjust y-coordinates (rows) by y_spacing
-                    res_contours_np[z,0] = round(cv2.arcLength(scaled_contour, True), 2) # calculate length of the adjusted contour, mm
-                    res_contours_np[z,1] = round(cv2.contourArea(scaled_contour), 2) # calculate area of the adjusted contour, mm^2
+                    res_contours_np[z,0] = round(cv2.arcLength(scaled_contour, True)) # calculate length of the adjusted contour, mm
+                    res_contours_np[z,1] = round(cv2.contourArea(scaled_contour)) # calculate area of the adjusted contour, mm^2
                 else:
                     res_contours_np[z] = np.nan
 

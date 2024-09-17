@@ -49,20 +49,13 @@ class DataCombine(PipelineAction):
         vertebrae_df = pd.DataFrame(memory['tmp/vertebrae_values'], columns=["Slice", "Level", "Center", "Centroid"])
         vertebrae_df["Tag"] = None
            
-        # transform csa numpy to pandas
+        # transform csa numpy to pandas, rename columns
         names_columns = ["CSA_" + col for col in self.LBL_TISSUE.values()]
         tissue_df = pd.DataFrame(memory['tmp/tissue_values'], columns=names_columns)
         tissue_df = tissue_df / 100 # adapt csa values (transform mm2 to cm2)
 
-        # concatenate, reverse order of rows
+        # concatenate
         results_df = pd.concat([vertebrae_df, tissue_df], axis=1)
-        results_df = results_df.iloc[::-1].reset_index(drop=True)
-
-        # replace labels with real levels
-        dict_vertebrae = self.LBL_VERTEBRALBODIES
-        results_df['Level'] = results_df['Level'].replace(dict_vertebrae)
-        results_df['Center'] = results_df['Center'].replace(dict_vertebrae)
-        results_df['Centroid'] = results_df['Centroid'].replace(dict_vertebrae)
 
         # calculate circumferences if requested
         if self.config_calc_contours:
@@ -71,12 +64,18 @@ class DataCombine(PipelineAction):
             circumferences_df = pd.DataFrame(circumferences_np, columns=["CIR_contour", "CSA_contour"])
 
             # transform mm to cm
-            circumferences_df["CIR_contour"] = circumferences_df["CIR_contour"] / 10
-            circumferences_df["CSA_contour"] = circumferences_df["CSA_contour"] / 100
+            circumferences_df["CIR_contour"] = circumferences_df["CIR_contour"] / 10 # mm -> cm
+            circumferences_df["CSA_contour"] = circumferences_df["CSA_contour"] / 100 # mm2 -> cm2
 
             # reverse order of rows, concatenate
-            circumferences_df = circumferences_df.iloc[::-1].reset_index(drop=True)
             results_df = pd.concat([results_df, circumferences_df], axis=1)
+
+        # reverse order of rows: S -> I, replace labels with real level names
+        results_df = results_df.iloc[::-1].reset_index(drop=True)
+        dict_vertebrae = self.LBL_VERTEBRALBODIES
+        results_df['Level'] = results_df['Level'].replace(dict_vertebrae)
+        results_df['Center'] = results_df['Center'].replace(dict_vertebrae)
+        results_df['Centroid'] = results_df['Centroid'].replace(dict_vertebrae)
 
         # save to memory
         memory['tmp/bodycomposition'] = results_df
