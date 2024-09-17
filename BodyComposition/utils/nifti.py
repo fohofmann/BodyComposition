@@ -68,7 +68,7 @@ class NiftiDataContainer():
             # Apply the direction matrix to the new offset in physical space
             new_origin = np.array(self._origin) + np.dot(direction_matrix, new_origin_offset)
 
-            return new_origin
+            return tuple(new_origin)
 
     @property
     def direction(self):
@@ -119,23 +119,34 @@ class NiftiDataContainer():
 
         # load data and metadata
         if isinstance(value, Nifti1Image):
-            tmp_data = value.get_fdata().transpose((2, 1, 0)) # Nifti1Image = physical space -> SITK np: z, y, x
+            tmp_data = value.get_fdata().transpose((2, 1, 0))  # NIfTI -> SITK np: z, y, x
             tmp_affine = value.affine
-            tmp_direction = tmp_affine[:3, :3] 
+
+            # Convert RAS to LPS
+            tmp_affine[:, 0] *= -1
+            tmp_affine[:, 1] *= -1
+
+            # Flip the origin in X and Y directions (for LPS)
+            tmp_affine[0, 3] *= -1  # Adjust X component of the origin
+            tmp_affine[1, 3] *= -1  # Adjust Y component of the origin
+
+            # Get direction, origin, and spacing from affine matrix
+            tmp_direction = tmp_affine[:3, :3]
             tmp_origin = tmp_affine[:3, 3].tolist()
-            tmp_direction = (tmp_direction / value.header.get_zooms()).flatten().tolist() # adjust the direction matrix for spacing, physical space
-            tmp_spacing = [float(i) for i in value.header.get_zooms()[::-1]] # Nifti1Image = physical space -> SITK np: z, y, x
+            tmp_spacing = np.sqrt(np.sum(tmp_direction ** 2, axis=0)).tolist()  # Extract spacing from affine
+            tmp_direction = (tmp_direction / tmp_spacing).flatten().tolist()  # Normalize direction
+
         elif isinstance(value, sitk.Image):
             tmp_data = sitk.GetArrayFromImage(value)
-            tmp_direction = self._direction = value.GetDirection()
-            tmp_origin = self._origin = value.GetOrigin()
+            tmp_direction = value.GetDirection()
+            tmp_origin = value.GetOrigin()
             tmp_spacing = value.GetSpacing()
         else:
             raise ValueError(f'Unknown type for image: {type(value)}')
         
         # checks
         if self._bbox is not None and (self._origin is None or self._spacing is None or self._direction is None):
-            raise ValueError(f'Bounding box can only be set, if metadata are available.')
+            raise ValueError(f'Bounding box can only be used, if metadata are available.')
         if self._direction is not None and not np.allclose(self._direction, tmp_direction):
             raise ValueError(f'Directions do not match: {self._direction} != {tmp_direction}')
         if self._origin is not None and not np.allclose(self._origin, tmp_origin):
@@ -162,20 +173,30 @@ class NiftiDataContainer():
         if self.data is None:
             return None   
         elif self._origin is None or self._direction is None or self._spacing is None:
-            raise ValueError(f'metadata missing, can not create Nifti1Image object.')
-
-        # Create the affine matrix
-        tmp_direction = np.array(self.direction).reshape(3, 3)  # Reshape into a 3x3 matrix
-        tmp_origin = self.origin  # Origin is a 3-element vector
-        tmp_spacing = self.spacing[::-1]  # Spacing is a 3-element vector, reverse it to match the physical space
-        affine_tmp = np.eye(4)  # Initialize a 4x4 identity matrix
-        affine_tmp[:3, :3] = tmp_direction * tmp_spacing # Set the upper 3x3 part to the scaled direction matrix
-        affine_tmp[:3, 3] = tmp_origin  # Set the translation (origin) part
+            raise ValueError(f'Metadata missing, cannot create Nifti1Image object.')
         
-        # transpose data np
-        data_tmp = self.data.transpose((2, 1, 0)) # SITK np: z, y, x -> Nifti1Image = physical space
+        # Create the affine matrix
+        tmp_direction = np.array(self._direction).reshape(3, 3)  # Reshape into a 3x3 matrix
+        tmp_origin = np.array(self.origin)  # Origin is a 3-element vector
+        tmp_spacing = np.array(self._spacing)  # Spacing is a 3-element vector (no need to reverse it)
 
-        return Nifti1Image(data_tmp, affine_tmp)
+        # Apply spacing correctly by scaling each column of the direction matrix
+        affine_tmp = np.eye(4)  # Initialize a 4x4 identity matrix
+        affine_tmp[:3, :3] = tmp_direction * tmp_spacing  # Scale direction matrix by spacing (element-wise multiplication)
+        affine_tmp[:3, 3] = tmp_origin  # Set the translation (origin) part
+
+        # Convert LPS to RAS by flipping the X (column 0) and Y (column 1) axes
+        affine_tmp[:, 0] *= -1  # Flip X axis
+        affine_tmp[:, 1] *= -1  # Flip Y axis
+
+        # Flip the origin in X and Y directions (for RAS)
+        affine_tmp[0, 3] *= -1  # Adjust X component of the origin
+        affine_tmp[1, 3] *= -1  # Adjust Y component of the origin
+        
+        # Transpose the data from z, y, x (SITK numpy) to x, y, z (Nifti1Image expected orientation)
+        data_tmp = self.data.transpose((2, 1, 0))
+
+        return Nifti1Image(data_tmp.astype(np.int16), affine_tmp)
     
 
     @property
@@ -263,6 +284,7 @@ class NiftiDataContainer():
             raise FileNotFoundError(f'File not available at {self.path}.')
         else:
             img_tmp = sitk.ReadImage(str(self.path))
+            #print(f'Image loaded from {self.path}:\n - Origin: {img_tmp.GetOrigin()} \n - Direction: {img_tmp.GetDirection()} \n - Spacing: {img_tmp.GetSpacing()}')
             self.img = img_tmp
 
 

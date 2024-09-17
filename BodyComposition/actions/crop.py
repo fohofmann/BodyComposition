@@ -113,5 +113,7 @@ class ApplyBoundingBox(PipelineAction):
             logging.info(f' copied container: {memory[self.input_name]} -> {output}')
 
         # apply bounding box, log
-        memory[self.output_name].bbox = memory['bbox']
         logging.info(f' applied bounding box to {memory[self.output_name]}')
+        logging.debug(f'   origin was: {memory[self.output_name].origin} with bbox {memory[self.output_name].bbox}')
+        memory[self.output_name].bbox = memory['bbox']
+        logging.debug(f"   origin is now: {memory[self.output_name].origin} with bbox {memory[self.output_name].bbox}")
