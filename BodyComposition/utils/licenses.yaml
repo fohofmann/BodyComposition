@@ -12,9 +12,15 @@ totalsegmentator_nc:
   license: 'non-commercial license'
   citation: 'Wasserthal, J., Breit, H.-C., Meyer, M.T., Pradella, M., Hinck, D., Sauter, A.W., Heye, T., Boll, D., Cyriac, J., Yang, S., Bach, M., Segeroth, M., 2023. TotalSegmentator: Robust Segmentation of 104 Anatomic Structures in CT Images. Radiology: Artificial Intelligence. https://doi.org/10.1148/ryai.230024'
 
-comp2comp:
-  title: 'Comp2Comp model weights'
+stanford-spine:
+  title: 'Stanford / Comp2Comp spine model weights'
   link: 'https://huggingface.co/louisblankemeier/stanford_spine'
+  license: 'Apache-2.0'
+  citation: 'Blankemeier, L., Desai, A., Zambrano Chaves, J.M., Wentland, A., Yao, S., Reis, E., Jensen, M., Bahl, B., Arora, K., Patel, B.N., Lenchik, L., Willis, M., Boutin, R.D., Chaudhari, A.S., 2023. Comp2Comp: Open-Source Body Composition Assessment on Computed Tomography. arXiv preprint arXiv:2302.06568. https://doi.org/10.48550/arXiv.2302.06568'
+
+stanford-tissue:
+  title: 'Stanford / Comp2Comp tissue model weights'
+  link: 'https://huggingface.co/stanfordmimi/multilevel_muscle_adipose_tissue'
   license: 'Apache-2.0'
   citation: 'Blankemeier, L., Desai, A., Zambrano Chaves, J.M., Wentland, A., Yao, S., Reis, E., Jensen, M., Bahl, B., Arora, K., Patel, B.N., Lenchik, L., Willis, M., Boutin, R.D., Chaudhari, A.S., 2023. Comp2Comp: Open-Source Body Composition Assessment on Computed Tomography. arXiv preprint arXiv:2302.06568. https://doi.org/10.48550/arXiv.2302.06568'
 
@@ -45,7 +51,13 @@ intvertebrae:
   license: 'CC BY SA 4.0'
   citation: 'Hofmann, F.O. et al. 2024. VertebralBodiesCT dataset & model weights. https://huggingface.co/fhofmann'
 
-BOA:
+intbodycomposition:
+  title: 'BodyCompositionCT dataset & model weights'
+  link: 'https://huggingface.co/collections/fhofmann/'
+  license: 'CC BY SA 4.0'
+  citation: 'Hofmann, F.O. et al. 2024. BodyCompositionCT dataset & model weights. https://huggingface.co/fhofmann'
+
+boa:
   title: 'Body-and-Organ-Analysis model weights'
   link:
     - 'https://github.com/UMEssen/Body-and-Organ-Analysis'
