@@ -12,11 +12,24 @@ class DatalistBuilder():
                  input_filter: str = None,
                  workspace: Path = None,
                  io_inputs: List[str] = None,
-                 io_outputs: List[str] = None,):
+                 io_outputs: List[str] = None,
+                 part_id: int = 0,
+                 num_parts: int = 1):
         """Initialize DatalistBuilder class."""
 
+        # stem for *.nii.gz
         def stem2(filename: str):
             return filename.split('.')[0]
+        
+        # datasplits
+        def split_list_into_parts(lst, num_parts, part_id):
+            if part_id >= num_parts:
+                raise ValueError(f'part_id ({part_id}) is out of range ({num_parts}).')
+            size = len(lst) // num_parts
+            remainder = len(lst) % num_parts
+            start = size * part_id + min(part_id, remainder)
+            end = start + size + (1 if part_id < remainder else 0)
+            return lst[start:end]
 
         logging.info(f'LOADING DATALIST:')
 
@@ -78,12 +91,16 @@ class DatalistBuilder():
         if io_inputs is not None:
             cases = [(caseid, file, workspace) for caseid, file, workspace in cases if all((workspace/io_input.format(caseid=caseid)).exists() for io_input in io_inputs)]
             logging.info(f' regarding required inputs: {len(cases)} files remaining')
-        
+
+        # split cases into parts
+        n_cases_total = len(cases)
+        cases = split_list_into_parts(cases, num_parts, part_id)
+        logging.info(f' part {part_id+1} of {num_parts}: processing {len(cases)}/{n_cases_total} files')
+
         # save tuple as attribute
         self.cases = cases
         self.io_outputs = io_outputs
         self.io_inputs = io_inputs
-        logging.info(f'identified {len(cases)} cases for processing')
 
     def __len__(self):
         return len(self.cases)

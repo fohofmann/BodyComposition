@@ -19,6 +19,8 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
                     workspace: Union[str, Path] = None,
                     method: str = 'BodyCompositionFast',
                     config: Union[dict, Path] = None,
+                    part_id: int = 0,
+                    num_parts: int = 1,
                     ):
     """python API for body composition analysis.
     Args:
@@ -83,7 +85,9 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
                                    input_filter = input_filter,
                                    workspace = workspace,
                                    io_inputs = io_inputs,
-                                   io_outputs = io_outputs,)
+                                   io_outputs = io_outputs,
+                                   part_id = part_id,
+                                   num_parts = num_parts)
 
         # remove all outputs? WARNING: this deletes all files!
         if config_dict['run']['reset']:

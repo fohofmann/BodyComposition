@@ -32,6 +32,8 @@ def main():
                         help='Path to configuration file (*.yaml), or dictionary. Can be used to update the default configuration.')
     parser.add_argument('--method', '-m', type=str, default='BodyCompositionFast',
                         help='Name of pipeline method to be run.')
+    parser.add_argument('--part_id', type=int, default=0)
+    parser.add_argument('--num_parts', type=int, default=1)
     args = parser.parse_args()
 
     # transform config
@@ -48,7 +50,9 @@ def main():
     bodycomposition(input = Path(args.input),
                     input_filter = args.filter,
                     config = config,
-                    method = args.method)
+                    method = args.method,
+                    part_id = args.part_id,
+                    num_parts = args.num_parts)
             
 if __name__ == "__main__":
     main() # parser is in main to be available when using pyproject.toml entrypoint
