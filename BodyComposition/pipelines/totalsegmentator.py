@@ -4,7 +4,7 @@ def SarcopeniaTotalSegmentator(pipeline):
     """Pipeline definition for body composition analysis."""
     from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentatorConfig, SegmTotalSegmentator
     from BodyComposition.actions.calc_vertebrallevel import CalcVertebralLevel
-    from BodyComposition.actions.calc_csa import CalcCSA
+    from BodyComposition.actions.calc_measures import CalcMeasures
     from BodyComposition.actions.data_postprocessing import DataCombine, DataExport
     from BodyComposition.actions.masks_totalsegmentator import MasksTotalSegmentatorSpine, MasksTotalSegmentatorTissue
     from BodyComposition.actions.data_loading import LoadMetadata
@@ -24,12 +24,12 @@ def SarcopeniaTotalSegmentator(pipeline):
 
         # calculations
         CalcVertebralLevel(pipeline, mask='masks/{caseid}_tseg-vertebrae.nii.gz'),
-        CalcCSA(pipeline, mask='masks/{caseid}_tseg-tissue.nii.gz'),
+        CalcMeasures(pipeline, mask='masks/{caseid}_tseg-tissue.nii.gz'),
 
         # postprocessing and export
         LoadMetadata(pipeline, input='metadata/{caseid}.csv'),
         DataCombine(pipeline),
-        DataExport(pipeline, file='exports/{caseid}.csv', append=False, add_metadata=True),
+        DataExport(pipeline, file='exports/{caseid}_raw.csv', append=False, add_metadata=True),
         DataExport(pipeline, file='exports/all.csv', append=True, add_metadata=True),
     ]
     return pipeline_definition
@@ -41,7 +41,7 @@ def SarcopeniaTotalSegmentatorFast(pipeline):
     from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentatorConfig, SegmTotalSegmentator
     from BodyComposition.actions.crop import CreateBoundingBox, ApplyBoundingBox
     from BodyComposition.actions.calc_vertebrallevel import CalcVertebralLevel
-    from BodyComposition.actions.calc_csa import CalcCSA
+    from BodyComposition.actions.calc_measures import CalcMeasures
     from BodyComposition.actions.data_postprocessing import DataCombine, DataSubset, DataAggregate, DataExport
     from BodyComposition.actions.masks_totalsegmentator import MasksTotalSegmentatorSpine, MasksTotalSegmentatorTissue
     from BodyComposition.actions.data_loading import LoadMetadata
@@ -66,7 +66,7 @@ def SarcopeniaTotalSegmentatorFast(pipeline):
 
         # calculations
         CalcVertebralLevel(pipeline, mask='masks/{caseid}_tseg-vertebrae.nii.gz'),
-        CalcCSA(pipeline, mask='masks/{caseid}_tseg-tissue.nii.gz'),
+        CalcMeasures(pipeline, mask='masks/{caseid}_tseg-tissue.nii.gz'),
 
         # postprocessing and export
         LoadMetadata(pipeline, input='metadata/{caseid}.csv'),

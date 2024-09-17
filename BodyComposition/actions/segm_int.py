@@ -22,7 +22,7 @@ class SegmIntVertebrae(PipelineAction):
         self.output_label_name = 'labels/{caseid}_int-vertebrae.nii.gz'
         self.io_inputs = [image]
         self.io_outputs = [self.output_label_name]
-        self.licenses = ['nnunet', 'nnunet_resenc', 'intvertebrae', 'verse', 'BOA', 'totalsegmentator']
+        self.licenses = ['nnunet', 'nnunet_resenc', 'intvertebrae', 'verse', 'boa', 'totalsegmentator']
 
         # select correct model
         if model == 'ResEncM':

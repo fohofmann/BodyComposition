@@ -7,3 +7,4 @@ vertebrae:
 
 tissue:
   save_mask: False
+  calculate_contour: False

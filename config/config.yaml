@@ -3,11 +3,13 @@ paths:
   logs: ./logs/{method}_{timestamp}.log # available: method, filter, timestamp
   weights:
     int-vertebrae: ./models/Dataset601_VertebralBodies
-    int-bodycomposition: ./models/Dataset601_VertebralBodies
-    stanford-spine: ./models/Task252_Stanford_Spine
+    int-bodycomposition: ./models/Dataset611_BodyComposition
+    stanford-spine: ./models/Task252_StanfordSpine
+    stanford-tissue: ./models/Task253_StanfordTissue
     totalsegmentator: ./models # totalsegmentator identifies subdirectory using nnunet routines by itself
+    boa: ./models/Task542_BCA
   totalsegmentator_config: ./models/totalsegmentator_config # path to directory that includes tseg config file, e.g. w/ license number
-  huggingface_cache: ./models/tmp
+  cache: ./models/tmp
 
 logging_level:
   file: INFO
@@ -32,12 +34,13 @@ vertebrae:
 
 tissue:
   save_mask: True
+  calculate_contour: True
 
   hu_denoise:
     filter_outliers: False
     filter_outliers_range: [-1024, 3071] # clipping metal implants and noisy outliers
     filter_median: False
-    filter_median_kernel: [3,3,1] # RAS+
+    filter_median_kernel: [1,3,3] # z y x
 
   imat:
     filter_hu: True
