@@ -25,6 +25,10 @@ class DataCombine(PipelineAction):
         self.LBL_VERTEBRALBODIES = pipeline.config['LBL_VERTEBRALBODIES']
         self.LBL_TISSUE = pipeline.config['LBL_TISSUE']
 
+        # optional: circumferences
+        self.config_calc_contours = pipeline.config['tissue']['calculate_contour']
+        if self.config_calc_contours:
+            self.io_inputs.append('tmp/tissue_contour')
 
     def __call__(self, memory):
         """Combine, filter, aggregate and exporting data."""
@@ -59,6 +63,20 @@ class DataCombine(PipelineAction):
         results_df['Level'] = results_df['Level'].replace(dict_vertebrae)
         results_df['Center'] = results_df['Center'].replace(dict_vertebrae)
         results_df['Centroid'] = results_df['Centroid'].replace(dict_vertebrae)
+
+        # calculate circumferences if requested
+        if self.config_calc_contours:
+            time_start = time()
+            circumferences_np = memory['tmp/tissue_contour']
+            circumferences_df = pd.DataFrame(circumferences_np, columns=["CIR_contour", "CSA_contour"])
+
+            # transform mm to cm
+            circumferences_df["CIR_contour"] = circumferences_df["CIR_contour"] / 10
+            circumferences_df["CSA_contour"] = circumferences_df["CSA_contour"] / 100
+
+            # reverse order of rows, concatenate
+            circumferences_df = circumferences_df.iloc[::-1].reset_index(drop=True)
+            results_df = pd.concat([results_df, circumferences_df], axis=1)
 
         # save to memory
         memory['tmp/bodycomposition'] = results_df
@@ -98,7 +116,7 @@ class DataSubset(PipelineAction):
             if isinstance(level, str):
                 if level == 'ALL':
                     level = valid_levels
-                    logging.info(f' subset: `ALL` = all valid levels, excluding undefinied levels')
+                    logging.info(f' subset: `ALL` = all valid levels, excluding undefined levels')
                 elif level == 'L':
                     level = [x for x in valid_levels if x.startswith('L')]
                     logging.info(f' subset: `L` = all lumbar levels')
@@ -246,7 +264,7 @@ class DataExport(PipelineAction):
 
     def __init__(self, pipeline,
                  input: str = 'tmp/bodycomposition',
-                 file: str = 'exports/{caseid}_bc_raw.csv',
+                 file: str = 'exports/{caseid}_raw.csv',
                  append: bool = False,
                  add_metadata: bool = False):
         super().__init__(pipeline)
