@@ -130,8 +130,8 @@ class MasksTotalSegmentatorTissue(PipelineAction):
 
         # load input: label, tissue segmentation
         input_label_tissue = memory[self.input_label_tissue_name]
-        # remapping not necessary, as labels using LBL_TISSUE_TSEG
         logging.info(f' load {input_label_tissue}')
+        logging.debug(f'  tissue: origin={input_label_tissue.origin}, shape={input_label_tissue.shape}')
 
         # copy content and header from input
         output_np = input_label_tissue.data
@@ -151,6 +151,7 @@ class MasksTotalSegmentatorTissue(PipelineAction):
             input_image = memory[self.input_image_name]
             image_np = input_image.data
             logging.debug(f'  HU filter(s) active, loaded image')
+            logging.debug(f'   image: origin={input_image.origin}, shape={input_image.shape}')
 
             # denoising: clip outliers
             if self.config_tissue['hu_denoise']['filter_outliers']:
@@ -176,9 +177,9 @@ class MasksTotalSegmentatorTissue(PipelineAction):
                                      limit_size_3D=self.config_tissue['imat']['filter_size_3D'])
                 
             # intersection of AT and SMTOTAL (= SM + PSOAS) -> IMAT
-            mask_tmp = np.isin(output_np, [self.LBL_TISSUE_R['SM'],self.LBL_TISSUE_R['PSOAS']]) & mask_tmp
+            mask_tmp = np.isin(output_np, [self.LBL_TISSUE_R['SM'], self.LBL_TISSUE_R['PSOAS']]) & mask_tmp
             output_np[mask_tmp] = self.LBL_TISSUE_R['IMAT']
-            logging.info(f"  positive filter -> added new label for IMAT (={self.LBL_TISSUE_R['IMAT']})")
+            logging.debug(f"  identified everything in IMAT HU-range within label SM and PSOAS as IMAT (={self.LBL_TISSUE_R['IMAT']})")
 
 
         # filter: skeletal muscle SM
@@ -193,7 +194,7 @@ class MasksTotalSegmentatorTissue(PipelineAction):
                                      limit_size_2D=self.config_tissue['sm']['filter_hu_size_2D'],
                                      limit_size_3D=self.config_tissue['sm']['filter_hu_size_3D'])
             output_np[mask_tmp_not] = 0
-            logging.info(f"  negative filter -> SM")
+            logging.debug(f"  removed everything out of SM HU-range from label SM and PSOAS")
 
 
         # filter: visceral adipose tissue VAT 
@@ -208,7 +209,7 @@ class MasksTotalSegmentatorTissue(PipelineAction):
                                      limit_size_2D=self.config_tissue['vat']['filter_hu_size_2D'],
                                      limit_size_3D=self.config_tissue['vat']['filter_hu_size_3D'])
             output_np[mask_tmp_not] = 0
-            logging.info(f"  negative filter -> VAT")
+            logging.debug(f"  removed everything out of VAT HU-range from label VAT")
 
 
         # filter: subcutaneous adipose tissue SAT
@@ -223,7 +224,7 @@ class MasksTotalSegmentatorTissue(PipelineAction):
                                      limit_size_2D=self.config_tissue['sat']['filter_hu_size_2D'],
                                      limit_size_3D=self.config_tissue['sat']['filter_hu_size_3D'])
             output_np[mask_tmp_not] = 0
-            logging.info(f"  negative filter -> SAT")
+            logging.debug(f"  removed everything out of SAT HU-range from label SAT")
 
 
         # remove extremities, ignore everything but bodytrunk

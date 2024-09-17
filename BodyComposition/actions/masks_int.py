@@ -1,76 +1,23 @@
 # libraries
 import logging
+from time import time
+import numpy as np
+from scipy.ndimage import median_filter as ndi_median_filter
+
 from BodyComposition.pipeline import PipelineAction
 from BodyComposition.utils.nifti import NiftiDataContainer
-from time import time
-from BodyComposition.utils.masks import filter_hu, remove_small_objects, filter_keep_largest, fill_holes
-from scipy.ndimage import median_filter as ndi_median_filter
-import numpy as np
-
+from BodyComposition.utils.masks import filter_hu, remove_small_objects
 
 # action class
-class MasksStanfordSpine(PipelineAction):
-    """Action class for postprocessing spine segmentations derived from nnUNetv1|Stanford"""
-
-    def __init__(self, pipeline):
-        super().__init__(pipeline)
-
-        # io names & to pipeline
-        self.input_label_name = 'labels/{caseid}_stanford-spine.nii.gz'
-        self.output_mask_name = 'masks/{caseid}_stanford-spine.nii.gz'
-        self.io_inputs = [self.input_label_name]
-        self.io_outputs = [self.output_mask_name]
-
-        # create mappings to internal labels
-        LBL_VERTEBRALBODIES = pipeline.config['LBL_VERTEBRALBODIES']
-        LBL_VERTEBRALBODIES_R = {v: k for k, v in LBL_VERTEBRALBODIES.items()}
-        LBL_stanford = {8:'T1',9:'T2',10:'T3',11:'T4',12:'T5',13:'T6',14:'T7',15:'T8',16:'T9',17:'T10',18:'T11',19:'T12',
-                        20:'L1',21:'L2',22:'L3',23:'L4',24:'L5'}
-        self.mapping_vertebralbodies = {k: LBL_VERTEBRALBODIES_R[v] for k, v in LBL_stanford.items() if v in LBL_VERTEBRALBODIES_R}
-
-    def __call__(self, memory):
-        """Do."""
-        super().__call__(memory)
-        time_start = time()
-
-        # create output: mask, = empty dc + header from input
-        output_mask_path = memory['workspace']/self.output_mask_name.format(caseid=memory['id'])
-        output_mask = memory[self.output_mask_name] = NiftiDataContainer(output_mask_path)
-
-        # if mask already available, skip all
-        if output_mask.exists() and self.config['run']['skip']:
-            logging.info(f' output: {output_mask.path} available, skipping')
-            return
-        
-        # load input: label, spine segmentation
-        input_label = memory[self.input_label_name]
-        input_label.remap(mapping=self.mapping_vertebralbodies)
-        logging.info(f' loaded and remapped {input_label}')
-
-        # copy content and header from input
-        output_mask.data = input_label.data
-        output_mask.meta = input_label.meta
-
-        # save output
-        logging.info(f' output: memory:{output_mask} ({time()-time_start:.2f}s)')
-
-         # save mask if active
-        if self.config['vertebrae']['save_mask']:
-            output_mask.save_to_file()
-            logging.info(f'  file saved')
-
-
-
-# action class
-class MasksStanfordTissue(PipelineAction):
-    """Action class for postprocessing tissue segmentations derived from Stanford Tissue model"""
+class MasksInternalTissue(PipelineAction):
+    """Action class for postprocessing tissue segmentations derived from internal body composition segmetation."""
 
     def __init__(self, pipeline, image: str):
         super().__init__(pipeline)
 
         # io names & to pipeline
-        self.input_label_tissue_name = 'labels/{caseid}_stanford-tissue.nii.gz'
-        self.output_mask_name = 'masks/{caseid}_stanford-tissue.nii.gz'
+        self.input_label_tissue_name = 'labels/{caseid}_int-bodycomposition.nii.gz'
+        self.output_mask_name = 'masks/{caseid}_int-bodycomposition.nii.gz'
         self.io_inputs = [image, self.input_label_tissue_name]
         self.io_outputs = [self.output_mask_name]
 
@@ -81,9 +28,8 @@ class MasksStanfordTissue(PipelineAction):
         self.config_tissue = self.config['tissue']
 
         # overwrite default mappings
-        self.LBL_TISSUE = pipeline.config['LBL_TISSUE'] = pipeline.config['LBL_TISSUE_STANFORD']
+        self.LBL_TISSUE = pipeline.config['LBL_TISSUE']
         self.LBL_TISSUE_R = {v: k for k, v in self.LBL_TISSUE.items()}
-        logging.info(f'  tissue labels are mapped to `LBL_TISSUE_STANFORD` mapping: {self.LBL_TISSUE}')
 
     def __call__(self, memory):
         """Segment case."""
@@ -107,10 +53,6 @@ class MasksStanfordTissue(PipelineAction):
         # copy content and header from input
         output_np = input_label_tissue.data
         output_mask.meta = input_label_tissue.meta
-
-        # combine IMAT and SM, as segmentation of IMAT does work worse than thresholding
-        mask_tmp = np.isin(output_np, [self.LBL_TISSUE_R['IMAT']])
-        output_np[mask_tmp] = self.LBL_TISSUE_R['SM']
 
         # if any HU-based filter active:
         if any([self.config_tissue[tissue]['filter_hu'] for tissue in ['imat', 'sm', 'vat', 'sat']]):
@@ -167,9 +109,9 @@ class MasksStanfordTissue(PipelineAction):
 
         # filter: visceral adipose tissue VAT 
         if self.config_tissue['vat']['filter_hu']:
-            logging.info(f" HU filter visceral compartment")
+            logging.info(f" HU filter visceral compartment(s)")
             mask_tmp = filter_hu(image_np, self.config_tissue['vat']['filter_hu_range'])
-            mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['VAT']]) & np.logical_not(mask_tmp)
+            mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['aVAT'], self.LBL_TISSUE_R['tVAT']]) & np.logical_not(mask_tmp)
             if self.config_tissue['vat']['filter_hu_size']:
                 remove_small_objects(mask_np = mask_tmp_not,
                                      image_zooms=input_image.spacing,
@@ -177,7 +119,7 @@ class MasksStanfordTissue(PipelineAction):
                                      limit_size_2D=self.config_tissue['vat']['filter_hu_size_2D'],
                                      limit_size_3D=self.config_tissue['vat']['filter_hu_size_3D'])
             output_np[mask_tmp_not] = 0
-            logging.debug(f"  removed everything out of VAT HU-range from label VAT")
+            logging.debug(f"  removed everything out of VAT HU-range from label aVAT, tVAT")
 
 
         # filter: subcutaneous adipose tissue SAT
