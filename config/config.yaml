@@ -1,5 +1,5 @@
 paths:
-  workspace: ./data/{method} #./data/output/{method} # available: method, filter, timestamp; if None = input.parent.parent
+  workspace: null # ./data/output/{method}; if null, use the input's project directory
   logs: ./logs/{method}_{timestamp}.log # available: method, filter, timestamp
   weights:
     int-vertebrae: ./models/Dataset601_VertebralBodies
@@ -54,26 +54,26 @@ tissue:
   sm:
     filter_hu: True
     filter_hu_range: [-29, 150]
-    filter_hu_size: Trze
-    filter_hu_size_version: 3D # options: 2D, 3D
-    filter_hu_size_2D: 10 # mm^2
-    filter_hu_size_3D: 20 # mm^3
+    filter_size: True
+    filter_size_version: 3D # options: 2D, 3D
+    filter_size_2D: 10 # mm^2
+    filter_size_3D: 20 # mm^3
 
   vat: # in some studies differently defined than sat
     filter_hu: True
     filter_hu_range: [-190, -30]
-    filter_hu_size: True
-    filter_hu_size_version: 3D # options: 2D, 3D
-    filter_hu_size_2D: 20 # mm^2
-    filter_hu_size_3D: 20 # mm^3
+    filter_size: True
+    filter_size_version: 3D # options: 2D, 3D
+    filter_size_2D: 20 # mm^2
+    filter_size_3D: 20 # mm^3
 
   sat:
     filter_hu: True
     filter_hu_range: [-190, -30]
-    filter_hu_size: True
-    filter_hu_size_version: 3D # options: 2D, 3D
-    filter_hu_size_2D: 20 # mm^2
-    filter_hu_size_3D: 50 # mm^3
+    filter_size: True
+    filter_size_version: 3D # options: 2D, 3D
+    filter_size_2D: 20 # mm^2
+    filter_size_3D: 50 # mm^3
 
 
 crop:

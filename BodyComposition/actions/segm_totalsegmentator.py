@@ -1,5 +1,6 @@
 # general libraries
 from BodyComposition.pipeline import PipelineAction
+from BodyComposition.utils.geometry import assert_same_physical_domain
 from BodyComposition.utils.nifti import NiftiDataContainer
 from time import time
 import logging
@@ -45,6 +46,9 @@ class SegmTotalSegmentator(PipelineAction):
         self.output_label_name = 'labels/{{caseid}}_tseg-{task}.nii.gz'.format(task=task)
         self.io_inputs = [image]
         self.io_outputs = [self.output_label_name]
+        self.io_reset_outputs = [self.output_label_name]
+        if self.config['segmentation']['save_label']:
+            self.io_persisted_outputs = [self.output_label_name]
         self.licenses = ['totalsegmentator', 'nnunet']
 
         # dictionary for task settings
@@ -108,6 +112,7 @@ class SegmTotalSegmentator(PipelineAction):
         else:
             # load input container, log
             input_image = memory[self.input_image_name]
+            input_image.validate()
             logging.info(f' input: {input_image}')
 
             # do segmentation, redirect stdout and stderr to logging
@@ -140,6 +145,13 @@ class SegmTotalSegmentator(PipelineAction):
                                                     no_derived_masks=False,
                                                     v1_order=False)
                 log_gpu_usage()
+            output_label.validate()
+            assert_same_physical_domain(
+                input_image.geometry,
+                output_label.geometry,
+                reference_name="input image",
+                candidate_name=f"TotalSegmentator {self.task} label",
+            )
 
             # logging
             logging.info(f' finished segmentation ({time() - time_start:.2f}s)')

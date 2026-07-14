@@ -8,7 +8,8 @@ from time import time
 import logging
 import contextlib
 from BodyComposition.pipeline import PipelineAction
-from BodyComposition.utils.nifti import NiftiDataContainer
+from BodyComposition.utils.geometry import assert_same_physical_domain
+from BodyComposition.utils.nifti import NiftiDataContainer, resample_label_to_reference
 from BodyComposition.utils.logging import LoggingWriter, log_gpu_usage
 
 # library nnUNet
@@ -46,6 +47,9 @@ class SegmBOA(PipelineAction):
         self.output_label_name = 'labels/{caseid}_boa.nii.gz'
         self.io_inputs = [image]
         self.io_outputs = [self.output_label_name]
+        self.io_reset_outputs = [self.output_label_name]
+        if self.config['segmentation']['save_label']:
+            self.io_persisted_outputs = [self.output_label_name]
         self.licenses = ['boa', 'nnunet']
 
         # set nnunet weight dir, device
@@ -68,6 +72,7 @@ class SegmBOA(PipelineAction):
         else:
             # load input container, log
             input_image = memory[self.input_image_name]
+            input_image.validate()
             logging.info(f' input: {input_image}')
         
             # do segmentation
@@ -111,19 +116,17 @@ class SegmBOA(PipelineAction):
                 # load and save output to memory
                 segm_tmp = sitk.ReadImage(str(tmp_dir/'s01.nii.gz'))
 
-                # Resample the image back to its original orientation using the original direction, origin, and spacing
-                segm_tmp = sitk.Resample(
-                    segm_tmp,
-                    transform=sitk.Transform(3, sitk.sitkIdentity),
-                    outputDirection=input_image.direction,
-                    outputOrigin=input_image.origin,
-                    outputSpacing=input_image.spacing,
-                    size=input_image.img.GetSize(),
-                    interpolator=sitk.sitkLinear  # Use linear interpolation for resampling
-                )
+                # Restore the original physical grid without interpolating label values.
+                segm_tmp = resample_label_to_reference(segm_tmp, input_image.img)
 
                 # save to memory
                 output_label.img = segm_tmp
+                assert_same_physical_domain(
+                    input_image.geometry,
+                    output_label.geometry,
+                    reference_name="input image",
+                    candidate_name="BOA label",
+                )
 
             # logging
             logging.info(f' finished segmentation ({time() - time_start:.2f}s)')
@@ -133,4 +136,3 @@ class SegmBOA(PipelineAction):
             if self.config['segmentation']['save_label']:
                 output_label.save_to_file()
                 logging.info(f'  file saved')
-

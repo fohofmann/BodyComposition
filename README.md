@@ -1,23 +1,25 @@
-# BodyComposition v0.2
+# BodyComposition v0.3
 This package combines existing models of [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) or the [Comp2Comp pipeline](https://huggingface.co/louisblankemeier/stanford_spine) or [modified models](https://huggingface.co/fhofmann) (based on labels from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator/) and [VerSe](https://github.com/anjany/verse)), with pre- and postprocessing steps to calculate the cross-sectional areas of skeletal muscle (SM<sub>total</sub>), psoas muscle (SM<sub>psoas</sub>), visceral adipose tissue (VAT), subcutaneous adipose tissue (SAT) and intermuscular adipose tissue (IMAT) from routine computed tomography (CT) scans.
 
 ## Installation
 
-1. We recommend to install this pipeline in a separate python environment.
-2. Navigate to the directory you would like to install the pipeline in.
-3. Install the pipeline
-   ```b
+1. Clone the repository and enter it:
+   ```bash
    git clone https://github.com/fohofmann/BodyComposition.git
    cd BodyComposition
-   pip install --no-cache-dir -e .
    ```
-4. Make sure, the model weights are available:
+2. Create a separate environment and install the project. Local development uses `uv`:
+   ```bash
+   uv venv
+   uv pip install -e .
+   ```
+3. Make sure the required model weights are available.
 
 ## Model weights
 
 This pipeline uses model weights derived from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) for tissue segmentation, and model weights from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) or [Comp2Comp](https://huggingface.co/louisblankemeier/stanford_spine) or [an modified model](https://huggingface.co/fhofmann), based on labels from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator/) and [VerSe](https://github.com/anjany/verse), for spine segmentation. The pipeline combines these models with pre- and postprocessing steps. Details on the models can be found in [docs/models.md](docs/models.md), and how to combine them in [docs/pipeline.md](docs/pipeline.md).
 
-**BodyComposition v0.2 requires the `tissue_types` (and for some configurations `vertebrae_body`) tasks from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator). We do not provide these weights directly, instead you must acquire a license available from [J. Wasserthal / TotalSegmentator](https://github.com/wasserth/TotalSegmentator).**
+**Pipelines that use TotalSegmentator require the `tissue_types` and, for some configurations, `vertebrae_body` tasks. We do not provide these weights directly; obtain and use them under the applicable TotalSegmentator license.**
 
 1. Set your TotalSegmentator license.
   - **If you are already using TotalSegmentator in your current environment**, and have set a license, skip this.
@@ -38,7 +40,40 @@ This pipeline uses model weights derived from [TotalSegmentator](https://github.
     bodycomposition_download_models --pipeline BodyCompositionFast
     ```
     This script will download the models and store them in the directories as defined in `config/config.yaml`. You can download single models (using `--model`), or all models required for a specific pipeline (using `--pipeline`).
-  
+
+## Model-free checks
+
+The geometry, measurement, action-contract, configuration, CLI, and synthetic-pipeline tests do not download model weights:
+
+```bash
+uv pip install -e '.[test]'
+uv run python -m pytest -q
+```
+
+## Opt-in public CT integration test
+
+The repository defines a real-world smoke test using CT-ORG volume 0, licensed
+under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). The scan is
+not bundled with this Apache-2.0 package. The test obtains it on demand from an
+immutable mirror revision, checks its exact byte count and SHA-256 digest, and
+runs the default `BodyCompositionFast` pipeline twice to verify anatomy/geometry
+invariants and safe resume behavior.
+
+Run the test only in a CUDA-capable controlled environment with the pinned model
+directories available (for example, in a CUDA-enabled Docker container):
+
+```bash
+BODYCOMPOSITION_RUN_REAL_WORLD_TEST=1 \
+BODYCOMPOSITION_MODEL_ROOT=/absolute/path/to/models \
+BODYCOMPOSITION_TEST_DATA_CACHE=/absolute/path/to/test-cache \
+uv run python -m pytest -m real_world tests/test_public_real_world.py -v
+```
+
+To use an already downloaded copy instead of allowing network access, set
+`BODYCOMPOSITION_PUBLIC_CT_PATH=/absolute/path/to/ct_org_volume-0_0000.nii.gz`.
+The local file is accepted only when its pinned size and digest match. See
+[`tests/fixtures/public_ct/README.md`](tests/fixtures/public_ct/README.md) for source,
+license, attribution, citations, and the important CT-ORG orientation caveat.
 
 ## Usage
 

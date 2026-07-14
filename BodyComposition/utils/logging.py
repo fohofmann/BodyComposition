@@ -1,7 +1,6 @@
 # libraries
 import logging
 import sys
-import torch.cuda as cuda
 from psutil import virtual_memory
 from pathlib import Path
 import yaml
@@ -42,7 +41,11 @@ def log_gpu_usage(device=None):
     memory_info = virtual_memory()
     msg = ' usage:'
     msg += f' RAM {round(memory_info.used/(1024**3),1)}/{round(memory_info.total/(1024**3),1)}GB'
-    if cuda.is_available():
+    try:
+        import torch.cuda as cuda
+    except ImportError:
+        cuda = None
+    if cuda is not None and cuda.is_available():
         msg += f' | VRAM {round(cuda.max_memory_allocated(device)/(1024**3),1)}/{round(cuda.max_memory_reserved(device)/(1024**3),1)}GB'
     logging.info(msg)
 

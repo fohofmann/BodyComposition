@@ -32,12 +32,16 @@ def filter_hu(image_np: np.ndarray, hu_range: list):
 
 
 # function to remove small objects
-def remove_small_objects(mask_np, image_zooms, limit_size_version,
+def remove_small_objects(mask_np, spacing_xyz, limit_size_version,
                          limit_size_2D = 0, limit_size_3D = 0):
 
-    # calculate pixel volume; np & spacing in zyx
-    pix_area = image_zooms[1] * image_zooms[2]
-    pix_vol = pix_area * image_zooms[0]
+    spacing_xyz = np.asarray(spacing_xyz, dtype=float)
+    if spacing_xyz.shape != (3,) or not np.all(np.isfinite(spacing_xyz)) or np.any(spacing_xyz <= 0):
+        raise ValueError(f'spacing_xyz must contain three finite positive values, got {spacing_xyz}.')
+
+    # Array slices are y-x planes; SimpleITK spacing is x-y-z.
+    pix_area = spacing_xyz[0] * spacing_xyz[1]
+    pix_vol = float(np.prod(spacing_xyz))
     
     # remove small objects, 2d or 3d
     if limit_size_version == '2D' and limit_size_2D > 0:

@@ -13,6 +13,7 @@ class DatalistBuilder():
                  workspace: Path = None,
                  io_inputs: List[str] = None,
                  io_outputs: List[str] = None,
+                 io_reset_outputs: List[str] = None,
                  part_id: int = 0,
                  num_parts: int = 1):
         """Initialize DatalistBuilder class."""
@@ -100,6 +101,7 @@ class DatalistBuilder():
         # save tuple as attribute
         self.cases = cases
         self.io_outputs = io_outputs
+        self.io_reset_outputs = io_outputs if io_reset_outputs is None else io_reset_outputs
         self.io_inputs = io_inputs
 
     def __len__(self):
@@ -115,7 +117,7 @@ class DatalistBuilder():
         """Delete existing output files."""
         tmp_cases = set()
         for caseid, input_file, workspace in iter(self.cases):
-            for io_output in self.io_outputs:
+            for io_output in self.io_reset_outputs or []:
                 tmp_io_output = workspace/io_output.format(caseid=caseid)
                 if tmp_io_output.exists():
                     tmp_io_output.unlink()
@@ -124,6 +126,9 @@ class DatalistBuilder():
 
     def skip_completed(self):
         """Remove completed cases."""
+        if not self.io_outputs:
+            logging.info('skip complete cases: no persisted completion markers declared')
+            return
         tmp_cases = set()
         for caseid, input_file, workspace in iter(self.cases):
             if all((workspace/io_output.format(caseid=caseid)).exists() for io_output in self.io_outputs):

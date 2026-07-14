@@ -1,8 +1,7 @@
 # Pipeline
 
-The BodyComposition package can be used to run different pipelines.
-Pipelines are registred in the [pipeline_registry.py](../BodyComposition/pipeline_registry.py) file.
-If a registred pipeline is run, the specific pipeline configuration is loaded from the [pipelines directory](../BodyComposition/pipelines/).
+The BodyComposition package provides several registered pipelines.
+Pipelines are registered in [pipeline_registry.py](../BodyComposition/pipeline_registry.py), with their ordered action definitions in the [pipelines directory](../BodyComposition/pipelines/).
 
 Each pipeline is a sequence of stages that are executed in order as defined in the respective pipeline file.
 Each stage is defined as `action`, which are classes that are derived from the `PipelineAction` class.
@@ -10,15 +9,24 @@ Each stage is defined as `action`, which are classes that are derived from the `
 At the start of the pipeline, each action class is initialized.
 The pipeline selects all cases, where all required inputs (defined by the individual actions) are available.
 Then, for each case, all actions are executed in order.
-Outputs of actions are available to the next actions in the pipeline using a shared memory dictionary.
+Outputs of actions are available to subsequent actions through a shared memory dictionary. Each action declares its inputs and outputs. Missing inputs and outputs fail at the responsible action rather than surfacing later as an unrelated key error.
+
+Action outputs, persisted completion markers, and reset targets are separate contracts. An output may exist only in memory when saving is disabled; only files that an action actually writes are used to decide whether a batch case is complete. Reset targets also include shared append exports so a requested clean run does not retain earlier rows. A pipeline with no persisted completion markers is processed normally instead of being skipped vacuously.
+
+A case failure is logged with its original traceback. Batch execution continues with the remaining cases and then raises `PipelineExecutionError`, so CLI processes return a non-zero exit status instead of reporting success for a partial run.
+
+Internal nnU-Net inference normally uses cuDNN on CUDA devices. If cuDNN reports its specific `FIND` or `GET` engine-selection failure, the action logs a warning, disables cuDNN for the remainder of that process, and retries once through PyTorch's CUDA fallback. Other runtime errors are not retried.
+
+Images use explicit geometry conventions: SimpleITK size, spacing, origin, and indices are in x-y-z order; arrays returned by SimpleITK are in z-y-x order. Images and masks must have the same size and physical domain before measurements are combined.
 
 ## Pipelines
 While pipelines can be customized by the user, the following methods are readily implemented:
-- **[BodyCompositionFast](../BodyComposition/pipelines/bodycomposition.py) (default)**: Segments vertebral bodies using an [nnU-Net v2 (ResEncL) model](models.md), crops the image in cranio-caudal axis to L2-L4, segments tissue using [TotalSegmentator](models.md), and exports slice-wise measures for each case as well as mean L3 measures for all cases.
-- **[BodyComposition](../BodyComposition/pipelines/bodycomposition.py)**: Segments vertebral bodies using an [nnU-Net v2 (ResEncM) model](models.md), segments tissue and bodytrunk using [TotalSegmentator](models.md), and exports slice-wise measures for each case.
+- **[BodyCompositionFast](../BodyComposition/pipelines/bodycomposition.py) (default)**: Uses the internal ResEncM vertebral and tissue models, crops in the cranio-caudal axis to L2-L4, and exports per-slice and mean-L3 measurements.
+- **[BodyComposition](../BodyComposition/pipelines/bodycomposition.py)**: Uses the internal ResEncL vertebral and tissue models and exports full-range per-slice measurements plus the available outer tissue contour.
 - **[SarcopeniaTotalSegmentatorFast](../BodyComposition/pipelines/totalsegmentator.py)**: Segments the spine using [TotalSegmentator](models.md), crops the image in cranio-caudal axis to L2-L4, segments tissue using [TotalSegmentator](models.md), and exports slice-wise measures for each case as well as mean L3 measures for all cases.
 - **[SarcopeniaTotalSegmentator](../BodyComposition/pipelines/totalsegmentator.py)**: Segments spine, vertebral bodies, body trunk, tissue and psoas muscle using [TotalSegmentator](models.md), reduces the labels to the vertebral bodies, and exports slice-wise measures for each case.
-- **[SarcopeniaStanford](../BodyComposition/pipelines/stanford.py)**: Segments the spine using the [Comp2Comp Spine Segmentation model](models.md), segments vertebral bodies, body trunk and tissue using [TotalSegmentator](models.md), reduces the labels to the vertebral bodies, and exports slice-wise measures for each case.
+- **[SarcopeniaStanfordFast](../BodyComposition/pipelines/stanford.py)**: Uses the Comp2Comp spine and tissue models in a cropped L2-L4 workflow.
+- **[BodyAndOrganAnalysis](../BodyComposition/pipelines/boa.py)**: Combines TotalSegmentator spine localization with the BOA tissue model and exports per-slice measurements.
 
 ## Actions
 ### Segmentation
@@ -28,7 +36,7 @@ While pipelines can be customized by the user, the following methods are readily
 
 ### Masks Spine
 - **MasksTotalSegmentatorSpine**: Maps the TotalSegmentator labels to the [standard labels](labels.md) used in the pipeline. If `reduce_to_vb` is set to `True`, the labels are reduced to the vertebral bodies using TotalSegmentator's `vertebral_body` segmentation. Returns the remapped masks as a [NIfTI data container](../BodyComposition/utils/nifti.py).
-- **MasksStanfordSpine**: Maps the Comp2Comp Spine labels to the [standard labels](labels.md) used in the pipeline. If `reduce_to_vb` is set to `True`, the labels are reduced to the vertebral bodies using TotalSegmentator's `vertebral_body` segmentation. Returns the remapped masks as a [NIfTI data container](../BodyComposition/utils/nifti.py).
+- **MasksStanfordSpine**: Maps the Comp2Comp Spine labels to the [standard labels](labels.md) used in the pipeline and returns the remapped mask as a [NIfTI data container](../BodyComposition/utils/nifti.py).
 
 ### Masks Tissue
 *During the processing of tissue masks, filters based on Hounsfield units and 2D or 3D size properties are applied to subsegment `labels` and generate `masks` as explained [here](labels.md) and defined in the pipeline's [configuration](config.md).*
@@ -40,12 +48,13 @@ While pipelines can be customized by the user, the following methods are readily
 - **ApplyBoundingBox**: Applies a bounding box to a image, label or mask. The segmentation `label` must be provided as [NIfTI data containers](../BodyComposition/utils/nifti.py), and the bounding box `bbox` must be available within the memory dictionary. If the NIfTI data container should not be changed, but saved separately, define its name using the `output` argument. The function then applies the bounding box to the input NIfTI. If the changed NIfTI data container is used later on, only values within the bounding box are returned, changed or saved.
 
 ### Postprocessing
-- **CalcVertebralLevel**: Calculates the vertebral levels based based on a (reorientated) `mask` refering to a [NIfTI data container](../BodyComposition/utils/nifti.py) containing the (postprocessed) vertebral body segmentations. For each slice, the dominating vertebral body (most pixels) is determined using settings as defined in the pipeline's [configuration](config.md). Returns a numpy array containing the vertebral levels (`tmp/vertebrae_values`) to the memory dictionary.
-- **CalcCSA**: Calculates the cross-sectional area (CSA) of the tissues based on a (reorientated) `mask` refering to a [NIfTI data container](../BodyComposition/utils/nifti.py) containing the (postprocessed) tissue segmentations. The CSA is calculated for each label in cm², considering the settings as defined in the pipeline's [configuration](config.md). Returns a numpy array containing the CSA values (`tmp/tissue_values`) to the memory dictionary.
+- **CalcVertebralLevel**: Canonicalizes and validates a vertebral mask, then produces a DataFrame with one row per prepared CT slice and the dominating level, center, centroid, tag, and status. An empty vertebral mask returns the same schema with `VertebraStatus=empty_mask` instead of omitting the output.
+- **CalcMeasures**: Canonicalizes and validates the tissue mask and any optional CT/contour mask. It returns named per-slice voxel counts and CSA in cm² for every native label. Optional HU columns include an explicit empty-tissue status. Optional contour perimeter and area are calculated after transforming contour points through the physical affine.
 
 ### Data Handling
 - **LoadMetadata**: Trys to load metadata. The path is given as an argument, with the placeholder `{caseid}` being replaced by the current cases id. Can be both, a *csv (containing DICOM metadata) or a *dcm file. The metadata is saved to the memory dictionary as `tmp/metadata`.
-- **DataCombine**: Trys to combine tissue measurements (CSA) and vertebral levels. Checks whether affine, spacing and other metadata match. Returns a pandas dataframe containing the combined data (`tmp/bodycomposition`) to the memory dictionary.
+- **DataCombine**: Combines tissue measurements and vertebral levels only after size, spacing, origin, direction, and row count agree. It returns `tmp/bodycomposition` in ascending prepared-slice order.
+- **L3MeanCSA**: Produces a one-row mean-L3 CSA table. If L3 is absent, it still produces the declared schema with `status=not_available` and `reason=missing_L3`.
 - **DataSubset**: Can be used to create a subset of `tmp/bodycomposition` (or an other df as defined as `input_df` argument) for later aggregation. The subset is defined by a reference (Center, Level, Centroid, Tag) corresponding to the vertebral levels created by **CalcVertebralLevel** and a specific vertebral level (`ALL` for all vertebrae, `L` for all lumbar vertebrae, or a string or list defining specific vertebrae). The subset is saved to the memory dictionary as `tmp/bodycomposition` or a specific name defined by the `output_df` argument.
 - **DataAggregate**: Aggregates the data in `tmp/bodycomposition` (or an other df as defined as `input_df` argument). Groups are defined by a reference `ref` (Center, Level, Centroid, Tag) corresponding to the vertebral levels created by **CalcVertebralLevel**. If individual groups are required, individual groups can be defined using the `tag_mapping` dictionary that should map the values from `ref` to new, individual groups "tags". The method of aggregation is defined by `method`, currently mean, median and sum are supported. The aggregated data is saved to the memory dictionary as `tmp/bodycomposition` or a specific name defined by the `output_df` argument.
-- **DataExport**: Saves data from a pandas dataframe (defined as argument `input`) to a csv file (defined as argument `file`, using placeholder `{caseid}`). If `add_metadata` is set to `True`, the metadata imported by **LoadMetadata** is concatenated. If `append` is set to `True`, the data is appended to the file which can be useful to generate summary files of multiple cases. If `add_header` is set to `True`, the header is added to the exported data. If `add_index` is set to `True`, the index is added to the exported data.
+- **DataExport**: Saves the DataFrame selected by `input_df` to the CSV path selected by `file`, including the `{caseid}` placeholder. `add_metadata=True` prepends loaded metadata; `append=True` appends rows and writes a header only when the target does not yet exist. CSV is the current interoperability output for the baseline pipeline.

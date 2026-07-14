@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG PLATFORM=linux/amd64
-FROM --platform=${PLATFORM} nvcr.io/nvidia/pytorch:24.06-py3
+FROM --platform=${PLATFORM} nvcr.io/nvidia/pytorch:25.03-py3
 
 # Set environment
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -34,7 +34,7 @@ RUN mkdir -p data logs models
 
 # Labels
 LABEL org.opencontainers.image.title="BodyComposition" \
-      org.opencontainers.image.version="0.2" \
+      org.opencontainers.image.version="0.3" \
       org.opencontainers.image.authors="Felix Hofmann" \
       org.opencontainers.image.source=https://github.com/fohofmann/BodyComposition \
       org.opencontainers.image.description="Pipeline for the segmentation of muscle and adipose tissue with postprocessing for mapping to vertebral levels and calculation of cross-sectional areas." \

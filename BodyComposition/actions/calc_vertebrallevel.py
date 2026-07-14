@@ -4,6 +4,9 @@ from BodyComposition.pipeline import PipelineAction
 from time import time
 import numpy as np
 from scipy.ndimage import center_of_mass
+import pandas as pd
+
+from BodyComposition.measurements import validate_label_mapping
 
 # action class
 class CalcVertebralLevel(PipelineAction):
@@ -15,14 +18,26 @@ class CalcVertebralLevel(PipelineAction):
         # io to pipeline
         self.input_mask_name = mask
         self.io_inputs = [mask]
-        self.io_outputs = ['tmp/vertebrae_values', 'tmp/vertebrae_meta']
+        self.io_outputs = ['tmp/vertebrae_values', 'tmp/vertebrae_geometry']
 
         # configs
         self.config_vertebrae = pipeline.config['vertebrae']
 
+        # load labels as constants
+        self.LBL_VERTEBRALBODIES = validate_label_mapping(
+            pipeline.config['LBL_VERTEBRALBODIES']
+        )
+
 
     # max counts per slive, with and without window
-    def get_max_counts(self, data: np.array, index: int, window_size: int, min_voxels: int = 0, deprioritize_labels: list = []):
+    def get_max_counts(
+        self,
+        data: np.ndarray,
+        index: int,
+        window_size: int,
+        min_voxels: int = 0,
+        deprioritize_labels=(),
+    ):
 
         # limit window size to data size
         if index-window_size < 0:
@@ -84,6 +99,7 @@ class CalcVertebralLevel(PipelineAction):
         # load mask
         input_mask = memory[self.input_mask_name]
         input_mask.as_closest_canonical()
+        input_mask.validate()
         logging.info(f' loaded {input_mask}, reorientated to canonical')
         
         # create empty output array
@@ -104,7 +120,18 @@ class CalcVertebralLevel(PipelineAction):
         # vertebrae between first and last defined level to subarray
         helper_localizer = np.where(labels_all != 0)[0]
         if helper_localizer.size == 0:
-            raise ValueError(f' No vertebrae found in {self.input_mask_name}. A common cause is, that the image is not properly aligned or oriented.')
+            res_labels_df = pd.DataFrame({
+                "Slice": np.arange(input_mask.shape[0], dtype=int),
+                "Level": pd.Series(pd.NA, index=range(input_mask.shape[0]), dtype="string"),
+                "Center": pd.Series(pd.NA, index=range(input_mask.shape[0]), dtype="string"),
+                "Centroid": pd.Series(pd.NA, index=range(input_mask.shape[0]), dtype="string"),
+                "Tag": pd.Series(pd.NA, index=range(input_mask.shape[0]), dtype="string"),
+                "VertebraStatus": "empty_mask",
+            })
+            memory['tmp/vertebrae_values'] = res_labels_df
+            memory['tmp/vertebrae_geometry'] = input_mask.geometry
+            logging.warning(' no vertebrae found; emitted schema-valid empty-level output')
+            return
         labels_vertebrae = labels_all[helper_localizer[0]:helper_localizer[-1]+1]
         data_vertebrae = input_mask.data[helper_localizer[0]:helper_localizer[-1]+1, :, :]
 
@@ -202,9 +229,18 @@ class CalcVertebralLevel(PipelineAction):
                 labels_all[helper_index] = vertebra
             logging.info(f' vertebrae center of mass (cranio-caudal = z-axis) calculated ({time() - time_start_i:.1f}s).')
         else:
-            labels_all[:] = np.nan
+            labels_all[:] = 0
+
+        # STEP 6: create output dataframe
+        res_labels_df = pd.DataFrame(res_labels_np, columns=["Slice", "Level", "Center", "Centroid"])
+        res_labels_df["Tag"] = pd.Series(pd.NA, index=res_labels_df.index, dtype="string")
+        res_labels_df["VertebraStatus"] = "ok"
+
+        # add vertebrae labels
+        for column in ('Level', 'Center', 'Centroid'):
+            res_labels_df[column] = res_labels_df[column].map(self.LBL_VERTEBRALBODIES).astype('string')
             
         # save data to pipeline
-        memory['tmp/vertebrae_values'] = res_labels_np
-        memory['tmp/vertebrae_meta'] = input_mask.meta
-        logging.info(f' output: memory:tmp/vertebrae_values, shape {res_labels_np.shape} ({time()-time_start:.2f}s)') 
+        memory['tmp/vertebrae_values'] = res_labels_df
+        memory['tmp/vertebrae_geometry'] = input_mask.geometry
+        logging.info(f' output: memory:tmp/vertebrae_values, shape {res_labels_df.shape} ({time()-time_start:.2f}s)')

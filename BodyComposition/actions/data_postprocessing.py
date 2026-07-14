@@ -1,326 +1,323 @@
-# libraries
+from __future__ import annotations
+
 import logging
-from BodyComposition.pipeline import PipelineAction
-from time import time
-import pandas as pd
 from pathlib import Path
+from time import time
+from typing import Callable
+
 import numpy as np
-from typing import Union
+import pandas as pd
+
+from BodyComposition.measurements import weighted_mean_hu
+from BodyComposition.pipeline import PipelineAction
+from BodyComposition.utils.geometry import assert_same_physical_domain
 
 
-# action class
+MEASUREMENT_PREFIXES = ("Vx_", "CSA_", "HU_", "CIR_")
+
+
+def filter_measurement_columns(df: pd.DataFrame, pattern: str | None) -> pd.DataFrame:
+    if pattern is None:
+        return df
+    measurement_columns = [
+        column for column in df.columns if column.startswith(MEASUREMENT_PREFIXES)
+    ]
+    retained_measurements = df[measurement_columns].filter(regex=pattern).columns.tolist()
+    other_columns = [column for column in df.columns if column not in measurement_columns]
+    return df[other_columns + retained_measurements]
+
+
 class DataCombine(PipelineAction):
-    """
-    Action class combining, filtering, aggregating and exporting data
-    """
+    """Combine aligned vertebral and tissue measurements into one slice table."""
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
-
-        # io to pipeline
-        self.io_inputs = ['tmp/tissue_values','tmp/tissue_meta','tmp/vertebrae_values','tmp/vertebrae_meta']
-        self.io_outputs = ['tmp/bodycomposition']
-        
-        # load labels as constants
-        self.LBL_VERTEBRALBODIES = pipeline.config['LBL_VERTEBRALBODIES']
-        self.LBL_TISSUE = pipeline.config['LBL_TISSUE']
+        self.io_inputs = [
+            "tmp/tissue_values",
+            "tmp/tissue_geometry",
+            "tmp/vertebrae_values",
+            "tmp/vertebrae_geometry",
+        ]
+        self.io_outputs = ["tmp/bodycomposition"]
 
     def __call__(self, memory):
-        """Combine, filter, aggregate and exporting data."""
         super().__call__(memory)
         time_start = time()
 
-        # checks before combination
-        tissue_meta = memory['tmp/tissue_meta']
-        vertebrae_meta = memory['tmp/vertebrae_meta']
-        if not np.allclose(tissue_meta[0], vertebrae_meta[0]):
-            raise ValueError(f'Origin of tissue and vertebrae masks do not match:\n{tissue_meta[0]} vs \n{vertebrae_meta[0]}')
-        elif not np.array_equal(tissue_meta[1], vertebrae_meta[1]):
-            raise ValueError(f'Spacing of tissue and vertebrae masks do not match:\n{tissue_meta[1]} vs \n{vertebrae_meta[1]}')
-        elif not np.allclose(tissue_meta[2], vertebrae_meta[2]):
-            raise ValueError(f'Direction of tissue and vertebrae masks do not match:\n{tissue_meta[2]} vs \n{vertebrae_meta[2]}')
+        tissue_geometry = memory["tmp/tissue_geometry"]
+        vertebrae_geometry = memory["tmp/vertebrae_geometry"]
+        assert_same_physical_domain(
+            tissue_geometry,
+            vertebrae_geometry,
+            reference_name="tissue mask",
+            candidate_name="vertebral mask",
+        )
 
-        # transform labels numpy to pandas
-        vertebrae_df = pd.DataFrame(memory['tmp/vertebrae_values'], columns=["Slice", "Level", "Center", "Centroid"])
-        vertebrae_df["Tag"] = None
-           
-        # transform csa numpy to pandas, rename columns
-        names_columns = ["CSA_" + col for col in self.LBL_TISSUE.values()]
-        tissue_df = pd.DataFrame(memory['tmp/tissue_values'], columns=names_columns)
-        tissue_df = tissue_df / 100 # adapt csa values (transform mm2 to cm2)
+        tissue_df = memory["tmp/tissue_values"]
+        vertebrae_df = memory["tmp/vertebrae_values"]
+        if not isinstance(tissue_df, pd.DataFrame) or not isinstance(vertebrae_df, pd.DataFrame):
+            raise TypeError("Tissue and vertebral measurements must be pandas DataFrames.")
+        if len(tissue_df) != len(vertebrae_df):
+            raise ValueError(
+                "Tissue and vertebral tables must have one row per prepared CT slice: "
+                f"{len(tissue_df)} != {len(vertebrae_df)}."
+            )
+        if "Slice" not in vertebrae_df:
+            raise ValueError("Vertebral measurements are missing the required Slice column.")
 
-        # concatenate
-        results_df = pd.concat([vertebrae_df, tissue_df], axis=1)
-
-        # calculate circumferences if available
-        if 'tmp/tissue_contour' in memory:
-            time_start = time()
-            circumferences_np = memory['tmp/tissue_contour']
-            circumferences_df = pd.DataFrame(circumferences_np, columns=["CIR_contour", "CSA_contour"])
-
-            # transform mm to cm
-            circumferences_df["CIR_contour"] = circumferences_df["CIR_contour"] / 10 # mm -> cm
-            circumferences_df["CSA_contour"] = circumferences_df["CSA_contour"] / 100 # mm2 -> cm2
-
-            # reverse order of rows, concatenate
-            results_df = pd.concat([results_df, circumferences_df], axis=1)
-
-        # reverse order of rows: S -> I, replace labels with real level names
-        results_df = results_df.iloc[::-1].reset_index(drop=True)
-        dict_vertebrae = self.LBL_VERTEBRALBODIES
-        results_df['Level'] = results_df['Level'].replace(dict_vertebrae)
-        results_df['Center'] = results_df['Center'].replace(dict_vertebrae)
-        results_df['Centroid'] = results_df['Centroid'].replace(dict_vertebrae)
-
-        # save to memory
-        memory['tmp/bodycomposition'] = results_df
-        logging.info(f' saved to memory:tmp/bodycomposition ({time()-time_start:.2f}s)')
+        results_df = pd.concat(
+            [vertebrae_df.reset_index(drop=True), tissue_df.reset_index(drop=True)],
+            axis=1,
+        )
+        results_df = results_df.sort_values("Slice", kind="stable").reset_index(drop=True)
+        memory["tmp/bodycomposition"] = results_df
+        logging.info(
+            " output: memory:tmp/bodycomposition, shape %s (%.2fs)",
+            results_df.shape,
+            time() - time_start,
+        )
 
 
-# action class
-class DataSubset(PipelineAction):
-    """
-    Action class subsetting data
-    """
+class L3MeanCSA(PipelineAction):
+    """Create a schema-valid L3 summary, including an explicit missing-level status."""
 
-    def __init__(self, pipeline,
-                 ref: str, level: Union[str, list],
-                 input_df='tmp/bodycomposition', output_df='tmp/bodycomposition'):
+    def __init__(
+        self,
+        pipeline,
+        input_df: str = "tmp/bodycomposition",
+        output_df: str = "res/L3MeanCSA",
+    ):
         super().__init__(pipeline)
-
-        # io to pipeline
-        self.io_inputs = [input_df]
-        self.io_outputs = [output_df]
         self.input_df_name = input_df
         self.output_df_name = output_df
+        self.csa_columns = [f"CSA_{name}" for name in pipeline.config["LBL_TISSUE"].values()]
+        self.io_inputs = [input_df]
+        self.io_outputs = [output_df]
 
-        # definition of valid arguments
-        valid_ref = ['Center', 'Level', 'Centroid', 'Tag']
-        valid_levels = pipeline.config['LBL_VERTEBRALBODIES'].values()
-        
-        # check subset definitions
-        if ref:
-            # ref must be a string and included in valid_ref
-            if not isinstance(ref, str):
-                raise ValueError(f'Argument `ref` must be a string.')
-            if ref not in valid_ref:
-                raise ValueError(f'Argument `ref` must be {valid_ref}.')
-            
-            # level must be a string or list and included in valid_levels
-            if isinstance(level, str):
-                if level == 'ALL':
-                    level = valid_levels
-                    logging.info(f' subset: `ALL` = all valid levels, excluding undefined levels')
-                elif level == 'L':
-                    level = [x for x in valid_levels if x.startswith('L')]
-                    logging.info(f' subset: `L` = all lumbar levels')
-                else:
-                    logging.info(f' subset: `{level}`.')
-                    level = [level]
-            elif not isinstance(level, list):
-                raise ValueError(f'Argument `level` must be a string or list.')
+    def __call__(self, memory):
+        super().__call__(memory)
+        input_df = memory[self.input_df_name]
+        if not isinstance(input_df, pd.DataFrame):
+            raise TypeError("L3MeanCSA input must be a pandas DataFrame.")
 
-            if not all(x in valid_levels for x in level):
-                raise ValueError(f'Argument `level` includes undefined structures.')
-        else:
-            logging.info(f' subset: not defined = all data, including undefinied levels.')
-        
-        # set subset setting variables
+        row = {"status": "not_available", "reason": "missing_L3"}
+        row.update({column: np.nan for column in self.csa_columns})
+        if "Level" in input_df:
+            l3_rows = input_df[input_df["Level"].eq("L3")]
+            if not l3_rows.empty:
+                available_columns = [column for column in self.csa_columns if column in l3_rows]
+                row.update(l3_rows[available_columns].mean(numeric_only=True).to_dict())
+                row["status"] = "ok"
+                row["reason"] = None
+
+        memory[self.output_df_name] = pd.DataFrame([row])
+
+
+class DataSubset(PipelineAction):
+    """Subset a slice table by vertebral reference and level."""
+
+    def __init__(
+        self,
+        pipeline,
+        ref: str,
+        level,
+        input_df: str = "tmp/bodycomposition",
+        output_df: str = "tmp/bodycomposition",
+    ):
+        super().__init__(pipeline)
+        if ref not in {"Level", "Center", "Centroid", "Tag"}:
+            raise ValueError(f"Unsupported vertebral reference: {ref}.")
         self.ref = ref
         self.level = level
-
-    def __call__(self, memory):
-        """Do."""
-        super().__call__(memory)
-        time_start = time()
-
-        # load df
-        output_df = memory[self.input_df_name]
-
-        if not isinstance(output_df, pd.DataFrame):
-            raise ValueError(f'Input must be a pandas dataframe.')
-        elif output_df.empty:
-            logging.info(f' skipped: no data')
-        elif not self.ref:
-            logging.info(f' skipped: inactive')
-        else:
-            output_df = output_df[output_df[self.ref].isin(self.level)]
-            logging.info(f' subset: finished ({time()-time_start:.2f}s)')
-        
-        # save to memory
-        memory[self.output_df_name] = output_df
-        logging.info(f' output: memory:{self.output_df_name} ({time()-time_start:.2f}s)')
-
-
-# action class
-class DataAggregate(PipelineAction):
-    """
-    Action class for aggregating data
-    """
-
-    def __init__(self, pipeline,
-                 method: str=None, ref: str=None, tag_mapping: dict=None,
-                 input_df='tmp/bodycomposition', output_df='tmp/bodycomposition'):
-        super().__init__(pipeline)
-
-        # io to pipeline
-        self.io_inputs = [input_df]
-        self.io_outputs = [output_df]
         self.input_df_name = input_df
         self.output_df_name = output_df
+        self.io_inputs = [input_df]
+        self.io_outputs = [output_df]
 
-        # definition of valid arguments
-        valid_method = ['mean', 'median', 'sum']
-        valid_ref = ['Center', 'Level', 'Centroid', 'Tag']
-        valid_levels = pipeline.config['LBL_VERTEBRALBODIES'].values()
+    def __call__(self, memory):
+        super().__call__(memory)
+        input_df = memory[self.input_df_name]
+        if not isinstance(input_df, pd.DataFrame):
+            raise TypeError("DataSubset input must be a pandas DataFrame.")
+        if self.ref not in input_df:
+            raise ValueError(f"Input table is missing the {self.ref} column.")
 
-        # check aggregate definitions
-        if method:
-            # method must be a string and included in valid_origins
-            if method not in valid_method:
-                raise ValueError(f'Argument `method` must be a valid pandas.agg function (e.g., `mean`, `median` or `sum`).')
+        reference = input_df[self.ref].astype("string")
+        if self.level == "ALL":
+            selector = reference.notna()
+        elif self.level == "L":
+            selector = reference.str.startswith("L", na=False)
+        else:
+            levels = [self.level] if isinstance(self.level, str) else list(self.level)
+            selector = reference.isin(levels)
+        memory[self.output_df_name] = input_df.loc[selector].copy().reset_index(drop=True)
 
-            if ref:
-                # ref must be a string and included in valid_origins
-                if ref not in valid_ref:
-                    raise ValueError(f'Argument `ref` must be {valid_ref}.')
-                                                 
-                # check aggregate groups
-                if ref == "Tag":
-                    if not isinstance(tag_mapping, dict):
-                        raise ValueError(f'If grouping by a new tag, argument `tag_mapping` must be a dictionary matching `ref` (=key) and a user-specified tag (=value).')
-                    if not all(key in valid_levels for key in tag_mapping.keys()):
-                        raise ValueError(f'Invalid key for grouping. Valid keys are {valid_levels}')
-                    logging.info(f'  using user-specified tag: levels = `{pd.Series(tag_mapping.values()).unique()}`')
-                    logging.info(f'  aggregation: method `{method}`, grouped by user-specified tag')
-                else:
-                    logging.info(f'  aggregation: method `{method}`, grouped by `{ref}`')
-            else:
-                logging.info(f'  aggregation: method `{method}`, no group -> grouping at patient level')
 
-        # set aggregate variables
+class DataAggregate(PipelineAction):
+    """Aggregate numeric measurements, optionally grouped by an anatomical reference."""
+
+    def __init__(
+        self,
+        pipeline,
+        method: str | None = None,
+        ref: str | None = None,
+        tag_mapping: dict | None = None,
+        input_df: str = "tmp/bodycomposition",
+        output_df: str = "tmp/bodycomposition",
+        filter_columns: str | None = None,
+    ):
+        super().__init__(pipeline)
+        if method not in {None, "mean", "median", "sum"}:
+            raise ValueError("Aggregation method must be mean, median, sum, or None.")
+        self.method = method
         self.ref = ref
         self.tag_mapping = tag_mapping
-        self.method = method
+        self.input_df_name = input_df
+        self.output_df_name = output_df
+        self.filter_columns = filter_columns
+        self.io_inputs = [input_df]
+        self.io_outputs = [output_df]
 
     def __call__(self, memory):
-        """Do."""
         super().__call__(memory)
-        time_start = time()
-
-        # load df
         input_df = memory[self.input_df_name]
-    
-        # checks 
         if not isinstance(input_df, pd.DataFrame):
-            raise ValueError(f' input must be a pandas dataframe.')
-        elif input_df.empty:
-            output_df = input_df
-            logging.info(f' skipped: no data')
-        elif not self.method:
-            output_df = input_df
-            logging.info(f' skipped: inactive')
+            raise TypeError("DataAggregate input must be a pandas DataFrame.")
+        if input_df.empty or self.method is None:
+            output_df = input_df.copy()
         else:
+            working_df = input_df.copy()
+            group_column = self.ref
+            if self.tag_mapping:
+                if self.ref not in working_df:
+                    raise ValueError(f"Input table is missing the {self.ref} column.")
+                working_df["Tag"] = working_df[self.ref].map(self.tag_mapping)
+                group_column = "Tag"
 
-            # only aggregate measurements
-            col_wo_aggregation = ['Slice', 'Center', 'Level', 'Centroid', 'Tag']
-            def single_or_none(x):
-                return x.iloc[0] if x.nunique() == 1 else None
-            agg_dict = {col: single_or_none if col in col_wo_aggregation else self.method for col in input_df.columns}
-
-            # without grouping -> aggregate complete patient
-            if not self.ref:
-                output_df = input_df.agg(agg_dict).to_frame().T
-
-            # with tag_mapping -> aggregate by new tag
+            numeric_columns = working_df.select_dtypes(include=np.number).columns.tolist()
+            numeric_columns = [column for column in numeric_columns if column != "Slice"]
+            if group_column is None:
+                values = getattr(working_df[numeric_columns], self.method)()
+                output_df = values.to_frame().T
             else:
-                # if activated, create new NewTag
-                if self.tag_mapping:
-                    for key, value in self.tag_mapping.items():
-                        input_df.loc[input_df[self.ref] == key, 'Tag'] = value
-                # aggregate
-                output_df = input_df.groupby(self.ref).agg(agg_dict).reset_index(drop=True)
+                if group_column not in working_df:
+                    raise ValueError(f"Input table is missing the {group_column} column.")
+                output_df = (
+                    working_df.groupby(group_column, dropna=False)[numeric_columns]
+                    .agg(self.method)
+                    .reset_index()
+                )
+            output_df = output_df.round(4)
 
-        # round all float columns
-        output_df = output_df.round(2)
-            
-        # save to memory
-        memory[self.output_df_name] = output_df
-        logging.info(f' output: memory:{self.output_df_name} ({time()-time_start:.2f}s)')
+        memory[self.output_df_name] = filter_measurement_columns(
+            output_df,
+            self.filter_columns,
+        )
 
 
+class DataApply(PipelineAction):
+    """Apply a named or callable DataFrame transformation."""
 
-# action class
-class DataExport(PipelineAction):
-    """
-    Action class for exporting data
-    """
-
-    def __init__(self, pipeline,
-                 input: str = 'tmp/bodycomposition',
-                 file: str = 'exports/{caseid}_raw.csv',
-                 append: bool = False,
-                 add_metadata: bool = False):
+    def __init__(
+        self,
+        pipeline,
+        func: Callable[[pd.DataFrame], pd.DataFrame] | str,
+        input_df: str = "tmp/bodycomposition",
+        output_df: str = "tmp/bodycomposition",
+        filter_columns: str | None = None,
+    ):
         super().__init__(pipeline)
+        self.func = func
+        self.input_df_name = input_df
+        self.output_df_name = output_df
+        self.filter_columns = filter_columns
+        self.io_inputs = [input_df]
+        self.io_outputs = [output_df]
 
-        # io to pipeline
-        self.io_inputs = [input]
-        self.input_df_name = input
-        self.output_df_name = file
-
-        # excemption for append
-        if not append:
-            self.io_outputs = [file]
-        else:
-            self.io_outputs = []
-            logging.info(f'  appending to {file}, this file will be ignored in reset and io-checks.')
-
-        if add_metadata:
-            self.io_inputs.append('tmp/metadata')
-
-        # save timestamp to action
-        self.timestamp = pipeline.timestamp
-        self.add_metadata = add_metadata
-        self.append = append
-
+    @staticmethod
+    def weighted_mean_hu(df: pd.DataFrame) -> pd.DataFrame:
+        summary = {}
+        for voxel_column in (column for column in df if column.startswith("Vx_")):
+            tissue = voxel_column.removeprefix("Vx_")
+            hu_column = f"HU_{tissue}"
+            if hu_column not in df:
+                continue
+            value, status = weighted_mean_hu(df[voxel_column], df[hu_column])
+            summary[f"HU_weighted_{tissue}"] = value
+            summary[f"HU_weighted_status_{tissue}"] = status
+        return pd.DataFrame([summary])
 
     def __call__(self, memory):
-        """do."""
+        super().__call__(memory)
+        input_df = memory[self.input_df_name]
+        if not isinstance(input_df, pd.DataFrame):
+            raise TypeError("DataApply input must be a pandas DataFrame.")
+        if callable(self.func):
+            output_df = self.func(input_df.copy())
+        elif isinstance(self.func, str) and hasattr(self, self.func):
+            output_df = getattr(self, self.func)(input_df.copy())
+        else:
+            raise ValueError(f"Unknown DataApply function: {self.func!r}.")
+        if not isinstance(output_df, pd.DataFrame):
+            raise TypeError("DataApply functions must return a pandas DataFrame.")
+        memory[self.output_df_name] = filter_measurement_columns(output_df, self.filter_columns)
+
+
+class DataExport(PipelineAction):
+    """Export a pipeline DataFrame to a CSV interoperability file."""
+
+    def __init__(
+        self,
+        pipeline,
+        input_df: str = "tmp/bodycomposition",
+        file: str = "exports/{caseid}_raw.csv",
+        append: bool = False,
+        add_metadata: bool = False,
+    ):
+        super().__init__(pipeline)
+        self.input_df_name = input_df
+        self.output_file = file
+        self.append = append
+        self.add_metadata = add_metadata
+        self.timestamp = pipeline.timestamp
+        self.io_inputs = [input_df]
+        if add_metadata:
+            self.io_inputs.append("tmp/metadata")
+        self.io_outputs = [file]
+        self.io_persisted_outputs = [] if append else [file]
+        self.io_reset_outputs = [file]
+
+    def __call__(self, memory):
         super().__call__(memory)
         time_start = time()
+        results_df = memory[self.input_df_name]
+        if not isinstance(results_df, pd.DataFrame):
+            raise TypeError("DataExport input must be a pandas DataFrame.")
+        results_df = results_df.copy()
 
         if self.add_metadata:
+            metadata = memory["tmp/metadata"]
+            metadata_row = {
+                "case_id": memory["id"],
+                "case_timestamp": self.timestamp,
+                **metadata,
+            }
+            geometry = memory.get("tmp/tissue_geometry")
+            if geometry is not None:
+                metadata_row["scan_spacing_z_mm"] = geometry.spacing_xyz[2]
+            metadata_df = pd.DataFrame([metadata_row] * len(results_df))
+            results_df = pd.concat(
+                [metadata_df.reset_index(drop=True), results_df.reset_index(drop=True)],
+                axis=1,
+            )
 
-            # save variables
-            n_rows = memory[self.input_df_name].shape[0]
-            slicethickness = memory.get('slicethickness', None)
-
-            # load metadata
-            patients_df = pd.DataFrame({
-                'case_id': [memory['id']]*n_rows,
-                'case_timestamp': [self.timestamp]*n_rows,
-                'pat_id': [memory['tmp/metadata']['pat_id']]*n_rows,
-                'pat_prefix': [memory['tmp/metadata']['pat_prefix']]*n_rows,
-                'pat_suffix': [memory['tmp/metadata']['pat_suffix']]*n_rows,
-                'pat_sex': [memory['tmp/metadata']['pat_sex']]*n_rows,
-                'pat_size': [memory['tmp/metadata']['pat_size']]*n_rows,
-                'pat_weight': [memory['tmp/metadata']['pat_weight']]*n_rows,
-                'scan_date': [memory['tmp/metadata']['scan_date']]*n_rows,
-                'scan_slicethickness': [slicethickness]*n_rows
-                })
-            
-            # concatenate
-            results_df = pd.concat([patients_df, memory[self.input_df_name]], axis=1)
-        
-        else:
-            results_df = memory[self.input_df_name]
-
-        # export to file
-        path_output = Path(memory['workspace'], self.output_df_name.format(caseid=memory['id']))
-        path_output.parent.mkdir(parents=True, exist_ok=True)
-        if not path_output.exists() or not self.append:
-            results_df.to_csv(path_output, index=False)
-        else:
-            results_df.to_csv(path_output, mode='a', header=False, index=False)
-
-        logging.info(f' output: file:{path_output} ({time()-time_start:.2f}s)')
+        output_path = Path(memory["workspace"]) / self.output_file.format(caseid=memory["id"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        append_existing = self.append and output_path.exists()
+        results_df.to_csv(
+            output_path,
+            mode="a" if append_existing else "w",
+            header=not append_existing,
+            index=False,
+        )
+        logging.info(" output: file:%s (%.2fs)", output_path, time() - time_start)

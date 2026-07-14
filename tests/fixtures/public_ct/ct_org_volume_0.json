@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "asset_id": "ct_org_volume-0_0000",
+  "file_name": "ct_org_volume-0_0000.nii.gz",
+  "distribution": {
+    "bundled_with_bodycomposition": false,
+    "download_on_demand": true,
+    "reason": "The licensed test data remain separate from the Apache-2.0 package and the repository stays small."
+  },
+  "source": {
+    "collection": "CT-ORG",
+    "official_page": "https://www.cancerimagingarchive.net/collection/ct-org/",
+    "doi": "https://doi.org/10.7937/TCIA.2019.TT7F4V7O",
+    "data_usage_policy": "https://www.cancerimagingarchive.net/data-usage-policies-and-restrictions/",
+    "license_name": "Creative Commons Attribution 3.0 Unported",
+    "license_spdx": "CC-BY-3.0",
+    "license_url": "https://creativecommons.org/licenses/by/3.0/",
+    "required_citation": "Rister, B., Shivakumar, K., Nobashi, T., & Rubin, D. L. (2019). CT-ORG: A Dataset of CT Volumes With Multiple Organ Segmentations (Version 1) [dataset]. The Cancer Imaging Archive. https://doi.org/10.7937/TCIA.2019.TT7F4V7O",
+    "attribution": "CT-ORG volume 0 by Rister et al., obtained from The Cancer Imaging Archive, licensed under CC BY 3.0."
+  },
+  "mirror": {
+    "repository": "huggingface/CADS-dataset",
+    "revision": "eee3c0a993636264fd04104f7e2a090c507c0c43",
+    "path": "0008_ctorg/images/ct_org_volume-0_0000.nii.gz",
+    "download_url": "https://huggingface.co/datasets/huggingface/CADS-dataset/resolve/eee3c0a993636264fd04104f7e2a090c507c0c43/0008_ctorg/images/ct_org_volume-0_0000.nii.gz?download=true",
+    "project_page": "https://huggingface.co/datasets/huggingface/CADS-dataset",
+    "citation": "Xu, M. et al. CADS: A Comprehensive Anatomical Dataset and Segmentation for Whole-Body Anatomy in Computed Tomography. arXiv:2507.22953 (2025)."
+  },
+  "integrity": {
+    "bytes": 17813860,
+    "sha256": "07f4fbd06c775508dfab2545c742740bcbc1fc49b69ba10403a195a5843b3757"
+  },
+  "expected_nifti": {
+    "shape_xyz": [512, 512, 75],
+    "spacing_xyz_mm": [0.703125, 0.703125, 5.0],
+    "orientation": "RAS",
+    "dtype": "int16",
+    "voxel_value_range": [-3024, 1410],
+    "extensions": 0,
+    "empty_header_text_fields": ["descrip", "aux_file", "intent_name"]
+  },
+  "changes": "None by BodyComposition; the pinned mirror file is downloaded as-is.",
+  "test_scope": {
+    "pipeline": "BodyCompositionFast",
+    "purpose": "Opt-in real-world integration smoke test only.",
+    "not_for": "Clinical validation, accuracy claims, or orientation ground truth."
+  }
+}

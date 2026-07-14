@@ -8,7 +8,7 @@ import logging
 import re
 
 # specific imports
-from BodyComposition.utils.config import update_config
+from BodyComposition.utils.config import update_config, validate_config
 from BodyComposition.utils.logging import init_logging, log_license
 from BodyComposition.pipeline import PipelineBuilder, run_file, run_batch
 from BodyComposition.utils.datalist import DatalistBuilder
@@ -44,6 +44,7 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
     config_dict = update_config(config_dict, Path('./config') / f'{method}.yaml')
     if config is not None:
         config_dict = update_config(config_dict, config)
+    validate_config(config_dict)
 
     # load logging, default: level_file=logging.INFO, level_console= logging.WARNING
     path_logging = Path(str(config_dict['paths']['logs']).format(method=method,filter=input_filter_simple,timestamp=timestamp))
@@ -73,10 +74,14 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
     
     # if input is nifti, single execution and return
     if isinstance(input, (Nifti1Image, sitk.Image)):
-        if len(io_inputs) != 1 or io_inputs[0] != "tmp/index": 
-            raise ValueError(f'Pipeline requires more than just a single nifti ({io_inputs}). Use an input directory instead.')
+        if io_inputs:
+            raise ValueError(
+                f'Pipeline requires external inputs in addition to the image ({io_inputs}). '
+                'Use an input directory instead.'
+            )
         else:
             output = run_file(pipeline, input, workspace)
+            n_cases = 1
 
     # elif: input is directory, datalist, path to file
     else:
@@ -86,6 +91,7 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
                                    workspace = workspace,
                                    io_inputs = io_inputs,
                                    io_outputs = io_outputs,
+                                   io_reset_outputs = pipeline.get_reset_outputs(),
                                    part_id = part_id,
                                    num_parts = num_parts)
 
@@ -101,6 +107,7 @@ def bodycomposition(input: Union[str, Path, Nifti1Image],
 
         # run pipeline
         output = run_batch(pipeline, datalist)      
+        n_cases = len(datalist)
     
-    logging.info(f" completed {len(datalist)} case(s) in {time() - timer_pipeline:.1f}s.\n\n")
+    logging.info(f" completed {n_cases} case(s) in {time() - timer_pipeline:.1f}s.\n\n")
     return output 

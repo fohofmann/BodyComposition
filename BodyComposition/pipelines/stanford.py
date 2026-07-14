@@ -4,7 +4,7 @@ def SarcopeniaStanfordFast(pipeline):
     from BodyComposition.actions.crop import CreateBoundingBox, ApplyBoundingBox
     from BodyComposition.actions.masks_stanford import MasksStanfordSpine, MasksStanfordTissue
     from BodyComposition.actions.calc_vertebrallevel import CalcVertebralLevel
-    from BodyComposition.actions.calc_measures import CalcCSA
+    from BodyComposition.actions.calc_measures import CalcMeasures
     from BodyComposition.actions.data_postprocessing import DataCombine, DataSubset, DataAggregate, DataExport
     from BodyComposition.actions.data_loading import LoadMetadata
    
@@ -27,7 +27,7 @@ def SarcopeniaStanfordFast(pipeline):
 
         # calculations
         CalcVertebralLevel(pipeline, mask='masks/{caseid}_stanford-spine.nii.gz'),
-        CalcCSA(pipeline, mask='masks/{caseid}_stanford-tissue.nii.gz'),
+        CalcMeasures(pipeline, mask='masks/{caseid}_stanford-tissue.nii.gz'),
 
         # postprocessing and export
         LoadMetadata(pipeline, input='metadata/{caseid}.csv'),

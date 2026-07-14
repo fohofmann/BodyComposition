@@ -1,6 +1,7 @@
 # libraries
 import logging
 from BodyComposition.pipeline import PipelineAction
+from BodyComposition.utils.geometry import assert_same_physical_domain
 from BodyComposition.utils.nifti import NiftiDataContainer
 from time import time
 from BodyComposition.utils.masks import filter_hu, remove_small_objects, filter_keep_largest, fill_holes
@@ -20,6 +21,9 @@ class MasksTotalSegmentatorSpine(PipelineAction):
         self.output_mask_name = 'masks/{caseid}_tseg-vertebrae.nii.gz'
         self.io_inputs = [self.input_label_name]
         self.io_outputs = [self.output_mask_name]
+        self.io_reset_outputs = [self.output_mask_name]
+        if self.config['vertebrae']['save_mask']:
+            self.io_persisted_outputs = [self.output_mask_name]
 
         # reduce to vertebral bodies
         if reduce_to_vb:
@@ -53,18 +57,25 @@ class MasksTotalSegmentatorSpine(PipelineAction):
         
         # load input: label, spine segmentation
         input_label = memory[self.input_label_name]
-        input_label.remap(mapping=self.mapping_vertebralbodies)
-        logging.info(f' loaded and remapped {input_label}')
-
-        # copy content and header from input
-        output_mask.data = input_label.data
+        input_label.validate()
         output_mask.meta = input_label.meta
+        output_mask.data = input_label.data
+        output_mask.remap(mapping=self.mapping_vertebralbodies)
+        logging.info(f' loaded {input_label} and remapped output labels')
 
         # remove all but vertebral bodies
         if self.reduce_to_vb:
             input_label_vb = memory[self.input_label_vb_name]
+            input_label_vb.validate()
+            assert_same_physical_domain(
+                input_label.geometry,
+                input_label_vb.geometry,
+                reference_name="TotalSegmentator spine label",
+                candidate_name="TotalSegmentator vertebral-body label",
+            )
+            sacrum_mask = output_mask.data == self.LBL_VERTEBRALBODIES_SACRUM
             output_mask.data[input_label_vb.data != self.LBL_VERTEBRALBODIESONLY] = 0 # set everything outside of vertebralbodies to zero
-            output_mask.data[input_label.data == self.LBL_VERTEBRALBODIES_SACRUM] = self.LBL_VERTEBRALBODIES_SACRUM # include sacrum and S1 to mask vertebralbodies
+            output_mask.data[sacrum_mask] = self.LBL_VERTEBRALBODIES_SACRUM # include sacrum and S1 to mask vertebralbodies
             logging.info(f'  removed everything except vertebral bodies')
 
         # save output
@@ -88,6 +99,7 @@ class MasksTotalSegmentatorTissue(PipelineAction):
         self.output_mask_name = 'masks/{caseid}_tseg-tissue.nii.gz'
         self.io_inputs = [image, self.input_label_tissue_name]
         self.io_outputs = [self.output_mask_name]
+        self.io_reset_outputs = [self.output_mask_name]
 
         # input
         self.input_image_name = image
@@ -106,6 +118,8 @@ class MasksTotalSegmentatorTissue(PipelineAction):
 
         # load config
         self.config_tissue = self.config['tissue']
+        if self.config_tissue['save_mask']:
+            self.io_persisted_outputs = [self.output_mask_name]
 
         # overwrite default mappings
         self.LBL_TISSUE = pipeline.config['LBL_TISSUE'] = pipeline.config['LBL_TISSUE_TSEG']
@@ -130,16 +144,32 @@ class MasksTotalSegmentatorTissue(PipelineAction):
 
         # load input: label, tissue segmentation
         input_label_tissue = memory[self.input_label_tissue_name]
+        input_image = memory[self.input_image_name]
+        input_label_tissue.validate()
+        input_image.validate()
+        assert_same_physical_domain(
+            input_image.geometry,
+            input_label_tissue.geometry,
+            reference_name="input image",
+            candidate_name="TotalSegmentator tissue label",
+        )
         logging.info(f' load {input_label_tissue}')
         logging.debug(f'  tissue: origin={input_label_tissue.origin}, shape={input_label_tissue.shape}')
 
         # copy content and header from input
-        output_np = input_label_tissue.data
+        output_np = input_label_tissue.data.copy()
         output_mask.meta = input_label_tissue.meta
         
         # iliopsoas
         if self.iliopsoas:
             input_label_iliopsoas = memory[self.input_label_iliopsoas_name]
+            input_label_iliopsoas.validate()
+            assert_same_physical_domain(
+                input_label_tissue.geometry,
+                input_label_iliopsoas.geometry,
+                reference_name="TotalSegmentator tissue label",
+                candidate_name="TotalSegmentator iliopsoas label",
+            )
             tmp_np = np.isin(input_label_iliopsoas.data, self.LBL_PSOAS)
             output_np[tmp_np] = self.LBL_TISSUE_R['PSOAS']
             logging.info(f' added new label for PSOAS (={self.LBL_TISSUE_R["PSOAS"]})')
@@ -148,7 +178,6 @@ class MasksTotalSegmentatorTissue(PipelineAction):
         if any([self.config_tissue[tissue]['filter_hu'] for tissue in ['imat', 'sm', 'vat', 'sat']]):
             
             # load image np
-            input_image = memory[self.input_image_name]
             image_np = input_image.data
             logging.debug(f'  HU filter(s) active, loaded image')
             logging.debug(f'   image: origin={input_image.origin}, shape={input_image.shape}')
@@ -171,7 +200,7 @@ class MasksTotalSegmentatorTissue(PipelineAction):
             mask_tmp = filter_hu(image_np, self.config_tissue['imat']['filter_hu_range'])
             if self.config_tissue['imat']['filter_size']:
                 remove_small_objects(mask_np = mask_tmp,
-                                     image_zooms=input_image.spacing,
+                                     spacing_xyz=input_image.spacing,
                                      limit_size_version=self.config_tissue['imat']['filter_size_version'],
                                      limit_size_2D=self.config_tissue['imat']['filter_size_2D'],
                                      limit_size_3D=self.config_tissue['imat']['filter_size_3D'])
@@ -187,12 +216,12 @@ class MasksTotalSegmentatorTissue(PipelineAction):
             logging.info(f" HU filter muscle compartment(s)")
             mask_tmp = filter_hu(image_np, self.config_tissue['sm']['filter_hu_range'])
             mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['SM'], self.LBL_TISSUE_R['PSOAS']]) & np.logical_not(mask_tmp)
-            if self.config_tissue['sm']['filter_hu_size']:
+            if self.config_tissue['sm']['filter_size']:
                 remove_small_objects(mask_np = mask_tmp_not,
-                                     image_zooms=input_image.spacing,
-                                     limit_size_version=self.config_tissue['sm']['filter_hu_size_version'],
-                                     limit_size_2D=self.config_tissue['sm']['filter_hu_size_2D'],
-                                     limit_size_3D=self.config_tissue['sm']['filter_hu_size_3D'])
+                                     spacing_xyz=input_image.spacing,
+                                     limit_size_version=self.config_tissue['sm']['filter_size_version'],
+                                     limit_size_2D=self.config_tissue['sm']['filter_size_2D'],
+                                     limit_size_3D=self.config_tissue['sm']['filter_size_3D'])
             output_np[mask_tmp_not] = 0
             logging.debug(f"  removed everything out of SM HU-range from label SM and PSOAS")
 
@@ -202,12 +231,12 @@ class MasksTotalSegmentatorTissue(PipelineAction):
             logging.info(f" HU filter visceral compartment")
             mask_tmp = filter_hu(image_np, self.config_tissue['vat']['filter_hu_range'])
             mask_tmp_not = np.isin(output_np, self.LBL_TISSUE_R['VAT']) & np.logical_not(mask_tmp)
-            if self.config_tissue['vat']['filter_hu_size']:
+            if self.config_tissue['vat']['filter_size']:
                 remove_small_objects(mask_np = mask_tmp_not,
-                                     image_zooms=input_image.spacing,
-                                     limit_size_version=self.config_tissue['vat']['filter_hu_size_version'],
-                                     limit_size_2D=self.config_tissue['vat']['filter_hu_size_2D'],
-                                     limit_size_3D=self.config_tissue['vat']['filter_hu_size_3D'])
+                                     spacing_xyz=input_image.spacing,
+                                     limit_size_version=self.config_tissue['vat']['filter_size_version'],
+                                     limit_size_2D=self.config_tissue['vat']['filter_size_2D'],
+                                     limit_size_3D=self.config_tissue['vat']['filter_size_3D'])
             output_np[mask_tmp_not] = 0
             logging.debug(f"  removed everything out of VAT HU-range from label VAT")
 
@@ -217,12 +246,12 @@ class MasksTotalSegmentatorTissue(PipelineAction):
             logging.info(f" HU filter subcutaneous compartment")
             mask_tmp = filter_hu(image_np, self.config_tissue['sat']['filter_hu_range'])
             mask_tmp_not = np.isin(output_np, self.LBL_TISSUE_R['SAT']) & np.logical_not(mask_tmp)
-            if self.config_tissue['sat']['filter_hu_size']:
+            if self.config_tissue['sat']['filter_size']:
                 remove_small_objects(mask_np = mask_tmp_not,
-                                     image_zooms=input_image.spacing,
-                                     limit_size_version=self.config_tissue['sat']['filter_hu_size_version'],
-                                     limit_size_2D=self.config_tissue['sat']['filter_hu_size_2D'],
-                                     limit_size_3D=self.config_tissue['sat']['filter_hu_size_3D'])
+                                     spacing_xyz=input_image.spacing,
+                                     limit_size_version=self.config_tissue['sat']['filter_size_version'],
+                                     limit_size_2D=self.config_tissue['sat']['filter_size_2D'],
+                                     limit_size_3D=self.config_tissue['sat']['filter_size_3D'])
             output_np[mask_tmp_not] = 0
             logging.debug(f"  removed everything out of SAT HU-range from label SAT")
 
@@ -230,6 +259,13 @@ class MasksTotalSegmentatorTissue(PipelineAction):
         # remove extremities, ignore everything but bodytrunk
         if self.bodytrunk:
             input_label_bodytrunk = memory[self.input_label_bodytrunk_name]
+            input_label_bodytrunk.validate()
+            assert_same_physical_domain(
+                input_label_tissue.geometry,
+                input_label_bodytrunk.geometry,
+                reference_name="TotalSegmentator tissue label",
+                candidate_name="TotalSegmentator body-trunk label",
+            )
             tmp_mask = (input_label_bodytrunk.data==self.LBL_BODYTRUNK) # 1=bodytrunk, remove other labels
             filter_keep_largest(tmp_mask)
             fill_holes(tmp_mask)

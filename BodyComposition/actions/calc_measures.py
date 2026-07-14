@@ -1,110 +1,86 @@
-# libraries
+from __future__ import annotations
+
 import logging
-from BodyComposition.pipeline import PipelineAction
 from time import time
-import numpy as np
-import cv2
 
-# action class
-class CalcCSA(PipelineAction):
-    """
-    Action class for calculation of cross-sectional areas
-    Argument: input_mask (str) - identifier of the input mask
-    """
+from BodyComposition.measurements import calculate_slice_measurements
+from BodyComposition.pipeline import PipelineAction
+from BodyComposition.utils.geometry import assert_same_physical_domain
 
-    def __init__(self, pipeline, mask: str):
+
+class CalcMeasures(PipelineAction):
+    """Calculate per-slice tissue measurements from aligned image and masks."""
+
+    def __init__(
+        self,
+        pipeline,
+        mask: str,
+        image: str | None = None,
+        contour_mask: str | None = None,
+        calculate_hu: bool = False,
+        calculate_contours: bool = False,
+    ):
         super().__init__(pipeline)
+        if calculate_hu and image is None:
+            raise ValueError("image is required when calculate_hu is enabled.")
 
-        # io to pipeline
-        self.io_inputs = [mask]
-        self.io_outputs = ['tmp/tissue_values', 'tmp/tissue_meta']
         self.input_mask_name = mask
+        self.input_image_name = image
+        self.input_contour_mask_name = contour_mask or mask
+        self.calculate_hu = calculate_hu
+        self.calculate_contours = calculate_contours
+        self.labels = pipeline.config["LBL_TISSUE"]
 
-        # load labels as constants
-        self.LBL_TISSUE = pipeline.config['LBL_TISSUE']
-
+        self.io_inputs = [mask]
+        if calculate_hu:
+            self.io_inputs.append(image)
+        if calculate_contours and self.input_contour_mask_name not in self.io_inputs:
+            self.io_inputs.append(self.input_contour_mask_name)
+        self.io_outputs = ["tmp/tissue_values", "tmp/tissue_geometry"]
 
     def __call__(self, memory):
-        """Segment case."""
         super().__call__(memory)
         time_start = time()
 
-        # load mask, reorientate
-        input_mask = memory[self.input_mask_name]
-        input_mask.as_closest_canonical()
-        logging.info(f' loaded {input_mask}, reorientated to canonical')
+        input_mask = memory[self.input_mask_name].as_closest_canonical()
+        input_mask.validate()
+        geometry = input_mask.geometry
 
-        # load spacing
-        spacing = input_mask.spacing # SITK: z, y, x
-        pix_area = spacing[1] * spacing[2]
-        memory['slicethickness'] = spacing[0]
-        logging.info(f' spacing: {spacing}')
+        input_image = None
+        if self.calculate_hu:
+            input_image = memory[self.input_image_name].as_closest_canonical()
+            input_image.validate()
+            assert_same_physical_domain(
+                geometry,
+                input_image.geometry,
+                reference_name="tissue mask",
+                candidate_name="CT image",
+            )
 
-        # SITK: SAR+ format: 0 = inferior to superior, starting w 0
-        # create empty output array
-        res_csa_np = np.zeros(shape=(input_mask.shape[0], len(self.LBL_TISSUE)), dtype=np.uint32)
+        contour_mask = None
+        if self.calculate_contours:
+            contour_container = memory[self.input_contour_mask_name].as_closest_canonical()
+            contour_container.validate()
+            assert_same_physical_domain(
+                geometry,
+                contour_container.geometry,
+                reference_name="tissue mask",
+                candidate_name="contour mask",
+            )
+            contour_mask = contour_container.data
 
-        # loop through tissue labels, run vectorized operation
-        for i, key in enumerate(self.LBL_TISSUE):
-            res_csa_np[:, i] = np.round(np.sum(input_mask.data == key, axis=(1, 2)) * pix_area)
+        result = calculate_slice_measurements(
+            input_mask.data,
+            geometry,
+            self.labels,
+            image_zyx=None if input_image is None else input_image.data,
+            contour_mask_zyx=contour_mask,
+        )
 
-        # save data to pipeline
-        memory['tmp/tissue_values'] = res_csa_np
-        memory['tmp/tissue_meta'] = input_mask.meta
-        logging.info(f' output: memory:tmp/tissue_values, shape {res_csa_np.shape} ({time()-time_start:.2f}s)')
-
-
-
-# action class
-class CalcCRI(PipelineAction):
-    """
-    Action class for calculation of circumference and area of the tissue contour
-    Argument: input_mask (str) - identifier of the input mask
-    """
-
-    def __init__(self, pipeline, mask: str):
-        super().__init__(pipeline)
-
-        # io to pipeline
-        self.io_inputs = [mask]
-        self.input_mask_name = mask
-        self.io_outputs = ['tmp/tissue_contour']
-
-    def __call__(self, memory):
-        """Segment case."""
-        super().__call__(memory)
-        time_start = time()
-
-        # load mask, reorientate
-        input_mask = memory[self.input_mask_name]
-        input_mask.as_closest_canonical()
-        logging.info(f' loaded {input_mask}, reorientated to canonical')
-
-        # load spacing
-        spacing = input_mask.spacing # SITK: z, y, x
-        logging.info(f' spacing: {spacing}')
-
-        # timer, all but background, define range, create empty np
-        time_start = time()
-        binarymask = input_mask.data != 0
-        z_dim = binarymask.shape[0]
-        res_contours_np = np.zeros(shape=(z_dim, 2), dtype=np.float32)
-
-        # calculate contour for each slice
-        # SITK: zyx, LPS+ -> 0 = inferior to superior, starting w 0
-        for z in range(z_dim):
-            slice_mask = binarymask[z, :, :]
-            contours, _ = cv2.findContours(slice_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if len(contours) > 0:  # Ensure at least one contour is found
-                largest_contour = max(contours, key=cv2.contourArea) # Find the largest contour by area
-                scaled_contour = largest_contour.astype(np.float32) # Adjust the contour points by voxel size to calculate circumference in physical units
-                scaled_contour[:, 0, 0] *= spacing[2]  # Adjust x-coordinates (columns) by x_spacing
-                scaled_contour[:, 0, 1] *= spacing[1]  # Adjust y-coordinates (rows) by y_spacing
-                res_contours_np[z,0] = round(cv2.arcLength(scaled_contour, True)) # calculate length of the adjusted contour, mm
-                res_contours_np[z,1] = round(cv2.contourArea(scaled_contour)) # calculate area of the adjusted contour, mm^2
-            else:
-                res_contours_np[z] = np.nan
-
-        # save data to pipeline
-        memory['tmp/tissue_contour'] = res_contours_np
-        logging.info(f' output: memory:tmp/tissue_contour, shape {res_contours_np.shape} ({time()-time_start:.2f}s)')
+        memory["tmp/tissue_values"] = result
+        memory["tmp/tissue_geometry"] = geometry
+        logging.info(
+            " output: memory:tmp/tissue_values, shape %s (%.2fs)",
+            result.shape,
+            time() - time_start,
+        )

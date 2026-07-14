@@ -17,7 +17,7 @@ def looks_like_path(s):
 
 # main
 def main():
-    """
+    r"""
     Effectively just a parser using the bodycomposition python API.
     Usage: bin/run_batch.py -i ./data/images -f '^ct_.*\.nii\.gz$' -m BodyCompositionFast
     """

@@ -166,3 +166,5 @@ cython_debug/
 data
 logs
 models
+
+# Local planning and research notes

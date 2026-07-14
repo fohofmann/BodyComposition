@@ -1,6 +1,7 @@
 # libraries
 import logging
 from BodyComposition.pipeline import PipelineAction
+from BodyComposition.utils.geometry import assert_same_physical_domain
 from BodyComposition.utils.nifti import NiftiDataContainer
 from time import time
 from BodyComposition.utils.masks import filter_hu, remove_small_objects, filter_keep_largest, fill_holes
@@ -20,6 +21,9 @@ class MasksStanfordSpine(PipelineAction):
         self.output_mask_name = 'masks/{caseid}_stanford-spine.nii.gz'
         self.io_inputs = [self.input_label_name]
         self.io_outputs = [self.output_mask_name]
+        self.io_reset_outputs = [self.output_mask_name]
+        if self.config['vertebrae']['save_mask']:
+            self.io_persisted_outputs = [self.output_mask_name]
 
         # create mappings to internal labels
         LBL_VERTEBRALBODIES = pipeline.config['LBL_VERTEBRALBODIES']
@@ -44,12 +48,11 @@ class MasksStanfordSpine(PipelineAction):
         
         # load input: label, spine segmentation
         input_label = memory[self.input_label_name]
-        input_label.remap(mapping=self.mapping_vertebralbodies)
-        logging.info(f' loaded and remapped {input_label}')
-
-        # copy content and header from input
-        output_mask.data = input_label.data
+        input_label.validate()
         output_mask.meta = input_label.meta
+        output_mask.data = input_label.data
+        output_mask.remap(mapping=self.mapping_vertebralbodies)
+        logging.info(f' loaded {input_label} and remapped output labels')
 
         # save output
         logging.info(f' output: memory:{output_mask} ({time()-time_start:.2f}s)')
@@ -73,12 +76,15 @@ class MasksStanfordTissue(PipelineAction):
         self.output_mask_name = 'masks/{caseid}_stanford-tissue.nii.gz'
         self.io_inputs = [image, self.input_label_tissue_name]
         self.io_outputs = [self.output_mask_name]
+        self.io_reset_outputs = [self.output_mask_name]
 
         # input
         self.input_image_name = image
 
         # load config
         self.config_tissue = self.config['tissue']
+        if self.config_tissue['save_mask']:
+            self.io_persisted_outputs = [self.output_mask_name]
 
         # overwrite default mappings
         self.LBL_TISSUE = pipeline.config['LBL_TISSUE'] = pipeline.config['LBL_TISSUE_STANFORD']
@@ -101,11 +107,20 @@ class MasksStanfordTissue(PipelineAction):
 
         # load input: label, tissue segmentation
         input_label_tissue = memory[self.input_label_tissue_name]
+        input_image = memory[self.input_image_name]
+        input_label_tissue.validate()
+        input_image.validate()
+        assert_same_physical_domain(
+            input_image.geometry,
+            input_label_tissue.geometry,
+            reference_name="input image",
+            candidate_name="Stanford tissue label",
+        )
         logging.info(f' load {input_label_tissue}')
         logging.debug(f'  tissue: origin={input_label_tissue.origin}, shape={input_label_tissue.shape}')
 
         # copy content and header from input
-        output_np = input_label_tissue.data
+        output_np = input_label_tissue.data.copy()
         output_mask.meta = input_label_tissue.meta
 
         # combine IMAT and SM, as segmentation of IMAT does work worse than thresholding
@@ -116,7 +131,6 @@ class MasksStanfordTissue(PipelineAction):
         if any([self.config_tissue[tissue]['filter_hu'] for tissue in ['imat', 'sm', 'vat', 'sat']]):
             
             # load image np
-            input_image = memory[self.input_image_name]
             image_np = input_image.data
             logging.debug(f'  HU filter(s) active, loaded image')
             logging.debug(f'   image: origin={input_image.origin}, shape={input_image.shape}')
@@ -139,7 +153,7 @@ class MasksStanfordTissue(PipelineAction):
             mask_tmp = filter_hu(image_np, self.config_tissue['imat']['filter_hu_range'])
             if self.config_tissue['imat']['filter_size']:
                 remove_small_objects(mask_np = mask_tmp,
-                                     image_zooms=input_image.spacing,
+                                     spacing_xyz=input_image.spacing,
                                      limit_size_version=self.config_tissue['imat']['filter_size_version'],
                                      limit_size_2D=self.config_tissue['imat']['filter_size_2D'],
                                      limit_size_3D=self.config_tissue['imat']['filter_size_3D'])
@@ -155,12 +169,12 @@ class MasksStanfordTissue(PipelineAction):
             logging.info(f" HU filter muscle compartment(s)")
             mask_tmp = filter_hu(image_np, self.config_tissue['sm']['filter_hu_range'])
             mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['SM']]) & np.logical_not(mask_tmp)
-            if self.config_tissue['sm']['filter_hu_size']:
+            if self.config_tissue['sm']['filter_size']:
                 remove_small_objects(mask_np = mask_tmp_not,
-                                     image_zooms=input_image.spacing,
-                                     limit_size_version=self.config_tissue['sm']['filter_hu_size_version'],
-                                     limit_size_2D=self.config_tissue['sm']['filter_hu_size_2D'],
-                                     limit_size_3D=self.config_tissue['sm']['filter_hu_size_3D'])
+                                     spacing_xyz=input_image.spacing,
+                                     limit_size_version=self.config_tissue['sm']['filter_size_version'],
+                                     limit_size_2D=self.config_tissue['sm']['filter_size_2D'],
+                                     limit_size_3D=self.config_tissue['sm']['filter_size_3D'])
             output_np[mask_tmp_not] = 0
             logging.debug(f"  removed everything out of SM HU-range from label SM")
 
@@ -170,12 +184,12 @@ class MasksStanfordTissue(PipelineAction):
             logging.info(f" HU filter visceral compartment")
             mask_tmp = filter_hu(image_np, self.config_tissue['vat']['filter_hu_range'])
             mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['VAT']]) & np.logical_not(mask_tmp)
-            if self.config_tissue['vat']['filter_hu_size']:
+            if self.config_tissue['vat']['filter_size']:
                 remove_small_objects(mask_np = mask_tmp_not,
-                                     image_zooms=input_image.spacing,
-                                     limit_size_version=self.config_tissue['vat']['filter_hu_size_version'],
-                                     limit_size_2D=self.config_tissue['vat']['filter_hu_size_2D'],
-                                     limit_size_3D=self.config_tissue['vat']['filter_hu_size_3D'])
+                                     spacing_xyz=input_image.spacing,
+                                     limit_size_version=self.config_tissue['vat']['filter_size_version'],
+                                     limit_size_2D=self.config_tissue['vat']['filter_size_2D'],
+                                     limit_size_3D=self.config_tissue['vat']['filter_size_3D'])
             output_np[mask_tmp_not] = 0
             logging.debug(f"  removed everything out of VAT HU-range from label VAT")
 
@@ -185,12 +199,12 @@ class MasksStanfordTissue(PipelineAction):
             logging.info(f" HU filter subcutaneous compartment")
             mask_tmp = filter_hu(image_np, self.config_tissue['sat']['filter_hu_range'])
             mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['SAT']]) & np.logical_not(mask_tmp)
-            if self.config_tissue['sat']['filter_hu_size']:
+            if self.config_tissue['sat']['filter_size']:
                 remove_small_objects(mask_np = mask_tmp_not,
-                                     image_zooms=input_image.spacing,
-                                     limit_size_version=self.config_tissue['sat']['filter_hu_size_version'],
-                                     limit_size_2D=self.config_tissue['sat']['filter_hu_size_2D'],
-                                     limit_size_3D=self.config_tissue['sat']['filter_hu_size_3D'])
+                                     spacing_xyz=input_image.spacing,
+                                     limit_size_version=self.config_tissue['sat']['filter_size_version'],
+                                     limit_size_2D=self.config_tissue['sat']['filter_size_2D'],
+                                     limit_size_3D=self.config_tissue['sat']['filter_size_3D'])
             output_np[mask_tmp_not] = 0
             logging.debug(f"  removed everything out of SAT HU-range from label SAT")
 

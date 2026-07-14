@@ -7,6 +7,8 @@ Frequently changing parameters can be adapted using configuration files or dicti
 
 Parameters are replaced in the following order: `config/config.yaml` < `config/*.yaml` < `--config` argument. This means that parameters in the `--config`/`-c` argument will overwrite parameters defined in the other files.
 
+Configuration is validated before a pipeline is built. Boolean fields must be YAML booleans (`true`/`false`), numeric fields must have the documented numeric type, and optional paths use YAML `null`. Typographical strings are rejected at startup rather than interpreted as truthy values later in processing.
+
 ## Paramenters
 
 ### Paths
@@ -43,7 +45,7 @@ Parameters are replaced in the following order: `config/config.yaml` < `config/*
 - `filter_outliers`: If `True`, outliers are clipped. If `False`, no clipping is performed.
 - `filter_outliers_range`: Range for clipping outliers, e.g. metal implants or noisy outliers [-1024, 3071]
 - `filter_median`: If `True`, a median filter is applied. If `False`, no median filter is applied.
-- `filter_median_kernel`: Kernel size for the median filter, e.g. [3,3,1] (RAS+).
+- `filter_median_kernel`: Kernel size in NumPy z-y-x order, e.g. `[1,3,3]` for in-plane filtering without smoothing across slices.
 
 #### Filter: IMAT
 - `filter_hu`: If `True`, IMAT is determined by using a HU range of voxels within the [muscle compartment](labels.md). If `False`, the filter is not applied.
@@ -81,12 +83,12 @@ Parameters are replaced in the following order: `config/config.yaml` < `config/*
 For the fast versions of the pipeline, we segment the vertebrae, and then crop the image to the region of interest for all further analyses. The region of interest can be defined in this section of the configuration file, and is then used by the [CreateBoundingBox](../BodyComposition/actions/crop.py) class. For each region of interest, the following parameters can be defined:
 
 - `roi`: List of labels that define the region of interest.
-- `axes`: List of boolean values that define the axes along which the cropping is performed. The order is [left, right, posterior, anterior, inferior, superior].
+- `axes`: Six booleans defining whether each crop boundary is active. The order is [inferior, superior, posterior, anterior, left, right] for the RAS-oriented inputs expected by the current baseline, matching array z-y-x boundary pairs. The baseline does not infer or repair input orientation.
 - `margin`: List of integers that define the margin in mm along each axis. The margin is transformed to pixels later in the pipeline.
 
 ```yaml
   L234CranioCaudal:
     roi: [14,15,16] # labels
-    axes: [False, False, False, False, True, True] # RAS+: left -> right, posterior -> anterior, inferor -> superior
-    margin: [0, 0, 0, 0, 0, 0] # RAS+: left -> right, posterior -> anterior, inferor -> superior
+    axes: [True, True, False, False, False, False]
+    margin: [0, 0, 0, 0, 0, 0] # inferior, superior, posterior, anterior, left, right
 ```

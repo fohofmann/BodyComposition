@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "BodyComposition"
-version = "0.3"
+version = "0.3.0"
 description = "Pipeline for the segmentation of muscle and adipose tissue with postprocessing for mapping to vertebral levels and calculation of cross-sectional areas."
 authors = [
     { name = "Felix Hofmann", email = "felix.hofmann@med.lmu.de" }
@@ -29,7 +29,6 @@ dependencies = [
     "pandas",
     "psutil",
     "pydicom",
-    "pyradiomics",
     "requests == 2.27.1",
     "scipy",
     "scikit-image",
@@ -39,6 +38,11 @@ dependencies = [
     "nnunetv2",
     "torch",
     "TotalSegmentator"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8,<10"
 ]
 
 [project.urls]
@@ -53,7 +57,13 @@ bodycomposition_segmentation = "BodyComposition.bin.run_segmentation_only:main"
 bodycomposition_transform_dcm_to_nifti = "BodyComposition.bin.pre_transform_dcm_to_nifti:main"
 bodycomposition_transform_dcm_rotate = "BodyComposition.bin.pre_correct_orientation:main"
 
-
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["data", "docs", "logs", "models", "suppl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "model_integration: requires pinned model assets and a controlled GPU environment",
+    "real_world: runs the default models on a checksum-pinned public CT in a controlled GPU environment"
+]

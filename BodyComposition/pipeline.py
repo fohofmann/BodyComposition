@@ -9,9 +9,16 @@ import signal
 from tqdm import tqdm
 import sys
 import tempfile
-import torch
 import multiprocessing
 import os
+
+
+class ActionContractError(RuntimeError):
+    """Raised when a pipeline action does not satisfy its declared I/O contract."""
+
+
+class PipelineExecutionError(RuntimeError):
+    """Raised after one or more cases fail during pipeline execution."""
 
 # timeout handler
 def timeout_handler(signum, frame):
@@ -23,13 +30,23 @@ def _run_case(pipeline, memory):
     try:
         signal.alarm(pipeline.config['run']['timeout'])
         output = pipeline(memory)
-        signal.alarm(0)
-        return output
-    except TimeoutError:
+        return True, output
+    except TimeoutError as error:
         logging.warning(f"TIMEOUT CASE {memory['id']}\n")
-    except Exception as e:
-        logging.error(f"ERROR CASE {memory['id']}:\n {e}\n {traceback.format_exc()}\n")
-    return None
+        return False, error
+    except Exception as error:
+        logging.error(f"ERROR CASE {memory['id']}:\n {error}\n {traceback.format_exc()}\n")
+        return False, error
+    finally:
+        signal.alarm(0)
+
+
+def _raise_case_failures(case_ids):
+    if case_ids:
+        raise PipelineExecutionError(
+            f"Pipeline failed for {len(case_ids)} case(s): {', '.join(case_ids)}. "
+            "See the pipeline log for the original exception(s)."
+        )
 
 # run pipeline on single file
 def run_file(pipeline, input_file, workspace=None):
@@ -40,7 +57,8 @@ def run_file(pipeline, input_file, workspace=None):
                   'workspace': workspace or Path(path_tmp),
                   'tmp/index': NiftiDataContainer(Path(path_tmp)/'input/tmp.nii.gz'),}
         memory['tmp/index'].img = input_file
-        output = _run_case(pipeline, memory)
+        success, output = _run_case(pipeline, memory)
+        _raise_case_failures([] if success else [memory['id']])
     logging.info("FINISHED PIPELINE.")
     return output
 
@@ -48,13 +66,19 @@ def run_file(pipeline, input_file, workspace=None):
 def run_batch(pipeline, input_datalist):
     logging.info(f"STARTING PIPELINE:\n")
     output = None
+    failed_case_ids = []
     for caseid, input_file, workspace in tqdm(input_datalist, total=len(input_datalist),
                                                desc="Processing", unit="case", position=0, leave=True, file=sys.stdout, ncols=80):
         memory = {'id': caseid,
                   'workspace': workspace,
                   'tmp/index': NiftiDataContainer(input_file),}
-        output = _run_case(pipeline, memory)
+        success, case_output = _run_case(pipeline, memory)
+        if success:
+            output = case_output
+        else:
+            failed_case_ids.append(caseid)
     logging.info("FINISHED PIPELINE.")
+    _raise_case_failures(failed_case_ids)
     return output
 
 
@@ -67,10 +91,42 @@ class PipelineAction():
         self.config = pipeline.config
         self.io_inputs = []
         self.io_outputs = []
+        # File-backed completion markers are distinct from in-memory outputs.
+        # Actions that persist files opt in explicitly.
+        self.io_persisted_outputs = []
+        self.io_reset_outputs = []
         pass
 
     def __call__(self, memory, task=None) -> Dict:
         logging.info(f'{self.__class__.__name__}{f"/{task}" if task else ""}')
+        self.validate_inputs(memory)
+
+    @staticmethod
+    def _is_available(memory: Dict, key: str) -> bool:
+        if key in memory:
+            return True
+        if key.startswith(('tmp/', 'res/')):
+            return False
+        workspace = memory.get('workspace')
+        case_id = memory.get('id')
+        if workspace is None or case_id is None:
+            return False
+        return (Path(workspace) / key.format(caseid=case_id)).exists()
+
+    def validate_inputs(self, memory: Dict) -> None:
+        missing = [key for key in self.io_inputs if not self._is_available(memory, key)]
+        if missing:
+            raise ActionContractError(
+                f'{self.__class__.__name__} missing declared input(s): {", ".join(missing)}.'
+            )
+
+    def validate_outputs(self, memory: Dict) -> None:
+        missing = [key for key in self.io_outputs if not self._is_available(memory, key)]
+        if missing:
+            raise ActionContractError(
+                f'{self.__class__.__name__} did not create declared output(s): '
+                f'{", ".join(missing)}.'
+            )
 
     def __repr__(self):
         return self.__class__.__name__
@@ -88,6 +144,17 @@ class PipelineBuilder():
         self.method = method
         self.config = config
         self.timestamp = timestamp
+
+        from BodyComposition.utils.config import validate_config
+        validate_config(self.config)
+
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError(
+                'PyTorch is required to build model-backed pipelines. '
+                'Pure measurement modules and CLI help can be used without it.'
+            ) from exc
 
         # set device
         if torch.cuda.is_available():
@@ -125,12 +192,19 @@ class PipelineBuilder():
         """
         io_inputs = []
         io_outputs = []
-        io_outputs_set = set()
+        produced_outputs = set()
         for action in self.actions:
-            io_inputs.extend(input for input in action.io_inputs if input not in io_outputs_set and not input.startswith('tmp/'))
-            new_outputs = [output for output in action.io_outputs if not output.startswith('tmp/')]
-            io_outputs.extend(new_outputs)
-            io_outputs_set.update(new_outputs)
+            io_inputs.extend(
+                input_name
+                for input_name in action.io_inputs
+                if input_name not in produced_outputs and not input_name.startswith('tmp/')
+            )
+            produced_outputs.update(action.io_outputs)
+            io_outputs.extend(
+                output_name
+                for output_name in action.io_persisted_outputs
+                if not output_name.startswith('tmp/')
+            )
         return io_inputs, io_outputs
     
     def get_licenses(self) -> List[str]:
@@ -144,6 +218,14 @@ class PipelineBuilder():
                 licenses.extend(action.licenses)
         return list(set(licenses))
 
+    def get_reset_outputs(self) -> List[str]:
+        """Return file outputs that a requested reset must remove."""
+        return list(dict.fromkeys(
+            output_name
+            for action in self.actions
+            for output_name in action.io_reset_outputs
+        ))
+
 
     def __call__(self, memory):
         logging.info(f"PROCESSING CASE {memory['id']}:")
@@ -151,6 +233,7 @@ class PipelineBuilder():
         timer = time()
         for action in self.actions:
             action(memory)
+            action.validate_outputs(memory)
         logging.info(f"FINISHED CASE {memory['id']} ({time() - timer:.1f}s)\n")
         return memory.get('tmp/return', None)
 
