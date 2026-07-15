@@ -5,19 +5,12 @@ import argparse
 import logging
 from pathlib import Path
 import os
-from time import time
+import time
 from BodyComposition.utils.config import update_config
 import requests
 from tqdm import tqdm
 import zipfile
 import shutil
-
-# set up logging
-path_log = Path(f'./logs/pre_downloadmodels_{int(time())}.log')
-path_log.parent.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(level=logging.INFO, 
-                    format='%(asctime)s - %(levelname)s - %(message)s',
-                    filename=path_log)
 
 # defining models per collection
 definition_pipelines = {
@@ -167,7 +160,24 @@ def main():
     args = parser.parse_args()
 
     # set up logging
+    path_log = Path(f'./logs/pre_downloadmodels_{int(time.time())}.log')
+    path_log.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s',
+                        filename=path_log)
     logging.info('LOAD MODELS')
+
+    # The orientation asset can be synchronized from an installed wheel without
+    # a repository-local config directory. Inference itself never downloads.
+    if args.model == 'CTDeepRot-2D':
+        from BodyComposition.orientation.ctdeeprot import (
+            DEFAULT_CHECKPOINT_PATH,
+            sync_checkpoint,
+        )
+
+        checkpoint = sync_checkpoint(DEFAULT_CHECKPOINT_PATH)
+        logging.info(f"Downloaded and verified `CTDeepRot-2D` at `{checkpoint}`.")
+        return
     
     # load config
     config_dict = update_config({}, Path('./config/config.yaml'))
@@ -218,25 +228,22 @@ def main():
         model = definition_sources[model_title]
 
         if model['source'] == 'ctdeeprot':
-            from BodyComposition.orientation.ctdeeprot import ensure_checkpoint
+            from BodyComposition.orientation.ctdeeprot import sync_checkpoint
 
             orientation_model = config_dict['orientation']['model']
-            checkpoint = ensure_checkpoint(
+            checkpoint = sync_checkpoint(
                 orientation_model['checkpoint_path'],
-                auto_download=True,
-                download_url=orientation_model['download_url'],
-                expected_sha256=orientation_model['sha256'],
             )
             logging.info(f"Downloaded and verified `CTDeepRot-2D` at `{checkpoint}`.")
         elif model['source'] == 'huggingface':
             download_dir = config_weights[model['local_id']]
             logging.info(f"Downloading `{model_title}` from `huggingface.co/{model['hf_id']}` to `{download_dir}`...")
             snapshot_download(repo_id=model['hf_id'], local_dir=download_dir, ignore_patterns=["**/model_best*", "**/logs*" "**/*.zip", "*.zip", "**/*.md", "*.md",".txt", ".png"])
-            logging.info(f"  finished.")
+            logging.info("  finished.")
         elif model['source'] == 'totalsegmentator':
             logging.info(f"Downloading `TotalSegmentator/{model_title}`, task_id {model['ts_id']} to `{config_weights['totalsegmentator']}`...")
             download_pretrained_weights(model['ts_id'])
-            logging.info(f"  finished.")
+            logging.info("  finished.")
         elif model['source'] == 'github':
             download_dir = config_weights[model['local_id']]
             logging.info(f"Downloading `{model_title}` from `{model['url']}` to `{download_dir}`...")
@@ -249,10 +256,10 @@ def main():
                 unzip_file(zip_path, download_dir)
                 reduce_directory_dimensions(Path(download_dir))
                 os.remove(zip_path)
-                logging.info(f"  finished.")
+                logging.info("  finished.")
             except Exception as e:
                 logging.error(f"Failed to download or extract `{model_title}`: {e}")
-            logging.info(f"  finished.")
+            logging.info("  finished.")
 
         else:
             logging.error(f"Unknown source {model['source']}")

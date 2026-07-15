@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/fohofmann/BodyComposition/schemas/orientation_report-1.0.0.json",
+  "$id": "https://github.com/fohofmann/BodyComposition/schemas/orientation_report-1.1.0.json",
   "title": "BodyComposition orientation report",
   "type": "object",
   "required": [
@@ -15,7 +15,7 @@
     "review_flags"
   ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "1.1.0"},
     "case_id": {"type": "string", "minLength": 1},
     "state": {
       "enum": [
@@ -59,37 +59,112 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["code", "severity", "reason", "suggested_action"],
+        "required": [
+          "code",
+          "stage",
+          "severity",
+          "reason",
+          "observed",
+          "threshold",
+          "suggested_action"
+        ],
         "properties": {
           "code": {"type": "string", "minLength": 1},
+          "stage": {"const": "orientation"},
           "severity": {"enum": ["low", "medium", "high"]},
           "reason": {"type": "string", "minLength": 1},
+          "observed": {"type": "object"},
+          "threshold": {"type": "object"},
           "suggested_action": {"type": "string", "minLength": 1}
-        }
+        },
+        "additionalProperties": false
       }
     },
     "model": {
       "type": "object",
       "required": [
+        "asset_id",
         "name",
         "required_for",
+        "upstream_project",
         "upstream_repository",
         "upstream_commit",
+        "download_url",
+        "byte_size",
+        "expected_files",
         "code_license",
+        "weight_license_status",
+        "redistribution_mode",
+        "compatibility",
+        "validation_set_version",
         "citation_doi",
         "checkpoint_sha256",
         "metadata_discrete_direction_lps"
       ],
       "properties": {
+        "asset_id": {
+          "const": "ctdeeprot-2d-492114b8f9f3a7f058d4e97c0dd3643fb8d39649"
+        },
         "name": {"const": "CTDeepRot-2D"},
         "required_for": {"const": "default_orientation_integrity_stage"},
+        "upstream_project": {"const": "CTDeepRot"},
         "upstream_repository": {
           "const": "https://github.com/JakubicekRoman/CTDeepRot"
         },
         "upstream_commit": {
           "const": "492114b8f9f3a7f058d4e97c0dd3643fb8d39649"
         },
+        "download_url": {
+          "const": "https://raw.githubusercontent.com/JakubicekRoman/CTDeepRot/492114b8f9f3a7f058d4e97c0dd3643fb8d39649/python/example_prediction/models/net2d.pt"
+        },
+        "byte_size": {"const": 44890653},
+        "expected_files": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "object",
+              "required": ["relative_path", "byte_size", "sha256"],
+              "properties": {
+                "relative_path": {"const": "net2d.pt"},
+                "byte_size": {"const": 44890653},
+                "sha256": {
+                  "const": "a2feb521cfe49c367c4e594f38fa76ba9982ba009e114fbf15fb2aae06c06d96"
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1
+        },
         "code_license": {"const": "BSD-3-Clause"},
+        "weight_license_status": {
+          "const": "published_in_bsd_3_clause_repository_without_separate_checkpoint_terms;redistribution_not_assumed"
+        },
+        "redistribution_mode": {"const": "user_model_sync"},
+        "compatibility": {
+          "type": "object",
+          "required": [
+            "architecture",
+            "input_shape_chw",
+            "simpleitk_array_boundary"
+          ],
+          "properties": {
+            "architecture": {
+              "const": "torchvision.resnet18_conv1_9_channels_fc_24_classes"
+            },
+            "input_shape_chw": {
+              "const": [9, 224, 224]
+            },
+            "simpleitk_array_boundary": {
+              "const": "array_zyx_to_model_array_yxz"
+            }
+          },
+          "additionalProperties": false
+        },
+        "validation_set_version": {
+          "const": "ct-org-140-cads-eee3c0a993636264fd04104f7e2a090c507c0c43-orientation-v1"
+        },
         "citation_doi": {
           "const": "https://doi.org/10.1007/978-3-030-64610-3_7"
         },

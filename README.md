@@ -42,13 +42,18 @@ This pipeline uses model weights derived from [TotalSegmentator](https://github.
     This script will download the models and store them in the directories as defined in `config/config.yaml`. You can download single models (using `--model`), or all models required for a specific pipeline (using `--pipeline`).
 
 The orientation-enabled pipelines also require the approximately 43 MiB
-CTDeepRot 2D checkpoint. It is fetched automatically from a pinned upstream
-commit on first use and accepted only when its SHA-256 digest matches. To
-hydrate it ahead of an offline run, use:
+CTDeepRot 2D checkpoint. Synchronize it explicitly from the pinned upstream
+commit before inference; the model manager verifies both its byte size and
+SHA-256 digest before atomically promoting it into the versioned model cache:
 
 ```bash
 bodycomposition_download_models --model CTDeepRot-2D
 ```
+
+Inference never downloads model assets. A missing or modified checkpoint stops
+the case with an instruction to run the synchronization command. Set
+`BODYCOMPOSITION_CTDEEPROT_CHECKPOINT` only when a verified checkpoint is kept
+at a controlled alternative path.
 
 ## Model-free checks
 

@@ -29,7 +29,7 @@ class AssessOrientation(PipelineAction):
         self.settings = OrientationSettings.from_mapping(pipeline.config)
         self.settings.validate()
         self.io_inputs = ["tmp/index"]
-        self.io_outputs = ["tmp/index", "tmp/orientation_result"]
+        self.io_outputs = ["tmp/index", "tmp/orientation_result", "tmp/prepared_image"]
         if self.settings.report_enabled:
             self.io_outputs.extend((self.report_name, self.review_name))
             self.io_persisted_outputs = [self.report_name, self.review_name]
@@ -41,9 +41,6 @@ class AssessOrientation(PipelineAction):
         if self._predictor is None:
             self._predictor = CTDeepRotPredictor(
                 self.settings.checkpoint_path,
-                auto_download=self.settings.auto_download,
-                download_url=self.settings.checkpoint_url,
-                expected_sha256=self.settings.checkpoint_sha256,
                 device=self.settings.device,
                 batch_size=self.settings.batch_size,
             )
@@ -98,6 +95,10 @@ class AssessOrientation(PipelineAction):
 
         memory["tmp/original_index"] = source
         memory["tmp/orientation_result"] = outcome.result
+        # Keep the prepared-image handoff immutable for downstream adapters.
+        # It keeps the prepared image, orientation provenance, transform, and
+        # review state together instead of asking later stages to reconstruct it.
+        memory["tmp/prepared_image"] = outcome
         if outcome.report_json is not None:
             memory[self.report_name] = outcome.report_json
         if outcome.review_png is not None:

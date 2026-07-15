@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 from itertools import permutations
 from numbers import Real
+import textwrap
 from typing import Any, Mapping, Protocol
 
 import cv2
@@ -17,14 +18,10 @@ import numpy as np
 import SimpleITK as sitk
 
 from BodyComposition.orientation.ctdeeprot import (
-    CHECKPOINT_SHA256,
-    CHECKPOINT_URL,
-    CODE_LICENSE,
+    DEFAULT_CHECKPOINT_PATH,
     CTDeepRotPrediction,
     CTDeepRotPredictor,
-    MODEL_CITATION_DOI,
-    UPSTREAM_COMMIT,
-    UPSTREAM_REPOSITORY,
+    model_asset_record,
 )
 from BodyComposition.orientation.rotations import (
     apply_volume_rotation,
@@ -39,7 +36,7 @@ from BodyComposition.orientation.rotations import (
 from BodyComposition.utils.geometry import ImageGeometry
 
 
-ORIENTATION_SCHEMA_VERSION = "1.0.0"
+ORIENTATION_SCHEMA_VERSION = "1.1.0"
 PHYSICAL_ROUNDTRIP_TOLERANCE_MM = 1e-4
 
 
@@ -69,10 +66,7 @@ class OrientationSettings:
     max_metal_fraction: float = 0.0005
     review_on_possible_truncation: bool = False
     report_enabled: bool = True
-    checkpoint_path: Path = Path("./models/CTDeepRot/net2d.pt")
-    checkpoint_sha256: str = CHECKPOINT_SHA256
-    checkpoint_url: str = CHECKPOINT_URL
-    auto_download: bool = True
+    checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH
     device: str = "cpu"
     batch_size: int = 24
     header_uncertain_reasons: tuple[str, ...] = ()
@@ -111,7 +105,7 @@ class OrientationSettings:
                 raise ValueError(f"{name} must be a list or tuple of strings.")
         checkpoint_path = model.get(
             "checkpoint_path",
-            "./models/CTDeepRot/net2d.pt",
+            DEFAULT_CHECKPOINT_PATH,
         )
         if not isinstance(checkpoint_path, (str, Path)):
             raise ValueError("orientation.model.checkpoint_path must be a path.")
@@ -134,9 +128,6 @@ class OrientationSettings:
             ),
             report_enabled=report.get("enabled", True),
             checkpoint_path=Path(checkpoint_path),
-            checkpoint_sha256=model.get("sha256", CHECKPOINT_SHA256),
-            checkpoint_url=model.get("download_url", CHECKPOINT_URL),
-            auto_download=model.get("auto_download", True),
             device=model.get("device", "cpu"),
             batch_size=model.get("batch_size", 24),
             header_uncertain_reasons=tuple(header_reasons),
@@ -151,7 +142,6 @@ class OrientationSettings:
                 self.review_on_possible_truncation,
             ),
             ("orientation.report.enabled", self.report_enabled),
-            ("orientation.model.auto_download", self.auto_download),
             (
                 "orientation.confidence.allow_axial_180_repair",
                 self.allow_axial_180_repair,
@@ -192,17 +182,6 @@ class OrientationSettings:
             or not 1 <= self.batch_size <= 24
         ):
             raise ValueError("orientation.model.batch_size must be 1..24.")
-        if (
-            not isinstance(self.checkpoint_sha256, str)
-            or len(self.checkpoint_sha256) != 64
-            or any(character not in "0123456789abcdef" for character in self.checkpoint_sha256)
-        ):
-            raise ValueError("orientation.model.sha256 must contain a SHA-256 digest.")
-        if (
-            not isinstance(self.checkpoint_url, str)
-            or not self.checkpoint_url.startswith(("http://", "https://"))
-        ):
-            raise ValueError("orientation.model.download_url must be an HTTP(S) URL.")
 
 
 @dataclass(frozen=True)
@@ -210,6 +189,7 @@ class ReviewFlag:
     code: str
     severity: str
     reason: str
+    stage: str = "orientation"
     observed: Mapping[str, Any] = field(default_factory=dict)
     threshold: Mapping[str, Any] = field(default_factory=dict)
     suggested_action: str = "Review the orientation scout and source metadata."
@@ -723,9 +703,6 @@ def assess_orientation(
     if predictor is None:
         predictor = CTDeepRotPredictor(
             settings.checkpoint_path,
-            auto_download=settings.auto_download,
-            download_url=settings.checkpoint_url,
-            expected_sha256=settings.checkpoint_sha256,
             device=settings.device,
             batch_size=settings.batch_size,
         )
@@ -827,12 +804,8 @@ def assess_orientation(
         applied_transform=transform,
         review_flags=flags,
         model={
-            "name": "CTDeepRot-2D",
+            **model_asset_record(),
             "required_for": "default_orientation_integrity_stage",
-            "upstream_repository": UPSTREAM_REPOSITORY,
-            "upstream_commit": UPSTREAM_COMMIT,
-            "code_license": CODE_LICENSE,
-            "citation_doi": MODEL_CITATION_DOI,
             "checkpoint_sha256": prediction.checkpoint_sha256,
             "metadata_discrete_direction_lps": discrete_direction.astype(int).tolist(),
         },
@@ -1040,7 +1013,23 @@ def render_orientation_review(
             "P",
         ),
     )
-    canvas = np.full((1080, 1400, 3), 24, dtype=np.uint8)
+    flag_messages = tuple(
+        f"{flag.code}: {flag.reason}"
+        for flag in result.review_flags
+    ) or ("none",)
+    flag_lines = tuple(
+        line
+        for message in flag_messages
+        for line in textwrap.wrap(
+            message,
+            width=125,
+            subsequent_indent="    ",
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+    )
+    canvas_height = max(1140, 1100 + 32 * len(flag_lines))
+    canvas = np.full((canvas_height, 1400, 3), 24, dtype=np.uint8)
     for index, (view, title, left, right, top, bottom) in enumerate(views):
         panel = _fit_panel(view, 450, 300)
         _annotate_panel(panel, title, left, right, top, bottom)
@@ -1101,8 +1090,18 @@ def render_orientation_review(
     cv2.putText(canvas, "HEAD / S", (1180, 685), font, 0.65, (0, 255, 255), 2)
     cv2.putText(canvas, "FEET / I", (1185, 1010), font, 0.65, (0, 255, 255), 2)
 
-    flag_codes = ", ".join(flag.code for flag in result.review_flags) or "none"
-    cv2.putText(canvas, f"Review flags: {flag_codes[:100]}", (30, 1040), font, 0.62, (210, 210, 210), 2)
+    cv2.putText(canvas, "Review flags and reasons:", (30, 1050), font, 0.62, (210, 210, 210), 2)
+    for index, line in enumerate(flag_lines):
+        cv2.putText(
+            canvas,
+            line,
+            (30, 1085 + index * 32),
+            font,
+            0.52,
+            (210, 210, 210),
+            1,
+            cv2.LINE_AA,
+        )
     return canvas
 
 
@@ -1176,8 +1175,11 @@ def write_orientation_failure_artifacts(
         "review_flags": [
             {
                 "code": "ORIENTATION_PROCESSING_FAILED",
+                "stage": "orientation",
                 "severity": "high",
                 "reason": "No physically valid prepared CT could be produced.",
+                "observed": {},
+                "threshold": {},
                 "suggested_action": "Inspect the source pixels and geometry before retrying.",
             }
         ],

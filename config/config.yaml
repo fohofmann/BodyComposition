@@ -38,10 +38,7 @@ orientation:
     max_metal_fraction: 0.0005
     review_on_possible_truncation: False
   model:
-    checkpoint_path: ./models/CTDeepRot/net2d.pt
-    sha256: a2feb521cfe49c367c4e594f38fa76ba9982ba009e114fbf15fb2aae06c06d96
-    download_url: https://raw.githubusercontent.com/JakubicekRoman/CTDeepRot/492114b8f9f3a7f058d4e97c0dd3643fb8d39649/python/example_prediction/models/net2d.pt
-    auto_download: True
+    checkpoint_path: ./models/CTDeepRot/492114b8f9f3a7f058d4e97c0dd3643fb8d39649/net2d.pt
     device: cpu
     batch_size: 24
   report:

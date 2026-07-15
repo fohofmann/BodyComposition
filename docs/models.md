@@ -6,7 +6,7 @@ The pipeline is flexible and can be used with different deep-learning models use
 
 | Model (Repository) | Description | License | Provisioning | Citation |
 | --- | --- | --- | --- | --- |
-| [CTDeepRot](https://github.com/JakubicekRoman/CTDeepRot) | 2D ResNet18, nine projection channels, 24 proper-rotation classes | BSD-3-Clause | A narrow integrated adapter fetches `net2d.pt` from upstream commit `492114b8f9f3a7f058d4e97c0dd3643fb8d39649` and verifies SHA-256 `a2feb521cfe49c367c4e594f38fa76ba9982ba009e114fbf15fb2aae06c06d96`; the checkpoint is not stored in this repository or source distribution | 4 |
+| [CTDeepRot](https://github.com/JakubicekRoman/CTDeepRot) | 2D ResNet18, nine projection channels, 24 proper-rotation classes | BSD-3-Clause code; no separate checkpoint terms found, so redistribution is not assumed | The explicit model-sync command fetches `net2d.pt` from upstream commit `492114b8f9f3a7f058d4e97c0dd3643fb8d39649`, verifies 44,890,653 bytes and SHA-256 `a2feb521cfe49c367c4e594f38fa76ba9982ba009e114fbf15fb2aae06c06d96`, and atomically promotes it to the versioned cache. Inference never downloads, and the checkpoint is not stored in this repository or source distribution. | 4 |
 
 The adapter reuses only the pinned architecture, preprocessing, and rotation
 conventions needed by the pipeline. It does not add the CTDeepRot demo package

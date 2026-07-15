@@ -39,7 +39,6 @@ def test_ctdeeprot_execution_regression_on_ct_org():
     assert Path(ct_path).stat().st_size == manifest["integrity"]["bytes"]
     predictor = CTDeepRotPredictor(
         checkpoint_path,
-        auto_download=False,
         device="cpu",
     )
     image = sitk.DICOMOrient(sitk.ReadImage(ct_path), "LPS")
@@ -55,6 +54,16 @@ def test_ctdeeprot_execution_regression_on_ct_org():
     assert outcome.result.state is OrientationState.PASS_METADATA_MATCH
     assert not outcome.result.orientation_changed
     assert not outcome.result.manual_review_required
+
+    for injected_class in range(24):
+        rotated = apply_model_rotation_to_sitk(
+            image,
+            injected_class,
+            inverse=False,
+        )
+        prediction = predictor.predict(rotated)
+        assert prediction.winning_class_index == injected_class
+        assert prediction.agreement_count >= 23
 
     rotated = apply_model_rotation_to_sitk(image, 8, inverse=False)
     rotated_outcome = assess_orientation(rotated, predictor=predictor)

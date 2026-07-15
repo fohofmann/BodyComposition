@@ -52,11 +52,10 @@ segmentation, cropping, canonicalization, or resampling.
   when the estimated transverse body touches the field-of-view boundary.
 - `model.checkpoint_path`: Local cache path. Environment variable
   `BODYCOMPOSITION_CTDEEPROT_CHECKPOINT` overrides it.
-- `model.sha256` and `model.download_url`: Pinned integrity/source values.
-  Changing either creates a custom, unsupported model configuration.
-- `model.auto_download`: Fetches and verifies the checkpoint on first use.
-  Set to `false` for an offline environment after running
-  `bodycomposition_download_models --model CTDeepRot-2D`.
+- The source commit, download URL, byte size, and SHA-256 are locked in the
+  adapter rather than configurable. Run
+  `bodycomposition_download_models --model CTDeepRot-2D` once to synchronize
+  the pinned asset. Inference never downloads models.
 - `model.device`: `cpu`, `cuda`, or `auto`; the default `cpu` works without
   GPU-specific setup. `batch_size` controls how many of the 24 views are
   inferred together.

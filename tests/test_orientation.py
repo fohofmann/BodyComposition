@@ -21,14 +21,21 @@ from BodyComposition.orientation.core import (
     write_orientation_failure_artifacts,
 )
 from BodyComposition.orientation.ctdeeprot import (
+    CHECKPOINT_BYTES,
     CHECKPOINT_SHA256,
+    CHECKPOINT_URL,
     CODE_LICENSE,
+    DEFAULT_CHECKPOINT_PATH,
     CTDeepRotPrediction,
+    CTDeepRotPredictor,
     LPS_YXZ_REFERENCE_CLASS_INDEX,
     MODEL_CITATION_DOI,
     ModelAssetError,
+    REDISTRIBUTION_MODE,
     UPSTREAM_REPOSITORY,
+    model_asset_record,
     projection_feature_groups,
+    sync_checkpoint,
     verify_checkpoint,
 )
 from BodyComposition.orientation.rotations import (
@@ -582,11 +589,15 @@ def test_reports_validate_against_schema_and_are_deterministic(base_config, tmp_
         )
         payload = json.loads(outcome.report_json.read_text(encoding="utf-8"))
         expected_attribution = {
+            "asset_id": model_asset_record()["asset_id"],
             "name": "CTDeepRot-2D",
             "required_for": "default_orientation_integrity_stage",
             "upstream_repository": UPSTREAM_REPOSITORY,
             "code_license": CODE_LICENSE,
             "citation_doi": MODEL_CITATION_DOI,
+            "download_url": CHECKPOINT_URL,
+            "byte_size": CHECKPOINT_BYTES,
+            "redistribution_mode": REDISTRIBUTION_MODE,
         }
         for key, value in expected_attribution.items():
             assert payload["model"][key] == value
@@ -597,13 +608,39 @@ def test_reports_validate_against_schema_and_are_deterministic(base_config, tmp_
             sitk.GetArrayViewFromImage(outcome.prepared_image),
         )
         review = cv2.imread(str(outcome.review_png))
-        assert review.shape == (1080, 1400, 3)
+        assert review.shape[0] >= 1140
+        assert review.shape[1:] == (1400, 3)
         reports.append(outcome.report_json.read_bytes())
         images.append(outcome.review_png.read_bytes())
 
     assert reports[0] == reports[1]
     assert images[0] == images[1]
     assert b"pseudonymous-001" not in images[0]
+
+
+def test_review_png_renders_every_flag_reason(base_config, tmp_path, monkeypatch):
+    config = deepcopy(base_config)
+    reasons = ["first explicit review reason", "second explicit review reason"]
+    config["orientation"]["force_review_reasons"] = reasons
+    rendered_text = []
+    original_put_text = cv2.putText
+
+    def capture_text(image, text, *args, **kwargs):
+        rendered_text.append(text)
+        return original_put_text(image, text, *args, **kwargs)
+
+    monkeypatch.setattr(cv2, "putText", capture_text)
+    outcome = assess_orientation(
+        _ct_image(),
+        config=config,
+        predictor=FakePredictor(identity_class_index()),
+        output_directory=tmp_path,
+        case_id="pseudonymous-001",
+    )
+
+    assert outcome.review_png.is_file()
+    for reason in reasons:
+        assert f"ORIENTATION_FORCED_REVIEW: {reason}" in rendered_text
 
 
 def test_failure_report_validates_against_schema(tmp_path):
@@ -616,6 +653,7 @@ def test_failure_report_validates_against_schema(tmp_path):
     payload = json.loads(report.read_text(encoding="utf-8"))
     Draft202012Validator(_schema()).validate(payload)
     assert payload["state"] == "ORIENTATION_FAILED"
+    assert payload["review_flags"][0]["stage"] == "orientation"
     assert private_path not in report.read_text(encoding="utf-8")
     assert private_path.encode() not in review.read_bytes()
     assert review.is_file()
@@ -649,6 +687,9 @@ def test_pipeline_action_replaces_only_repaired_input_and_persists_review(
         tmp_path / "workspace/orientation/case-001/corrected_input.nii.gz"
     )
     assert memory["tmp/orientation_result"].manual_review_required
+    prepared = memory["tmp/prepared_image"]
+    assert prepared.result is memory["tmp/orientation_result"]
+    assert prepared.prepared_image.GetSize() == memory["tmp/index"].img.GetSize()
     assert (tmp_path / "workspace/orientation/case-001/orientation_report.json").is_file()
     assert (tmp_path / "workspace/orientation/case-001/orientation_review.png").is_file()
 
@@ -723,7 +764,105 @@ def test_checkpoint_verification_rejects_modified_assets(tmp_path):
     checkpoint = tmp_path / "net2d.pt"
     checkpoint.write_bytes(b"not the pinned model")
     with pytest.raises(ModelAssetError, match="digest mismatch"):
-        verify_checkpoint(checkpoint)
+        verify_checkpoint(checkpoint, expected_bytes=None)
 
     observed = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
-    assert verify_checkpoint(checkpoint, observed) == checkpoint
+    assert verify_checkpoint(checkpoint, observed, checkpoint.stat().st_size) == checkpoint
+
+
+def test_ctdeeprot_inference_never_downloads_missing_assets(tmp_path, monkeypatch):
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("inference attempted a network request")
+
+    monkeypatch.setattr("requests.get", unexpected_request)
+    with pytest.raises(ModelAssetError, match="bodycomposition_download_models"):
+        CTDeepRotPredictor(tmp_path / "missing" / "net2d.pt")
+
+
+def test_ctdeeprot_model_sync_is_atomic_verified_and_idempotent(tmp_path, monkeypatch):
+    payload = b"pinned checkpoint fixture"
+    digest = hashlib.sha256(payload).hexdigest()
+    checkpoint = tmp_path / "version" / "net2d.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"invalid old checkpoint")
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            assert chunk_size == 1024 * 1024
+            yield payload
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setattr("requests.get", fake_get)
+    first = sync_checkpoint(
+        checkpoint,
+        download_url="https://example.invalid/net2d.pt",
+        expected_sha256=digest,
+        expected_bytes=len(payload),
+    )
+    second = sync_checkpoint(
+        checkpoint,
+        download_url="https://example.invalid/net2d.pt",
+        expected_sha256=digest,
+        expected_bytes=len(payload),
+    )
+
+    assert first == second == checkpoint
+    assert checkpoint.read_bytes() == payload
+    assert len(calls) == 1
+    assert not list(checkpoint.parent.glob("*.part"))
+
+
+def test_ctdeeprot_asset_record_is_complete_and_versioned():
+    asset = model_asset_record()
+
+    assert asset["byte_size"] == CHECKPOINT_BYTES
+    assert asset["checkpoint_sha256"] == CHECKPOINT_SHA256
+    assert asset["download_url"] == CHECKPOINT_URL
+    assert asset["redistribution_mode"] == "user_model_sync"
+    assert asset["expected_files"] == [
+        {
+            "relative_path": "net2d.pt",
+            "byte_size": CHECKPOINT_BYTES,
+            "sha256": CHECKPOINT_SHA256,
+        }
+    ]
+    assert str(DEFAULT_CHECKPOINT_PATH.parent).endswith(asset["upstream_commit"])
+
+
+def test_ctdeeprot_sync_cli_does_not_require_repository_config(tmp_path, monkeypatch):
+    from BodyComposition.bin import pre_download_models
+    from BodyComposition.orientation import ctdeeprot
+
+    synchronized = []
+
+    def fake_sync(path):
+        synchronized.append(path)
+        return tmp_path / "models" / "net2d.pt"
+
+    def unexpected_config(*args, **kwargs):
+        raise AssertionError("single-model synchronization loaded repository config")
+
+    monkeypatch.setattr(ctdeeprot, "sync_checkpoint", fake_sync)
+    monkeypatch.setattr(pre_download_models, "update_config", unexpected_config)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["bodycomposition_download_models", "--model", "CTDeepRot-2D"],
+    )
+    monkeypatch.chdir(tmp_path)
+
+    pre_download_models.main()
+
+    assert synchronized == [DEFAULT_CHECKPOINT_PATH]

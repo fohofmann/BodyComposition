@@ -37,9 +37,22 @@ CODE_LICENSE = "BSD-3-Clause"
 MODEL_CITATION_DOI = "https://doi.org/10.1007/978-3-030-64610-3_7"
 CHECKPOINT_FILENAME = "net2d.pt"
 CHECKPOINT_SHA256 = "a2feb521cfe49c367c4e594f38fa76ba9982ba009e114fbf15fb2aae06c06d96"
+CHECKPOINT_BYTES = 44_890_653
 CHECKPOINT_URL = (
     "https://raw.githubusercontent.com/JakubicekRoman/CTDeepRot/"
     f"{UPSTREAM_COMMIT}/python/example_prediction/models/{CHECKPOINT_FILENAME}"
+)
+MODEL_ASSET_ID = f"ctdeeprot-2d-{UPSTREAM_COMMIT}"
+DEFAULT_CHECKPOINT_PATH = Path(
+    f"./models/CTDeepRot/{UPSTREAM_COMMIT}/{CHECKPOINT_FILENAME}"
+)
+WEIGHT_LICENSE_STATUS = (
+    "published_in_bsd_3_clause_repository_without_separate_checkpoint_terms;"
+    "redistribution_not_assumed"
+)
+REDISTRIBUTION_MODE = "user_model_sync"
+VALIDATION_SET_VERSION = (
+    "ct-org-140-cads-eee3c0a993636264fd04104f7e2a090c507c0c43-orientation-v1"
 )
 MODEL_INPUT_SIZE = 224
 MODEL_CLASS_COUNT = 24
@@ -98,10 +111,19 @@ def resolve_checkpoint_path(configured_path: str | Path) -> Path:
 def verify_checkpoint(
     checkpoint_path: str | Path,
     expected_sha256: str = CHECKPOINT_SHA256,
+    expected_bytes: int | None = CHECKPOINT_BYTES,
 ) -> Path:
     path = Path(checkpoint_path).expanduser()
     if not path.is_file():
-        raise ModelAssetError(f"CTDeepRot checkpoint not found: {path}.")
+        raise ModelAssetError(
+            f"CTDeepRot checkpoint not found: {path}. Run "
+            "`bodycomposition_download_models --model CTDeepRot-2D` before inference."
+        )
+    if expected_bytes is not None and path.stat().st_size != expected_bytes:
+        raise ModelAssetError(
+            "CTDeepRot checkpoint size mismatch: "
+            f"expected {expected_bytes} bytes, observed {path.stat().st_size} at {path}."
+        )
     observed = sha256_file(path)
     if observed != expected_sha256:
         raise ModelAssetError(
@@ -111,24 +133,25 @@ def verify_checkpoint(
     return path
 
 
-def ensure_checkpoint(
+def sync_checkpoint(
     checkpoint_path: str | Path,
     *,
-    auto_download: bool,
     download_url: str = CHECKPOINT_URL,
     expected_sha256: str = CHECKPOINT_SHA256,
+    expected_bytes: int = CHECKPOINT_BYTES,
 ) -> Path:
-    """Resolve the model asset and atomically hydrate it from pinned upstream."""
+    """Synchronize the pinned model asset with verified atomic promotion."""
 
     path = resolve_checkpoint_path(checkpoint_path)
-    if path.exists():
-        return verify_checkpoint(path, expected_sha256)
-    if not auto_download:
-        raise ModelAssetError(
-            f"CTDeepRot checkpoint is missing at {path}. Run "
-            "`bodycomposition_download_models --model CTDeepRot-2D` or enable "
-            "orientation.model.auto_download."
-        )
+    if path.is_file():
+        try:
+            return verify_checkpoint(path, expected_sha256, expected_bytes)
+        except ModelAssetError:
+            # Keep the invalid asset in place until a replacement has passed all
+            # checks; the final replace remains atomic.
+            pass
+    elif path.exists():
+        raise ModelAssetError(f"CTDeepRot checkpoint path is not a file: {path}.")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -145,7 +168,7 @@ def ensure_checkpoint(
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         handle.write(chunk)
-        verify_checkpoint(temporary_path, expected_sha256)
+        verify_checkpoint(temporary_path, expected_sha256, expected_bytes)
         temporary_path.replace(path)
         path.chmod(0o644)
     except Exception as exc:
@@ -156,7 +179,39 @@ def ensure_checkpoint(
         ) from exc
     finally:
         temporary_path.unlink(missing_ok=True)
-    return verify_checkpoint(path, expected_sha256)
+    return verify_checkpoint(path, expected_sha256, expected_bytes)
+
+
+def model_asset_record() -> dict:
+    """Return the complete pinned CTDeepRot asset and distribution contract."""
+
+    return {
+        "asset_id": MODEL_ASSET_ID,
+        "name": "CTDeepRot-2D",
+        "upstream_project": UPSTREAM_PROJECT,
+        "upstream_repository": UPSTREAM_REPOSITORY,
+        "upstream_commit": UPSTREAM_COMMIT,
+        "citation_doi": MODEL_CITATION_DOI,
+        "download_url": CHECKPOINT_URL,
+        "byte_size": CHECKPOINT_BYTES,
+        "checkpoint_sha256": CHECKPOINT_SHA256,
+        "expected_files": [
+            {
+                "relative_path": CHECKPOINT_FILENAME,
+                "byte_size": CHECKPOINT_BYTES,
+                "sha256": CHECKPOINT_SHA256,
+            }
+        ],
+        "code_license": CODE_LICENSE,
+        "weight_license_status": WEIGHT_LICENSE_STATUS,
+        "redistribution_mode": REDISTRIBUTION_MODE,
+        "compatibility": {
+            "architecture": "torchvision.resnet18_conv1_9_channels_fc_24_classes",
+            "input_shape_chw": [9, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE],
+            "simpleitk_array_boundary": "array_zyx_to_model_array_yxz",
+        },
+        "validation_set_version": VALIDATION_SET_VERSION,
+    }
 
 
 def image_to_model_array(image) -> np.ndarray:
@@ -260,21 +315,15 @@ class CTDeepRotPredictor:
         self,
         checkpoint_path: str | Path,
         *,
-        auto_download: bool = True,
-        download_url: str = CHECKPOINT_URL,
-        expected_sha256: str = CHECKPOINT_SHA256,
         device: str = "cpu",
         batch_size: int = 24,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("CTDeepRot batch_size must be positive.")
-        self.checkpoint_path = ensure_checkpoint(
-            checkpoint_path,
-            auto_download=auto_download,
-            download_url=download_url,
-            expected_sha256=expected_sha256,
+        self.checkpoint_path = verify_checkpoint(
+            resolve_checkpoint_path(checkpoint_path),
         )
-        self.expected_sha256 = expected_sha256
+        self.expected_sha256 = CHECKPOINT_SHA256
         self.device = self._resolve_device(device)
         self.batch_size = min(int(batch_size), MODEL_CLASS_COUNT)
 

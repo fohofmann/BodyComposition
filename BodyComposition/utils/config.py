@@ -133,7 +133,6 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     _require_bool(config, "orientation.enabled")
     _require_bool(config, "orientation.confidence.allow_axial_180_repair")
     _require_bool(config, "orientation.artifact_rules.review_on_possible_truncation")
-    _require_bool(config, "orientation.model.auto_download")
     _require_bool(config, "orientation.report.enabled")
     for path in (
         "orientation.confidence.min_body_extent_mm",
@@ -161,15 +160,6 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     model = _require_mapping(config, "orientation.model")
     if not isinstance(model.get("checkpoint_path"), (str, Path)):
         raise ConfigError("orientation.model.checkpoint_path must be a path.")
-    if not isinstance(model.get("download_url"), str) or not model["download_url"].startswith(("http://", "https://")):
-        raise ConfigError("orientation.model.download_url must be an HTTP(S) URL.")
-    digest = model.get("sha256")
-    if (
-        not isinstance(digest, str)
-        or len(digest) != 64
-        or any(character not in "0123456789abcdef" for character in digest)
-    ):
-        raise ConfigError("orientation.model.sha256 must contain a SHA-256 digest.")
     if model.get("device") not in {"cpu", "cuda", "auto"}:
         raise ConfigError("orientation.model.device must be cpu, cuda, or auto.")
     batch_size = model.get("batch_size")
