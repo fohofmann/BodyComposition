@@ -42,7 +42,7 @@
   "changes": "None by BodyComposition; the pinned mirror file is downloaded as-is.",
   "test_scope": {
     "pipeline": "BodyCompositionFast",
-    "purpose": "Opt-in real-world integration smoke test only.",
+    "purpose": "Opt-in pipeline and orientation-stage integration smoke test only.",
     "not_for": "Clinical validation, accuracy claims, or orientation ground truth."
   }
 }

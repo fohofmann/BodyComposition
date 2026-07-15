@@ -1,3 +1,11 @@
+ctdeeprot:
+  title: 'CTDeepRot (required model for the default orientation-integrity stage)'
+  link:
+    - 'https://github.com/JakubicekRoman/CTDeepRot'
+    - 'https://doi.org/10.1007/978-3-030-64610-3_7'
+  license: 'BSD-3-Clause code; checkpoint fetched from pinned upstream and not redistributed'
+  citation: 'Jakubicek R, Vicar T, Chmelik J. A Tool for Automatic Estimation of Patient Position in Spinal CT Data. IFMBE Proceedings. 2021;80:51-56.'
+
 totalsegmentator:
   title: 'TotalSegmentator dataset & model weights'
   link:

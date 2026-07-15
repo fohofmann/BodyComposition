@@ -19,6 +19,11 @@ Internal nnU-Net inference normally uses cuDNN on CUDA devices. If cuDNN reports
 
 Images use explicit geometry conventions: SimpleITK size, spacing, origin, and indices are in x-y-z order; arrays returned by SimpleITK are in z-y-x order. Images and masks must have the same size and physical domain before measurements are combined.
 
+Unless `orientation.enabled` is false, `PipelineBuilder` prepends the same
+orientation action to every registered pipeline. This makes orientation
+assessment part of both the Python API and CLI execution path rather than a
+DICOM conversion option.
+
 ## Pipelines
 While pipelines can be customized by the user, the following methods are readily implemented:
 - **[BodyCompositionFast](../BodyComposition/pipelines/bodycomposition.py) (default)**: Uses the internal ResEncM vertebral and tissue models, crops in the cranio-caudal axis to L2-L4, and exports per-slice and mean-L3 measurements.
@@ -29,6 +34,29 @@ While pipelines can be customized by the user, the following methods are readily
 - **[BodyAndOrganAnalysis](../BodyComposition/pipelines/boa.py)**: Combines TotalSegmentator spine localization with the BOA tissue model and exports per-slice measurements.
 
 ## Actions
+
+### Orientation
+
+- **AssessOrientation**: Validates the original pixels and physical geometry,
+  converts the SimpleITK z-y-x array explicitly to CTDeepRot y-x-z convention,
+  obtains equivariance votes across all 24 proper rotations, and compares the
+  anatomy result with the metadata interpretation. Matching inputs are not
+  canonicalized. A mismatch is repaired only when all configured confidence,
+  coverage, obliquity, artefact, and class-specific safety gates pass. The
+  SI-preserving 180-degree in-plane class is advisory-only by default because
+  it produced a confident false-positive candidate in the public discrepancy
+  audit. Repair uses only
+  `SimpleITK.PermuteAxes` and `SimpleITK.Flip`, with no interpolation, and must
+  pass an exact inverse-array and physical-point round trip. LPS is only the
+  internal comparison frame; the final derivative is losslessly re-expressed
+  in the input's original discrete orientation convention. Readable uncertain
+  cases continue unchanged with QC `review`; a changed case always requires
+  manual review. The action writes a structured JSON report and an
+  identifier-free scout image. The scout's top row shows the metadata
+  interpretation; the lower row shows the actual prepared image, or a clearly
+  labeled, unapplied model candidate when a mismatch is gated to review. The
+  action preserves the original container as `tmp/original_index`.
+
 ### Segmentation
 - **SegmIntVertebrae**: Segments the vertebral body using nnU-Net with models described [here](models.md). Requires `image` being a [NIfTI data container](../BodyComposition/utils/nifti.py) and `model` being a string defining either the `ResEncM` or `ResEncL` model. Returns (and optionally saves) the segmentation as a [NIfTI data container](../BodyComposition/utils/nifti.py).
 - **SegmStanfordSpine**: Segments the vertebral body using the [Comp2Comp Spine Segmentation model](models.md). Requires `image` being a [NIfTI data container](../BodyComposition/utils/nifti.py). Returns (and optionally saves) the segmentation as a [NIfTI data container](../BodyComposition/utils/nifti.py).

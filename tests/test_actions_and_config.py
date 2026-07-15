@@ -1,4 +1,5 @@
 from copy import deepcopy
+import logging
 import sys
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from BodyComposition.actions.segm_int import SegmIntVertebrae
 from BodyComposition.pipeline import ActionContractError, PipelineAction
 from BodyComposition.utils.config import ConfigError, validate_config
 from BodyComposition.utils.geometry import GeometryError, ImageGeometry
+from BodyComposition.utils.logging import log_license
 
 
 class WritesDeclaredOutput(PipelineAction):
@@ -212,6 +214,7 @@ def test_bounding_box_rejects_a_different_physical_domain(
         (("tissue", "sm", "filter_size"), "Trze"),
         (("run", "skip"), "True"),
         (("run", "timeout"), None),
+        (("orientation", "confidence", "allow_axial_180_repair"), "False"),
     ],
 )
 def test_configuration_rejects_typographical_and_untyped_values(
@@ -226,6 +229,24 @@ def test_configuration_rejects_typographical_and_untyped_values(
     target[path[-1]] = invalid_value
     with pytest.raises(ConfigError):
         validate_config(config)
+
+
+def test_ctdeeprot_runtime_acknowledgement_loads_from_installed_package(
+    caplog,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.chdir(tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        log_license(["ctdeeprot"])
+
+    assert (
+        "CTDeepRot (required model for the default orientation-integrity stage)"
+        in caplog.text
+    )
+    assert "BSD-3-Clause code" in caplog.text
+    assert "Jakubicek R, Vicar T, Chmelik J" in caplog.text
 
 
 def test_internal_segmentation_skip_does_not_load_predictor(

@@ -66,7 +66,10 @@ class LoadMetadata(PipelineAction):
         super().__call__(memory)
 
         # create path
-        input_parent = memory['tmp/index'].path.parent.parent
+        # A repaired orientation derivative lives below the output workspace.
+        # Metadata remain associated with the immutable source image.
+        source_image = memory.get('tmp/original_index', memory['tmp/index'])
+        input_parent = source_image.path.parent.parent
         metadata_file_path = Path(input_parent, self.input_name.format(caseid=memory['id']))
 
         # if metadata available, import

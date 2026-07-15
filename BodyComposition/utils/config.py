@@ -128,6 +128,60 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     timeout = _value(config, "run.timeout")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
         raise ConfigError("Configuration value run.timeout must be a positive integer.")
+
+    _require_mapping(config, "orientation")
+    _require_bool(config, "orientation.enabled")
+    _require_bool(config, "orientation.confidence.allow_axial_180_repair")
+    _require_bool(config, "orientation.artifact_rules.review_on_possible_truncation")
+    _require_bool(config, "orientation.model.auto_download")
+    _require_bool(config, "orientation.report.enabled")
+    for path in (
+        "orientation.confidence.min_body_extent_mm",
+        "orientation.confidence.max_obliquity_deg",
+        "orientation.artifact_rules.max_metal_fraction",
+    ):
+        _require_nonnegative_number(config, path)
+    for path in (
+        "orientation.confidence.body_threshold_hu",
+        "orientation.artifact_rules.metal_threshold_hu",
+    ):
+        value = _value(config, path)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ConfigError(f"Configuration value {path} must be numeric.")
+    min_votes = _value(config, "orientation.confidence.min_equivariant_votes")
+    if isinstance(min_votes, bool) or not isinstance(min_votes, int) or not 1 <= min_votes <= 24:
+        raise ConfigError("orientation.confidence.min_equivariant_votes must be 1..24.")
+    min_pixels = _value(config, "orientation.confidence.min_body_pixels_per_slice")
+    if isinstance(min_pixels, bool) or not isinstance(min_pixels, int) or min_pixels <= 0:
+        raise ConfigError("orientation.confidence.min_body_pixels_per_slice must be positive.")
+    metal_fraction = _value(config, "orientation.artifact_rules.max_metal_fraction")
+    if metal_fraction > 1:
+        raise ConfigError("orientation.artifact_rules.max_metal_fraction must not exceed one.")
+
+    model = _require_mapping(config, "orientation.model")
+    if not isinstance(model.get("checkpoint_path"), (str, Path)):
+        raise ConfigError("orientation.model.checkpoint_path must be a path.")
+    if not isinstance(model.get("download_url"), str) or not model["download_url"].startswith(("http://", "https://")):
+        raise ConfigError("orientation.model.download_url must be an HTTP(S) URL.")
+    digest = model.get("sha256")
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ConfigError("orientation.model.sha256 must contain a SHA-256 digest.")
+    if model.get("device") not in {"cpu", "cuda", "auto"}:
+        raise ConfigError("orientation.model.device must be cpu, cuda, or auto.")
+    batch_size = model.get("batch_size")
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or not 1 <= batch_size <= 24:
+        raise ConfigError("orientation.model.batch_size must be 1..24.")
+    for path in (
+        "orientation.header_uncertain_reasons",
+        "orientation.force_review_reasons",
+    ):
+        reasons = _value(config, path)
+        if not isinstance(reasons, list) or any(not isinstance(reason, str) for reason in reasons):
+            raise ConfigError(f"{path} must be a list of strings.")
     for path in (
         "vertebrae.min_voxels_per_vertebra",
         "vertebrae.correct_monotonicity_max_windowsize",

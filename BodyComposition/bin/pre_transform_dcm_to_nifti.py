@@ -37,7 +37,10 @@ def extract_metadata(dicom):
 
 def main():
     """
-    Toolkit for transforming DICOM files to NIfTI files, and extracting metadata.
+    Transform DICOM files to NIfTI while preserving the reader geometry.
+
+    Anatomical orientation integrity is assessed later by the analysis API,
+    before segmentation. Conversion never fabricates or repairs orientation.
     Usage: bin/prepare_dcm_to_nifti.py -w /path/to/root/dir/ -i input/dcm -o input/nii
     """
         
@@ -52,8 +55,6 @@ def main():
                         required=True, help='path to subdirectory selected for processing, relative to workspace.')
     parser.add_argument('--output', '-o', type=str,
                         required=True, help='path to subdirectory for processed files, relative to workspace.')
-    parser.add_argument('--override', action='store_true', 
-                        default=False, help='Override warnings and errors.')
     parser.add_argument('--overwrite', action='store_true',
                         default=False, help='Overwrite existing files.')
     args = parser.parse_args()
@@ -96,7 +97,7 @@ def main():
         f.write('patient_id,warning\n')
 
     # multiprocessing
-    process = ProcessLoader(args.workspace, args.output, path_warnings=path_warnings, override=args.override)
+    process = ProcessLoader(args.workspace, args.output, path_warnings=path_warnings)
     n_processes = min(multiprocessing.cpu_count(), len(path_input_dirs))
     logging.info(f" spawn processes at {n_processes}/{multiprocessing.cpu_count()} CPUs\n")
     with multiprocessing.Pool(processes=n_processes, maxtasksperchild=20) as p:
@@ -107,7 +108,7 @@ def main():
 
 
 class ProcessLoader:
-    def __init__(self, path_data, path_output, path_warnings, override=False):
+    def __init__(self, path_data, path_output, path_warnings):
 
         path_output_images = Path(path_data, path_output, 'images')
         path_output_metadata = Path(path_data, path_output, 'metadata')
@@ -118,7 +119,6 @@ class ProcessLoader:
         self.output_images = path_output_images
         self.output_metadata = path_output_metadata
         self.path_warnings = path_warnings
-        self.override = override
 
         logging.info(f" initializing method process, creating directories")
 
@@ -142,38 +142,30 @@ class ProcessLoader:
             tmp_dicoms = reader.GetGDCMSeriesFileNames(str(path_input_dir))
             tmp_series = [pydicom.filereader.dcmread(tmp_dicom) for tmp_dicom in tmp_dicoms]
 
-            # create boolean lists for primary and axial images
+            # Prefer original/primary instances, but preserve their orientation
+            # metadata exactly. Orientation is assessed by the analysis pipeline.
             tmp_series_primary = [hasattr(tmp, 'ImageType') and any(s.lower() in ['primary', 'original'] for s in tmp.ImageType) for tmp in tmp_series]
-            tmp_series_axial = [hasattr(tmp, 'ImageOrientationPatient') and tmp.ImageOrientationPatient == [1, 0, 0, 0, 1, 0] for tmp in tmp_series]
-
-            # select series with primary image type and axial orientation
-            series_selected = [tmp for i, tmp in enumerate(tmp_series) if tmp_series_primary[i] and tmp_series_axial[i]]
-
-            # if no series with primary image type and axial orientation, select series with axial orientation
-            if not series_selected:
-                series_selected = [tmp for i, tmp in enumerate(tmp_series) if tmp_series_axial[i]]
-
-            # if no series with axial orientation, select series with primary image type, assuming that it is axial
-            if not series_selected:
-                track_warnings_as_csv(self.path_warnings, input_pat_id, 'no axial orientation')
-                if not self.override:
-                    logging.warning(f" {input_pat_id}: no series with axial orientation found, skipping. Use --override if you wanna try anyway.")
-                    return
-                series_selected = [tmp for i, tmp in enumerate(tmp_series) if tmp_series_primary[i]]
-                for tmp in series_selected:
-                    tmp.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
-                logging.info(f" {input_pat_id}: no series with axial orientation found. As --override is set, trying to set it anyway.")
-            
-            # if no series with primary image type, select all
+            series_selected = [
+                tmp for index, tmp in enumerate(tmp_series) if tmp_series_primary[index]
+            ]
             if not series_selected:
                 track_warnings_as_csv(self.path_warnings, input_pat_id, 'no primary image')
-                if not self.override:
-                    logging.warning(f" {input_pat_id}: no series with axial orientation or primary image type found, skipping. Use --override if you wanna try anyway.")
-                    return
                 series_selected = tmp_series
-                for tmp in series_selected:
-                    tmp.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
-                logging.warning(f" {input_pat_id}: no series with primary image type found. As --override is set, trying to set it anyway.")
+                logging.warning(
+                    f" {input_pat_id}: no original/primary ImageType found; "
+                    "using all instances without changing metadata."
+                )
+
+            if not all(hasattr(tmp, 'ImageOrientationPatient') for tmp in series_selected):
+                track_warnings_as_csv(
+                    self.path_warnings,
+                    input_pat_id,
+                    'missing ImageOrientationPatient',
+                )
+                logging.warning(
+                    f" {input_pat_id}: ImageOrientationPatient is incomplete; "
+                    "the analysis orientation stage must review this case."
+                )
 
             # skip if series contains less than files than needed
             if len(series_selected) < config_min_num_slices:

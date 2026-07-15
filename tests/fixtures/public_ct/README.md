@@ -27,5 +27,6 @@ which should also be cited when that mirror is used:
 > Whole-Body Anatomy in Computed Tomography. arXiv:2507.22953 (2025).
 
 TCIA notes that several CT-ORG volumes may have a left-right flip. This scan is
-therefore an execution and geometry regression fixture, not independent
-orientation ground truth and not evidence of clinical accuracy.
+therefore an execution, geometry, and orientation-stage regression fixture,
+not independent orientation ground truth and not evidence of clinical
+accuracy.

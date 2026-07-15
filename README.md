@@ -41,6 +41,15 @@ This pipeline uses model weights derived from [TotalSegmentator](https://github.
     ```
     This script will download the models and store them in the directories as defined in `config/config.yaml`. You can download single models (using `--model`), or all models required for a specific pipeline (using `--pipeline`).
 
+The orientation-enabled pipelines also require the approximately 43 MiB
+CTDeepRot 2D checkpoint. It is fetched automatically from a pinned upstream
+commit on first use and accepted only when its SHA-256 digest matches. To
+hydrate it ahead of an offline run, use:
+
+```bash
+bodycomposition_download_models --model CTDeepRot-2D
+```
+
 ## Model-free checks
 
 The geometry, measurement, action-contract, configuration, CLI, and synthetic-pipeline tests do not download model weights:
@@ -74,6 +83,41 @@ To use an already downloaded copy instead of allowing network access, set
 The local file is accepted only when its pinned size and digest match. See
 [`tests/fixtures/public_ct/README.md`](tests/fixtures/public_ct/README.md) for source,
 license, attribution, citations, and the important CT-ORG orientation caveat.
+
+## CT orientation integrity
+
+Every registered analysis pipeline starts with an orientation-integrity stage
+by default. It compares the image geometry with CTDeepRot anatomy inference at
+the API level, before segmentation or cropping. DICOM-to-NIfTI conversion
+preserves reader geometry and does not repair orientation.
+
+CTDeepRot is the appropriate and required anatomy-based rotation model whenever
+this default stage is enabled; it is not presented as work developed by the
+BodyComposition authors. Analyses using the orientation stage must acknowledge
+CTDeepRot and cite Jakubicek, Vicar, and Chmelik as listed below. Disabling
+`orientation.enabled` explicitly removes this model-dependent check.
+
+- Matching metadata are retained, including modest obliquity.
+- A high-confidence proper-rotation mismatch produces a losslessly permuted or
+  flipped derivative using SimpleITK; the source image remains unchanged. The
+  anatomically ambiguous SI-preserving 180-degree in-plane class is
+  advisory-only by default after a public-cohort false-positive audit.
+- Every changed case continues through segmentation but is marked for manual
+  review.
+- Low-confidence, short-field-of-view, unusually oblique, or otherwise gated
+  readable cases keep the metadata interpretation, continue through the
+  pipeline, and receive review status.
+- Invalid pixels or physical geometry stop that case.
+
+Each enabled run writes `orientation_report.json` and
+`orientation_review.png`; changed cases additionally receive
+`corrected_input.nii.gz`. The report states one of
+`PASS_METADATA_MATCH`, `PASS_METADATA_UNCERTAIN`, `MISMATCH_REPAIRED`,
+`MISMATCH_UNCERTAIN`, `HEADER_UNCERTAIN`, or `ORIENTATION_FAILED`.
+CTDeepRot models proper rotations only and cannot establish whether a scan is
+left-right reflected, so the review image is a QC aid rather than orientation
+ground truth. See [the pipeline guide](docs/pipeline.md) and
+[configuration guide](docs/config.md).
 
 ## Usage
 
@@ -109,5 +153,11 @@ If you use this code, you should cite the following repositories and papers:
 [TotalSegmentator](https://github.com/wasserth/TotalSegmentator)
 
 > Wasserthal, J., Breit, H.-C., Meyer, M.T., Pradella, M., Hinck, D., Sauter, A.W., Heye, T., Boll, D., Cyriac, J., Yang, S., Bach, M., Segeroth, M., 2023. TotalSegmentator: Robust Segmentation of 104 Anatomic Structures in CT Images. Radiology: Artificial Intelligence. https://doi.org/10.1148/ryai.230024
+
+[CTDeepRot](https://github.com/JakubicekRoman/CTDeepRot)
+
+> Jakubicek, R., Vicar, T., & Chmelik, J. (2021). A Tool for Automatic
+> Estimation of Patient Position in Spinal CT Data. IFMBE Proceedings, 80,
+> 51–56. https://doi.org/10.1007/978-3-030-64610-3_7
 
 **Depending on the frameworks, [datasets and models](docs/models.md) used, you should also cite the respective sources! The pipeline logs the used resources at initialization. Please reference this repository, when using it.**

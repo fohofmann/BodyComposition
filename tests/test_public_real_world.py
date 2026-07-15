@@ -29,6 +29,8 @@ MODEL_ASSETS = {
 }
 
 EXPECTED_OUTPUTS = (
+    "orientation/{case_id}/orientation_report.json",
+    "orientation/{case_id}/orientation_review.png",
     "labels/{case_id}_int-vertebrae.nii.gz",
     "labels/{case_id}_int-bodycomposition.nii.gz",
     "masks/{case_id}_int-bodycomposition.nii.gz",
@@ -260,6 +262,17 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
         workspace / template.format(case_id=case_id) for template in EXPECTED_OUTPUTS
     ]
     assert all(path.is_file() for path in output_paths)
+
+    orientation_report = json.loads(
+        (workspace / f"orientation/{case_id}/orientation_report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert orientation_report["state"] == "PASS_METADATA_MATCH"
+    assert orientation_report["prediction"]["raw_winning_class_index"] == 0
+    assert orientation_report["prediction"]["winning_class_index"] == 6
+    assert not orientation_report["orientation_changed"]
+    assert not orientation_report["manual_review_required"]
 
     ct_image = sitk.ReadImage(str(public_ct))
     vertebrae_image = sitk.ReadImage(str(workspace / f"labels/{case_id}_int-vertebrae.nii.gz"))

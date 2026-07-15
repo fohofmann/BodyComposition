@@ -20,6 +20,35 @@ run:
   skip: True # skips segmentations and mask generation if present
   timeout: 1200
 
+# CT orientation is assessed from the original image/header relationship before
+# any segmentation, cropping, canonicalization, or resampling.
+orientation:
+  enabled: True
+  confidence:
+    min_equivariant_votes: 23 # out of 24 CTDeepRot rotations
+    min_body_extent_mm: 250
+    max_obliquity_deg: 15
+    body_threshold_hu: -700
+    min_body_pixels_per_slice: 100
+    # CTDeepRot can confidently confuse this anatomically ambiguous class on
+    # full-body scans. Keep it advisory-only unless separately validated.
+    allow_axial_180_repair: False
+  artifact_rules:
+    metal_threshold_hu: 2500
+    max_metal_fraction: 0.0005
+    review_on_possible_truncation: False
+  model:
+    checkpoint_path: ./models/CTDeepRot/net2d.pt
+    sha256: a2feb521cfe49c367c4e594f38fa76ba9982ba009e114fbf15fb2aae06c06d96
+    download_url: https://raw.githubusercontent.com/JakubicekRoman/CTDeepRot/492114b8f9f3a7f058d4e97c0dd3643fb8d39649/python/example_prediction/models/net2d.pt
+    auto_download: True
+    device: cpu
+    batch_size: 24
+  report:
+    enabled: True
+  header_uncertain_reasons: [] # normally populated from conversion provenance
+  force_review_reasons: []
+
 segmentation:
   save_label: True
 

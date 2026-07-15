@@ -25,6 +25,51 @@ Configuration is validated before a pipeline is built. Boolean fields must be YA
 - `skip`: If `True`, segmentations and mask generation are skipped if already present.
 - `timeout`: Timeout in seconds for **each case** in the pipeline. Can be used to prevent the pipeline from getting stuck on a single case.
 
+### Orientation
+
+Orientation assessment runs as the first API/pipeline stage, before
+segmentation, cropping, canonicalization, or resampling.
+
+- `enabled`: Enables the shared stage for every registered pipeline. Default:
+  `true`.
+- `confidence.min_equivariant_votes`: Minimum agreeing CTDeepRot votes out of
+  24 for automatic proper-rotation repair. Default: `23`.
+- `confidence.min_body_extent_mm`: Minimum inferred cranio-caudal body extent
+  for repair. Default: `250` mm.
+- `confidence.max_obliquity_deg`: Maximum residual header obliquity for a
+  discrete repair. Similar metadata below this threshold are retained rather
+  than flattened. Default: `15` degrees.
+- `confidence.body_threshold_hu` and
+  `confidence.min_body_pixels_per_slice`: Rules used only for the coverage
+  safety gate.
+- `confidence.allow_axial_180_repair`: Allows automatic correction of the
+  SI-preserving 180-degree in-plane class. It defaults to `false` because the
+  public discrepancy audit found a confident false-positive candidate for
+  this anatomically ambiguous rotation. The default keeps the input unchanged,
+  shows the proposed correction, and requires manual review.
+- `artifact_rules.metal_threshold_hu` and `max_metal_fraction`: High-density
+  artefact gate. `review_on_possible_truncation` optionally prevents repair
+  when the estimated transverse body touches the field-of-view boundary.
+- `model.checkpoint_path`: Local cache path. Environment variable
+  `BODYCOMPOSITION_CTDEEPROT_CHECKPOINT` overrides it.
+- `model.sha256` and `model.download_url`: Pinned integrity/source values.
+  Changing either creates a custom, unsupported model configuration.
+- `model.auto_download`: Fetches and verifies the checkpoint on first use.
+  Set to `false` for an offline environment after running
+  `bodycomposition_download_models --model CTDeepRot-2D`.
+- `model.device`: `cpu`, `cuda`, or `auto`; the default `cpu` works without
+  GPU-specific setup. `batch_size` controls how many of the 24 views are
+  inferred together.
+- `report.enabled`: Writes the per-case JSON and PNG QC artifacts. Changed
+  cases additionally persist the exact downstream derivative.
+- `header_uncertain_reasons` and `force_review_reasons`: Normally empty lists
+  populated by trusted ingestion/runtime provenance. Any entry prevents
+  automatic repair and forces review.
+
+Every reoriented case has `orientation_changed=true`, QC `review`, and an
+`ORIENTATION_CHANGED` flag. CTDeepRot does not detect left-right reflections;
+reflection-like concerns must be supplied as a forced-review reason.
+
 ### Segmentation
 - `save_label`: If `True`, the segmentation labels are saved. If `False`, the labels are just saved to the temporary pipeline memory.
 
@@ -83,7 +128,7 @@ Configuration is validated before a pipeline is built. Boolean fields must be YA
 For the fast versions of the pipeline, we segment the vertebrae, and then crop the image to the region of interest for all further analyses. The region of interest can be defined in this section of the configuration file, and is then used by the [CreateBoundingBox](../BodyComposition/actions/crop.py) class. For each region of interest, the following parameters can be defined:
 
 - `roi`: List of labels that define the region of interest.
-- `axes`: Six booleans defining whether each crop boundary is active. The order is [inferior, superior, posterior, anterior, left, right] for the RAS-oriented inputs expected by the current baseline, matching array z-y-x boundary pairs. The baseline does not infer or repair input orientation.
+- `axes`: Six booleans defining whether each crop boundary is active. The order is [inferior, superior, posterior, anterior, left, right] for the RAS-oriented prepared inputs, matching array z-y-x boundary pairs. The orientation stage either retains a trusted input or supplies the reviewed lossless derivative before this action runs.
 - `margin`: List of integers that define the margin in mm along each axis. The margin is transformed to pixels later in the pipeline.
 
 ```yaml

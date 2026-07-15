@@ -9,14 +9,14 @@ description = "Pipeline for the segmentation of muscle and adipose tissue with p
 authors = [
     { name = "Felix Hofmann", email = "felix.hofmann@med.lmu.de" }
 ]
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 readme = "README.md"
 requires-python = ">=3.9"
 keywords = ["segmentation", "muscle", "adipose tissue", "medical imaging"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Topic :: Scientific/Engineering :: Medical Science Apps."
@@ -37,11 +37,13 @@ dependencies = [
     "nnunet",
     "nnunetv2",
     "torch",
+    "torchvision",
     "TotalSegmentator"
 ]
 
 [project.optional-dependencies]
 test = [
+    "jsonschema>=4.23,<5",
     "pytest>=8,<10"
 ]
 
@@ -55,11 +57,14 @@ bodycomposition = "BodyComposition.bin.run_batch:main"
 bodycomposition_download_models = "BodyComposition.bin.pre_download_models:main"
 bodycomposition_segmentation = "BodyComposition.bin.run_segmentation_only:main"
 bodycomposition_transform_dcm_to_nifti = "BodyComposition.bin.pre_transform_dcm_to_nifti:main"
-bodycomposition_transform_dcm_rotate = "BodyComposition.bin.pre_correct_orientation:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["data", "docs", "logs", "models", "suppl"]
+include = ["BodyComposition*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+BodyComposition = ["schemas/*.json", "utils/licenses.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

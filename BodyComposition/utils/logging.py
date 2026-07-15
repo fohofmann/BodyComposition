@@ -1,6 +1,7 @@
 # libraries
 import logging
 import sys
+from importlib.resources import files
 from psutil import virtual_memory
 from pathlib import Path
 import yaml
@@ -52,12 +53,17 @@ def log_gpu_usage(device=None):
 # function for license messages
 def log_license(licenses):
 
-    # define meassges
-    with open(Path('./BodyComposition/utils/licenses.yaml')) as f:
+    # Load attribution from the installed package, independent of working directory.
+    licenses_path = files("BodyComposition").joinpath("utils").joinpath("licenses.yaml")
+    with licenses_path.open(encoding="utf-8") as f:
         dict_licenses = yaml.safe_load(f)
 
     # generate license text
-    text_license = "The configured pipeline is based on frameworks, data or models from multiple authors. You should cite their work, and respect the individual licenses: \n\n"
+    text_license = (
+        "The configured pipeline requires frameworks, data or models from "
+        "multiple authors. Acknowledge and cite their work, and respect the "
+        "individual license conditions: \n\n"
+    )
     for license in licenses:
         if license in dict_licenses:
             license_info = dict_licenses[license]

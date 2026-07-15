@@ -21,16 +21,19 @@ logging.basicConfig(level=logging.INFO,
 
 # defining models per collection
 definition_pipelines = {
-    'BodyComposition': ['VertebralBodiesCT-ResEncL', 'BodyCompositionCT-ResEncL'],
-    'BodyCompositionFast': ['VertebralBodiesCT-ResEncM', 'BodyCompositionCT-ResEncM'],
-    'SarcopeniaTotalSegmentator': ['TotalSegmentator-spine', 'TotalSegmentator-muscles', 'TotalSegmentator-body', 'TotalSegmentator-vertebrae_body', 'TotalSegmentator-tissue_types'],
-    'SarcopeniaTotalSegmentatorFast': ['TotalSegmentator-spine', 'TotalSegmentator-tissue_types'],
-    'SarcopeniaStanfordFast': ['Stanford-Spine', 'Stanford-Tissue'],
-    'BodyAndOrganAnalysis': ['BodyAndOrganAnalysis', 'TotalSegmentator-spine'],
+    'BodyComposition': ['CTDeepRot-2D', 'VertebralBodiesCT-ResEncL', 'BodyCompositionCT-ResEncL'],
+    'BodyCompositionFast': ['CTDeepRot-2D', 'VertebralBodiesCT-ResEncM', 'BodyCompositionCT-ResEncM'],
+    'SarcopeniaTotalSegmentator': ['CTDeepRot-2D', 'TotalSegmentator-spine', 'TotalSegmentator-muscles', 'TotalSegmentator-body', 'TotalSegmentator-vertebrae_body', 'TotalSegmentator-tissue_types'],
+    'SarcopeniaTotalSegmentatorFast': ['CTDeepRot-2D', 'TotalSegmentator-spine', 'TotalSegmentator-tissue_types'],
+    'SarcopeniaStanfordFast': ['CTDeepRot-2D', 'Stanford-Spine', 'Stanford-Tissue'],
+    'BodyAndOrganAnalysis': ['CTDeepRot-2D', 'BodyAndOrganAnalysis', 'TotalSegmentator-spine'],
 }
 
 # defining sources
 definition_sources = {
+    'CTDeepRot-2D': {
+        'source': 'ctdeeprot',
+    },
     'VertebralBodiesCT-ResEncL': {
         'source': 'huggingface',
         'hf_id': 'fhofmann/VertebralBodiesCT-ResEncL',
@@ -157,7 +160,7 @@ def main():
                                  'BodyAndOrganAnalysis'])
     parser.add_argument('--model', '-m', type=str,
                         help='Single model to be downloaded',
-                        choices=['VertebralBodiesCT-ResEncM', 'VertebralBodiesCT-ResEncL', 'BodyCompositionCT-ResEncM', 'BodyCompositionCT-ResEncL',
+                        choices=['CTDeepRot-2D', 'VertebralBodiesCT-ResEncM', 'VertebralBodiesCT-ResEncL', 'BodyCompositionCT-ResEncM', 'BodyCompositionCT-ResEncL',
                                  'TotalSegmentator-total', 'TotalSegmentator-spine', 'TotalSegmentator-body', 'TotalSegmentator-vertebrae_body', 'TotalSegmentator-tissue_types',
                                  'Stanford-Spine', 'Stanford-Tissue',
                                  'BodyAndOrganAnalysis'])
@@ -214,7 +217,18 @@ def main():
     for model_title in model_titles:
         model = definition_sources[model_title]
 
-        if model['source'] == 'huggingface':
+        if model['source'] == 'ctdeeprot':
+            from BodyComposition.orientation.ctdeeprot import ensure_checkpoint
+
+            orientation_model = config_dict['orientation']['model']
+            checkpoint = ensure_checkpoint(
+                orientation_model['checkpoint_path'],
+                auto_download=True,
+                download_url=orientation_model['download_url'],
+                expected_sha256=orientation_model['sha256'],
+            )
+            logging.info(f"Downloaded and verified `CTDeepRot-2D` at `{checkpoint}`.")
+        elif model['source'] == 'huggingface':
             download_dir = config_weights[model['local_id']]
             logging.info(f"Downloading `{model_title}` from `huggingface.co/{model['hf_id']}` to `{download_dir}`...")
             snapshot_download(repo_id=model['hf_id'], local_dir=download_dir, ignore_patterns=["**/model_best*", "**/logs*" "**/*.zip", "*.zip", "**/*.md", "*.md",".txt", ".png"])
@@ -243,9 +257,8 @@ def main():
         else:
             logging.error(f"Unknown source {model['source']}")
             return
-        
+
     logging.info('DOWNLOADED ALL MODELS')
 
 if __name__ == "__main__":
     main() # parser is in main to be available when using pyproject.toml entrypoint
-    

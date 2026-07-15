@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fohofmann/BodyComposition/schemas/orientation_report-1.0.0.json",
+  "title": "BodyComposition orientation report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_id",
+    "state",
+    "execution_status",
+    "qc_status",
+    "manual_review_required",
+    "orientation_changed",
+    "severe_misorientation",
+    "review_flags"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "case_id": {"type": "string", "minLength": 1},
+    "state": {
+      "enum": [
+        "PASS_METADATA_MATCH",
+        "PASS_METADATA_UNCERTAIN",
+        "MISMATCH_REPAIRED",
+        "MISMATCH_UNCERTAIN",
+        "HEADER_UNCERTAIN",
+        "ORIENTATION_FAILED"
+      ]
+    },
+    "execution_status": {"enum": ["succeeded", "failed"]},
+    "qc_status": {"enum": ["pass", "review", "fail"]},
+    "manual_review_required": {"type": "boolean"},
+    "orientation_changed": {"type": "boolean"},
+    "severe_misorientation": {"type": "boolean"},
+    "original_orientation_code": {"type": "string", "minLength": 3, "maxLength": 3},
+    "prepared_orientation_code": {"type": "string", "minLength": 3, "maxLength": 3},
+    "direction_determinant": {"type": "number"},
+    "residual_obliquity_deg": {"type": "number", "minimum": 0},
+    "original_geometry": {"$ref": "#/$defs/geometry"},
+    "prepared_geometry": {"$ref": "#/$defs/geometry"},
+    "original_pixel_sha256": {"$ref": "#/$defs/sha256"},
+    "prepared_pixel_sha256": {"$ref": "#/$defs/sha256"},
+    "original_affine_sha256": {"$ref": "#/$defs/sha256"},
+    "prepared_affine_sha256": {"$ref": "#/$defs/sha256"},
+    "prediction": {"type": "object"},
+    "body_extent_mm": {"type": "number", "minimum": 0},
+    "metal_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+    "possible_fov_truncation": {"type": "boolean"},
+    "prepared_input": {
+      "type": "object",
+      "required": ["kind", "relative_path"],
+      "properties": {
+        "kind": {"enum": ["original", "corrected_derivative"]},
+        "relative_path": {"type": ["string", "null"]}
+      }
+    },
+    "applied_transform": {"type": ["object", "null"]},
+    "review_flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "reason", "suggested_action"],
+        "properties": {
+          "code": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["low", "medium", "high"]},
+          "reason": {"type": "string", "minLength": 1},
+          "suggested_action": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "name",
+        "required_for",
+        "upstream_repository",
+        "upstream_commit",
+        "code_license",
+        "citation_doi",
+        "checkpoint_sha256",
+        "metadata_discrete_direction_lps"
+      ],
+      "properties": {
+        "name": {"const": "CTDeepRot-2D"},
+        "required_for": {"const": "default_orientation_integrity_stage"},
+        "upstream_repository": {
+          "const": "https://github.com/JakubicekRoman/CTDeepRot"
+        },
+        "upstream_commit": {
+          "const": "492114b8f9f3a7f058d4e97c0dd3643fb8d39649"
+        },
+        "code_license": {"const": "BSD-3-Clause"},
+        "citation_doi": {
+          "const": "https://doi.org/10.1007/978-3-030-64610-3_7"
+        },
+        "checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+        "metadata_discrete_direction_lps": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {"type": "integer", "minimum": -1, "maximum": 1}
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "error_type": {"type": "string"},
+    "error_summary": {"type": "string"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"execution_status": {"const": "succeeded"}}},
+      "then": {
+        "required": [
+          "original_orientation_code",
+          "prepared_orientation_code",
+          "original_geometry",
+          "prepared_geometry",
+          "prediction",
+          "body_extent_mm",
+          "prepared_input",
+          "model"
+        ]
+      }
+    },
+    {
+      "if": {"properties": {"orientation_changed": {"const": true}}},
+      "then": {
+        "properties": {
+          "state": {"const": "MISMATCH_REPAIRED"},
+          "manual_review_required": {"const": true},
+          "qc_status": {"const": "review"},
+          "applied_transform": {"type": "object"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "geometry": {
+      "type": "object",
+      "required": ["size_xyz", "spacing_xyz", "origin_lps_xyz", "direction_lps"],
+      "properties": {
+        "size_xyz": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "integer", "minimum": 1},
+            {"type": "integer", "minimum": 1},
+            {"type": "integer", "minimum": 1}
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "spacing_xyz": {"type": "array", "minItems": 3, "maxItems": 3},
+        "origin_lps_xyz": {"type": "array", "minItems": 3, "maxItems": 3},
+        "direction_lps": {"type": "array", "minItems": 9, "maxItems": 9}
+      }
+    }
+  }
+}

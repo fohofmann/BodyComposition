@@ -175,6 +175,10 @@ class PipelineBuilder():
         # function factory: load actions, use list of functions
         logging.info(f'initalizing pipeline actions:')
         self.actions = pipeline_registry[method](pipeline=self)
+        if self.config["orientation"]["enabled"]:
+            from BodyComposition.actions.orientation import AssessOrientation
+
+            self.actions.insert(0, AssessOrientation(self))
 
         # check if all actions are valid
         for action in self.actions:
