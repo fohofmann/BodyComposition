@@ -74,6 +74,15 @@ reflection-like concerns must be supplied as a forced-review reason.
 
 ### Vertebrae
 
+- `backend`: Exactly one backend. The default is
+  `spineps_veridah_ct_v1`; retained alternatives are
+  `vertebral_bodies_resenc_l` and `vertebral_bodies_resenc_m`. A failure never
+  causes an automatic fallback.
+- `spineps.device`: `auto`, `cpu`, or `cuda`.
+- `spineps.save_native_outputs`: Retains the native semantic mask, labeled
+  vertebra mask, centroid/POI JSON, snapshot, crop mask, and other named safe
+  upstream outputs. The canonical vertebral-body mask is always persisted.
+- `spineps.review_enabled`: Writes the sagittal/coronal vertebral QC image.
 - `save_mask`: If `True`, the vertebrae masks are saved. If `False`, the masks are just saved to the temporary pipeline memory.
 - `min_voxels_per_vertebra`: Minimum number of voxels per vertebra. If (the dominating) vertebra in a slice has less voxels, the label is ignored. This reduces the number of artifacts.
 - `fill_undefined_levels`: If `True`, slices between vertebra, in which no dominating vertebra was detected, are filled considering the neighbouring vertebrae in stepwise growing windows along the cranio-caudal axis.
@@ -81,6 +90,9 @@ reflection-like concerns must be supplied as a forced-review reason.
 - `correct_monotonicity_max_windowsize`: Maximum window size for the monotonicity correction.
 - `center_of_mass`: If `True`, the center of mass of each vertebra is calculated and returned in the output.
 - `deprioritize_labels`: We determine the *dominating vertebra* in each slice, which is the vertebra with the highest number of voxels in the slice. Due to its size, the cranial parts of the sacrum can dominate the lower lumbar vertebrae. Therefore, this option allows to deprioritize the sacrum.
+- `deprioritize_anatomical`: Backend-independent anatomical names used when a
+  common `VertebralResult` is available. The default is `[SACRUM]`, avoiding
+  the collision between legacy label 19 and SPINEPS label 19 (T12).
 
 ### Tissue
 - `save_mask`: If `True`, the [tissue masks](labels.md) are saved. If `False`, the masks are just saved to the temporary pipeline memory.
@@ -127,12 +139,16 @@ reflection-like concerns must be supplied as a forced-review reason.
 For the fast versions of the pipeline, we segment the vertebrae, and then crop the image to the region of interest for all further analyses. The region of interest can be defined in this section of the configuration file, and is then used by the [CreateBoundingBox](../BodyComposition/actions/crop.py) class. For each region of interest, the following parameters can be defined:
 
 - `roi`: List of labels that define the region of interest.
+- `roi_anatomical`: Preferred backend-independent names. These are resolved
+  through the selected backend's native label schema; native labels are never
+  rewritten.
 - `axes`: Six booleans defining whether each crop boundary is active. The order is [inferior, superior, posterior, anterior, left, right] for the RAS-oriented prepared inputs, matching array z-y-x boundary pairs. The orientation stage either retains a trusted input or supplies the reviewed lossless derivative before this action runs.
 - `margin`: List of integers that define the margin in mm along each axis. The margin is transformed to pixels later in the pipeline.
 
 ```yaml
   L234CranioCaudal:
     roi: [14,15,16] # labels
+    roi_anatomical: [L2, L3, L4]
     axes: [True, True, False, False, False, False]
     margin: [0, 0, 0, 0, 0, 0] # inferior, superior, posterior, anterior, left, right
 ```

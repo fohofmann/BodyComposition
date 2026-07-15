@@ -192,11 +192,20 @@ def test_fast_pipeline_completion_markers_only_include_persisted_files(pipeline_
 
     assert io_inputs == []
     assert io_outputs == [
+        "masks/{caseid}_vertebral-bodies.nii.gz",
+        "qc/{caseid}_vertebral-result.json",
+        "masks/{caseid}_spineps-semantic.nii.gz",
+        "masks/{caseid}_spineps-vertebrae.nii.gz",
+        "qc/{caseid}_spine-review.png",
         "masks/{caseid}_int-bodycomposition.nii.gz",
         "exports/{caseid}_raw.csv",
     ]
     assert builder.get_reset_outputs() == [
-        "labels/{caseid}_int-vertebrae.nii.gz",
+        "masks/{caseid}_vertebral-bodies.nii.gz",
+        "masks/{caseid}_spineps-semantic.nii.gz",
+        "masks/{caseid}_spineps-vertebrae.nii.gz",
+        "qc/{caseid}_vertebral-result.json",
+        "qc/{caseid}_spine-review.png",
         "labels/{caseid}_int-bodycomposition.nii.gz",
         "masks/{caseid}_int-bodycomposition.nii.gz",
         "exports/{caseid}_raw.csv",

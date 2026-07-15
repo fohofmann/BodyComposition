@@ -11,11 +11,12 @@ import requests
 from tqdm import tqdm
 import zipfile
 import shutil
+import json
 
 # defining models per collection
 definition_pipelines = {
-    'BodyComposition': ['CTDeepRot-2D', 'VertebralBodiesCT-ResEncL', 'BodyCompositionCT-ResEncL'],
-    'BodyCompositionFast': ['CTDeepRot-2D', 'VertebralBodiesCT-ResEncM', 'BodyCompositionCT-ResEncM'],
+    'BodyComposition': ['CTDeepRot-2D', 'SPINEPS-VERIDAH', 'BodyCompositionCT-ResEncL'],
+    'BodyCompositionFast': ['CTDeepRot-2D', 'SPINEPS-VERIDAH', 'BodyCompositionCT-ResEncM'],
     'SarcopeniaTotalSegmentator': ['CTDeepRot-2D', 'TotalSegmentator-spine', 'TotalSegmentator-muscles', 'TotalSegmentator-body', 'TotalSegmentator-vertebrae_body', 'TotalSegmentator-tissue_types'],
     'SarcopeniaTotalSegmentatorFast': ['CTDeepRot-2D', 'TotalSegmentator-spine', 'TotalSegmentator-tissue_types'],
     'SarcopeniaStanfordFast': ['CTDeepRot-2D', 'Stanford-Spine', 'Stanford-Tissue'],
@@ -26,6 +27,10 @@ definition_pipelines = {
 definition_sources = {
     'CTDeepRot-2D': {
         'source': 'ctdeeprot',
+    },
+    'SPINEPS-VERIDAH': {
+        'source': 'spineps',
+        'local_id': 'spineps',
     },
     'VertebralBodiesCT-ResEncL': {
         'source': 'huggingface',
@@ -44,7 +49,8 @@ definition_sources = {
     },
     'BodyCompositionCT-ResEncM': {
          'source': 'huggingface',
-         'hf_id': 'fhofmann/BodyCompositionCT-ResEncM'
+         'hf_id': 'fhofmann/BodyCompositionCT-ResEncM',
+         'local_id': 'int-bodycomposition'
     },
     'TotalSegmentator-spine': {
         'source': 'totalsegmentator',
@@ -153,10 +159,15 @@ def main():
                                  'BodyAndOrganAnalysis'])
     parser.add_argument('--model', '-m', type=str,
                         help='Single model to be downloaded',
-                        choices=['CTDeepRot-2D', 'VertebralBodiesCT-ResEncM', 'VertebralBodiesCT-ResEncL', 'BodyCompositionCT-ResEncM', 'BodyCompositionCT-ResEncL',
+                        choices=['CTDeepRot-2D', 'SPINEPS-VERIDAH', 'VertebralBodiesCT-ResEncM', 'VertebralBodiesCT-ResEncL', 'BodyCompositionCT-ResEncM', 'BodyCompositionCT-ResEncL',
                                  'TotalSegmentator-total', 'TotalSegmentator-spine', 'TotalSegmentator-body', 'TotalSegmentator-vertebrae_body', 'TotalSegmentator-tissue_types',
                                  'Stanford-Spine', 'Stanford-Tissue',
                                  'BodyAndOrganAnalysis'])
+    parser.add_argument(
+        '--check',
+        action='store_true',
+        help='Check the selected SPINEPS/VERIDAH bundle without downloading.',
+    )
     args = parser.parse_args()
 
     # set up logging
@@ -169,7 +180,7 @@ def main():
 
     # The orientation asset can be synchronized from an installed wheel without
     # a repository-local config directory. Inference itself never downloads.
-    if args.model == 'CTDeepRot-2D':
+    if args.model == 'CTDeepRot-2D' and not args.check:
         from BodyComposition.orientation.ctdeeprot import (
             DEFAULT_CHECKPOINT_PATH,
             sync_checkpoint,
@@ -195,6 +206,18 @@ def main():
         model_titles = [args.model]
     else:
         logging.error('No pipeline or model specified')
+        return
+
+    if args.check:
+        if model_titles != ['SPINEPS-VERIDAH']:
+            raise ValueError('--check currently requires --model SPINEPS-VERIDAH.')
+        from BodyComposition.vertebral.spineps_backend import SpinepsVeridahAdapter
+
+        model_root = Path(config_weights['spineps'])
+        report = SpinepsVeridahAdapter(model_root).check(full_models=True)
+        print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
+        if not report.ready:
+            raise SystemExit(1)
         return
 
     # set up TotalSegmentator if needed
@@ -235,6 +258,16 @@ def main():
                 orientation_model['checkpoint_path'],
             )
             logging.info(f"Downloaded and verified `CTDeepRot-2D` at `{checkpoint}`.")
+        elif model['source'] == 'spineps':
+            from BodyComposition.vertebral.spineps_assets import sync_models
+
+            model_root = Path(config_weights[model['local_id']])
+            report = sync_models(model_root)
+            logging.info(
+                "Synchronized and verified SPINEPS/VERIDAH bundle at `%s` (%s).",
+                report.model_root,
+                report.bundle_id,
+            )
         elif model['source'] == 'huggingface':
             download_dir = config_weights[model['local_id']]
             logging.info(f"Downloading `{model_title}` from `huggingface.co/{model['hf_id']}` to `{download_dir}`...")

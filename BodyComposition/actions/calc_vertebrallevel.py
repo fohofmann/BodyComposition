@@ -24,9 +24,32 @@ class CalcVertebralLevel(PipelineAction):
         self.config_vertebrae = pipeline.config['vertebrae']
 
         # load labels as constants
-        self.LBL_VERTEBRALBODIES = validate_label_mapping(
+        self.default_label_mapping = validate_label_mapping(
             pipeline.config['LBL_VERTEBRALBODIES']
         )
+        self.active_label_mapping = self.default_label_mapping
+        self.active_deprioritize_labels = tuple(self.config_vertebrae['deprioritize_labels'])
+        self.active_sequence_rank = self._sequence_rank(self.active_label_mapping)
+
+    @staticmethod
+    def _sequence_rank(mapping):
+        cranio_caudal = [
+            *(f"C{index}" for index in range(1, 8)),
+            *(f"T{index}" for index in range(1, 14)),
+            *(f"L{index}" for index in range(1, 7)),
+            "SACRUM",
+            "COCCYX",
+        ]
+        name_rank = {name: index for index, name in enumerate(cranio_caudal)}
+        ranks = {}
+        for label, name in mapping.items():
+            normalized = name.upper().replace(" ", "")
+            if normalized == "SACRUM":
+                normalized = "SACRUM"
+            if normalized not in name_rank:
+                raise ValueError(f"Unsupported anatomical vertebral label: {name!r}.")
+            ranks[int(label)] = name_rank[normalized]
+        return ranks
 
 
     # max counts per slive, with and without window
@@ -85,7 +108,11 @@ class CalcVertebralLevel(PipelineAction):
                 continue
     
             # check if not monotonical
-            if value > vertebrae[i-1]:
+            previous = int(vertebrae[i-1])
+            current = int(value)
+            if previous == 0 or current == 0:
+                continue
+            if self.active_sequence_rank[current] > self.active_sequence_rank[previous]:
                 indices.append(i)
         
         return indices
@@ -98,6 +125,31 @@ class CalcVertebralLevel(PipelineAction):
 
         # load mask
         input_mask = memory[self.input_mask_name]
+        result = memory.get('tmp/vertebral_result')
+        if result is not None:
+            self.active_label_mapping = validate_label_mapping(dict(result.label_schema))
+            inverse = {name.upper(): label for label, name in self.active_label_mapping.items()}
+            configured_names = self.config_vertebrae.get('deprioritize_anatomical', [])
+            missing = [name for name in configured_names if name.upper() not in inverse]
+            if missing:
+                raise ValueError(
+                    f"Vertebral backend {result.backend_id} has no configured anatomical labels: {missing}."
+                )
+            self.active_deprioritize_labels = tuple(inverse[name.upper()] for name in configured_names)
+            self.active_sequence_rank = self._sequence_rank(self.active_label_mapping)
+            unknown = sorted(
+                int(value)
+                for value in np.unique(input_mask.data)
+                if value != 0 and int(value) not in self.active_label_mapping
+            )
+            if unknown:
+                raise ValueError(
+                    f"Vertebral mask contains labels outside {result.backend_id}'s native schema: {unknown}."
+                )
+        else:
+            self.active_label_mapping = self.default_label_mapping
+            self.active_deprioritize_labels = tuple(self.config_vertebrae['deprioritize_labels'])
+            self.active_sequence_rank = self._sequence_rank(self.active_label_mapping)
         input_mask.as_closest_canonical()
         input_mask.validate()
         logging.info(f' loaded {input_mask}, reorientated to canonical')
@@ -114,7 +166,7 @@ class CalcVertebralLevel(PipelineAction):
 
         # STEP 1: find value with max counts without using windows
         for z in range(input_mask.shape[0]):
-            labels_all[z] = self.get_max_counts(input_mask.data, z, 0, self.config_vertebrae['min_voxels_per_vertebra'], self.config_vertebrae['deprioritize_labels'])
+            labels_all[z] = self.get_max_counts(input_mask.data, z, 0, self.config_vertebrae['min_voxels_per_vertebra'], self.active_deprioritize_labels)
         logging.info(f' computed dominating vertebrae levels ({time() - time_start_i:.1f}s)')
 
         # vertebrae between first and last defined level to subarray
@@ -143,7 +195,7 @@ class CalcVertebralLevel(PipelineAction):
 
             while helper_unlabeled.size > 0:
                 for z in helper_unlabeled:
-                    labels_vertebrae[z] = self.get_max_counts(data_vertebrae, z, helper_windowsize, self.config_vertebrae['min_voxels_per_vertebra'], self.config_vertebrae['deprioritize_labels'])
+                    labels_vertebrae[z] = self.get_max_counts(data_vertebrae, z, helper_windowsize, self.config_vertebrae['min_voxels_per_vertebra'], self.active_deprioritize_labels)
                 helper_unlabeled = np.where(labels_vertebrae == 0)[0]
                 helper_windowsize += 1
             
@@ -172,7 +224,7 @@ class CalcVertebralLevel(PipelineAction):
 
                     # loop through range and find max counts
                     for z2 in range(helper_start, helper_end):
-                        labels_vertebrae[z2] = self.get_max_counts(data_vertebrae, z2, helper_windowsize, self.config_vertebrae['min_voxels_per_vertebra'], self.config_vertebrae['deprioritize_labels'])
+                        labels_vertebrae[z2] = self.get_max_counts(data_vertebrae, z2, helper_windowsize, self.config_vertebrae['min_voxels_per_vertebra'], self.active_deprioritize_labels)
 
                 helper_notmonotonical = self.get_not_monotonical(labels_vertebrae)
                 helper_windowsize += 1
@@ -238,7 +290,7 @@ class CalcVertebralLevel(PipelineAction):
 
         # add vertebrae labels
         for column in ('Level', 'Center', 'Centroid'):
-            res_labels_df[column] = res_labels_df[column].map(self.LBL_VERTEBRALBODIES).astype('string')
+            res_labels_df[column] = res_labels_df[column].map(self.active_label_mapping).astype('string')
             
         # save data to pipeline
         memory['tmp/vertebrae_values'] = res_labels_df

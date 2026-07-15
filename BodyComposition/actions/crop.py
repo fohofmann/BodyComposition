@@ -51,8 +51,24 @@ class CreateBoundingBox(PipelineAction):
         ]
         logging.info(f' margins: {self.task_config["margin"]}mm -> {margin}vx')
 
-        # create bounding box for cropping
-        label_roi = np.isin(input_label.data, self.task_config['roi']) # only roi
+        # Resolve anatomical names through the selected backend's native
+        # schema. Numeric labels remain available for pipelines that have not
+        # yet adopted the common vertebral result.
+        roi = self.task_config.get('roi', [])
+        anatomical = self.task_config.get('roi_anatomical', [])
+        if anatomical:
+            result = memory.get('tmp/vertebral_result')
+            if result is not None:
+                inverse = {name.upper(): label for label, name in result.label_schema.items()}
+                missing = [name for name in anatomical if name.upper() not in inverse]
+                if missing:
+                    raise ValueError(
+                        f"Backend {result.backend_id} cannot resolve crop labels {missing}."
+                    )
+                roi = [inverse[name.upper()] for name in anatomical]
+        if not roi:
+            raise ValueError(f"Crop task {self.task} resolved to an empty label set.")
+        label_roi = np.isin(input_label.data, roi)
 
         # create bounding box
         bbox = []

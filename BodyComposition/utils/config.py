@@ -119,6 +119,8 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         "vertebrae.fill_undefined_levels",
         "vertebrae.correct_monotonicity",
         "vertebrae.center_of_mass",
+        "vertebrae.spineps.save_native_outputs",
+        "vertebrae.spineps.review_enabled",
         "tissue.save_mask",
         "tissue.hu_denoise.filter_outliers",
         "tissue.hu_denoise.filter_median",
@@ -186,6 +188,28 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     ):
         raise ConfigError("vertebrae.deprioritize_labels must be a list of integer labels.")
 
+    backend = _value(config, "vertebrae.backend")
+    supported_backends = {
+        "spineps_veridah_ct_v1",
+        "vertebral_bodies_resenc_l",
+        "vertebral_bodies_resenc_m",
+    }
+    if backend not in supported_backends:
+        raise ConfigError(
+            f"vertebrae.backend must be one of {sorted(supported_backends)}, got {backend!r}."
+        )
+    spineps = _require_mapping(config, "vertebrae.spineps")
+    if spineps.get("device") not in {"auto", "cpu", "cuda"}:
+        raise ConfigError("vertebrae.spineps.device must be auto, cpu, or cuda.")
+    model_root = _value(config, "paths.weights.spineps")
+    if not isinstance(model_root, (str, Path)):
+        raise ConfigError("paths.weights.spineps must be a path.")
+    deprioritized_names = _value(config, "vertebrae.deprioritize_anatomical")
+    if not isinstance(deprioritized_names, list) or any(
+        not isinstance(name, str) or not name.strip() for name in deprioritized_names
+    ):
+        raise ConfigError("vertebrae.deprioritize_anatomical must be a list of names.")
+
     _require_range(config, "tissue.hu_denoise.filter_outliers_range")
     median_kernel = _value(config, "tissue.hu_denoise.filter_median_kernel")
     if not isinstance(median_kernel, list) or len(median_kernel) != 3 or any(
@@ -212,6 +236,11 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             isinstance(label, bool) or not isinstance(label, int) for label in crop.get("roi", [])
         ):
             raise ConfigError(f"crop.{crop_name}.roi must be a list of integer labels.")
+        anatomical = crop.get("roi_anatomical", [])
+        if not isinstance(anatomical, list) or any(
+            not isinstance(name, str) or not name.strip() for name in anatomical
+        ):
+            raise ConfigError(f"crop.{crop_name}.roi_anatomical must be a list of names.")
         axes = crop.get("axes")
         if not isinstance(axes, list) or len(axes) != 6 or any(not isinstance(axis, bool) for axis in axes):
             raise ConfigError(f"crop.{crop_name}.axes must contain six booleans.")

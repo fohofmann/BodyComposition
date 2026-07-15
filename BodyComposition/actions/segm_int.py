@@ -25,6 +25,7 @@ class _SegmInternal(PipelineAction):
             self.io_persisted_outputs = [self.output_label_name]
         self.device = pipeline.device
         self.predictor = None
+        self.model_preset = model
 
         model_settings = {
             "ResEncM": (
@@ -144,6 +145,42 @@ class SegmIntVertebrae(_SegmInternal):
     weight_key = "int-vertebrae"
     model_title = "VertebralBodiesCT"
     licenses = ["nnunet", "nnunet_resenc", "intvertebrae", "verse", "boa", "totalsegmentator"]
+
+    def __init__(self, pipeline, image: str, model: str = "ResEncM"):
+        super().__init__(pipeline, image=image, model=model)
+        self.io_outputs.append("tmp/vertebral_result")
+
+    def __call__(self, memory):
+        super().__call__(memory)
+        from dataclasses import replace
+
+        from BodyComposition.vertebral.legacy_adapter import adapt_internal_vertebral_bodies
+        from BodyComposition.vertebral.spineps_backend import orientation_qc_flags
+
+        output = memory[self.output_label_name]
+        output.validate()
+        native_outputs = {"vertebral_body_labels": output.path} if output.path.is_file() else {}
+        result = adapt_internal_vertebral_bodies(
+            output.data,
+            output.geometry,
+            self.config["LBL_VERTEBRALBODIES"],
+            model_preset=self.model_preset,
+            native_outputs=native_outputs,
+            provenance={"model_family": self.model_title},
+        )
+        prepared = memory.get("tmp/prepared_image")
+        if prepared is not None:
+            result = replace(
+                result,
+                provenance={
+                    **dict(result.provenance),
+                    "orientation": prepared.result.to_dict(),
+                    "orientation_changed": prepared.result.orientation_changed,
+                    "orientation_manual_review_required": prepared.result.manual_review_required,
+                },
+                qc_flags=tuple(result.qc_flags) + orientation_qc_flags(prepared),
+            )
+        memory["tmp/vertebral_result"] = result
 
 
 class SegmIntBodyComposition(_SegmInternal):

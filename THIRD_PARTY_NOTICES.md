@@ -64,3 +64,56 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## SPINEPS, VERIDAH, TPTBox, and VIBESegmentator
+
+The default vertebral backend calls the upstream `SPINEPS==2.0.0` Python API
+and its pinned `ct_labeling` model (VERIDAH). It uses `TPTBox==0.7.5` for the
+BIDS/image boundary and VibeSeg Dataset100 crop inference. BodyComposition does
+not vendor or rewrite these projects. Its adapter adds explicit model paths,
+disables inference-time downloads, validates SimpleITK geometry, preserves
+native labels, and records QC/provenance.
+
+The only locally implemented upstream boundary is model transfer and archive
+extraction. The pinned upstream download paths are unsuitable for this package
+because they can resolve VibeSeg weights inside `site-packages`, permit hidden
+inference-time downloads, and do not provide BodyComposition's complete
+archive-hash, safe-extraction, and atomic-promotion contract. No segmentation
+or labeling algorithm is copied. The boundary is tested for the same pinned
+SPINEPS tag commit `ad622b87d9e4b81fb6a88df2a8050bd40f7046d5` and TPTBox
+0.7.5 APIs, including reuse of the precomputed upstream crop output without a
+download.
+
+SPINEPS, TPTBox, and the VIBESegmentator source repositories declare the
+Apache License 2.0. The TPTBox 0.7.5 wheel metadata contains an inconsistent
+AGPL classifier even though its included LICENSE and upstream repository state
+Apache-2.0. The project decision uses the repeatedly declared Apache-2.0
+project license for this pin. The wheel-metadata discrepancy is retained as a
+non-blocking provenance note.
+
+BodyComposition does not redistribute the pinned SPINEPS
+semantic/instance/VERIDAH archives or VibeSeg Dataset100 archives. They are not
+stored in this repository, wheel, source distribution, or public container.
+The model directory is mounted at runtime, and the BodyComposition model-sync
+command downloads the exact assets from their original upstream release URLs,
+verifies their byte sizes and SHA-256 digests, and installs them atomically.
+This upstream-sync-only policy is the release decision; permission to rehost or
+bundle the weights is not required for the weight-free release. A future choice
+to redistribute weights would require a separate review.
+
+Required scholarly acknowledgments include:
+
+- Möller H, Graf R, Schmitt J, et al. SPINEPS—automatic whole spine
+  segmentation of T2-weighted MR images using a two-phase approach to
+  multi-class semantic and instance segmentation. European Radiology. 2024.
+  https://doi.org/10.1007/s00330-024-11155-y
+- Möller H, Schoen H, Graf R, et al. VERIDAH: Solving Enumeration Anomaly
+  Aware Vertebra Labeling across Imaging Sequences. arXiv:2601.14066. 2026.
+- Graf R, Platzek P, Riedel EO, et al. VIBESegmentator: full body MRI
+  segmentation for the NAKO and UK Biobank. European Radiology. 2025.
+  https://doi.org/10.1007/s00330-025-12035-9
+
+The complete Apache License 2.0 is available in the upstream repositories and
+in the installed distributions. Copyright remains with their respective
+authors and contributors. This acknowledgment does not imply endorsement of
+BodyComposition by those projects.

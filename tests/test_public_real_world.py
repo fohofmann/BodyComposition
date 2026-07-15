@@ -14,15 +14,24 @@ import pytest
 import requests
 import SimpleITK as sitk
 
+from BodyComposition.orientation.ctdeeprot import (
+    CHECKPOINT_SHA256,
+    UPSTREAM_COMMIT as CTDEEPROT_COMMIT,
+    verify_checkpoint,
+)
+from BodyComposition.vertebral.spineps_assets import verify_model_bundle
+from BodyComposition.vertebral.spineps_manifest import (
+    MODEL_BUNDLE_VERSION,
+    SPINEPS_MODEL_ASSETS,
+    VIBESEG_CROP_ASSETS,
+)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPOSITORY_ROOT / "tests/fixtures/public_ct/ct_org_volume_0.json"
 RUN_ENVIRONMENT_VARIABLE = "BODYCOMPOSITION_RUN_REAL_WORLD_TEST"
 
-MODEL_ASSETS = {
-    "Dataset601_VertebralBodies/nnUNetTrainer__nnUNetResEncUNetMPlans__3d_fullres/dataset.json": "5fa8ef393148d555064b8f335bcf4f2fe90bcd7d60b23f5b4e30f5281f1a5061",
-    "Dataset601_VertebralBodies/nnUNetTrainer__nnUNetResEncUNetMPlans__3d_fullres/plans.json": "48179675760a922ed388fba505816bf7a1305a12b4b4e8f34aaefa66c5f2721e",
-    "Dataset601_VertebralBodies/nnUNetTrainer__nnUNetResEncUNetMPlans__3d_fullres/fold_all/checkpoint_final.pth": "0ebcfa65b7c3acc145839403db80676deca494ee5a0d46fa2db3a6607fdf2862",
+TISSUE_MODEL_ASSETS = {
     "Dataset611_BodyComposition/nnUNetTrainer__nnUNetResEncUNetMPlans__3d_fullres/dataset.json": "9841afba9b5f2180d870f68e12eb3e5695c5c0e4f64b91dabc52d849d67c340c",
     "Dataset611_BodyComposition/nnUNetTrainer__nnUNetResEncUNetMPlans__3d_fullres/plans.json": "d80992884b678fae2e6e09ad4147a30a59bcf39d6fd75f40da6a6bb57ef09afd",
     "Dataset611_BodyComposition/nnUNetTrainer__nnUNetResEncUNetMPlans__3d_fullres/fold_all/checkpoint_final.pth": "91ca20c9bd2674cbc0c25a5e56c70e3285b8e8f6bdf064430ad4a1d76de65f90",
@@ -31,7 +40,11 @@ MODEL_ASSETS = {
 EXPECTED_OUTPUTS = (
     "orientation/{case_id}/orientation_report.json",
     "orientation/{case_id}/orientation_review.png",
-    "labels/{case_id}_int-vertebrae.nii.gz",
+    "masks/{case_id}_vertebral-bodies.nii.gz",
+    "masks/{case_id}_spineps-semantic.nii.gz",
+    "masks/{case_id}_spineps-vertebrae.nii.gz",
+    "qc/{case_id}_vertebral-result.json",
+    "qc/{case_id}_spine-review.png",
     "labels/{case_id}_int-bodycomposition.nii.gz",
     "masks/{case_id}_int-bodycomposition.nii.gz",
     "exports/{case_id}_raw.csv",
@@ -104,19 +117,32 @@ def _public_ct_path(manifest: dict) -> Path:
     return _download_public_ct(manifest, cache_root)
 
 
-def _model_root() -> Path:
+def _model_bundle() -> dict[str, Path]:
     configured = os.environ.get("BODYCOMPOSITION_MODEL_ROOT")
     assert configured, (
         "BODYCOMPOSITION_MODEL_ROOT must point to the directory containing "
-        "Dataset601_VertebralBodies and Dataset611_BodyComposition."
+        "Dataset611_BodyComposition, SPINEPS/spineps-veridah-ct-v1, and CTDeepRot."
     )
     root = Path(configured).expanduser().resolve()
     assert root.is_dir(), f"Model root does not exist: {root}"
-    for relative_path, expected_hash in MODEL_ASSETS.items():
+    for relative_path, expected_hash in TISSUE_MODEL_ASSETS.items():
         path = root / relative_path
         assert path.is_file(), f"Pinned model asset not found: {path}"
         assert _sha256(path) == expected_hash, f"Pinned model asset changed: {path}"
-    return root
+    spineps_root = root / "SPINEPS" / MODEL_BUNDLE_VERSION
+    verify_model_bundle(spineps_root, full=True)
+    checkpoint = Path(
+        os.environ.get(
+            "BODYCOMPOSITION_CTDEEPROT_CHECKPOINT",
+            root / "CTDeepRot" / CTDEEPROT_COMMIT / "net2d.pt",
+        )
+    ).expanduser().resolve()
+    verify_checkpoint(checkpoint)
+    return {
+        "tissue": root / "Dataset611_BodyComposition",
+        "spineps": spineps_root,
+        "ctdeeprot": checkpoint,
+    }
 
 
 def _assert_cuda_available() -> dict:
@@ -205,7 +231,7 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
 
     manifest = _load_manifest()
     public_ct = _public_ct_path(manifest)
-    model_root = _model_root()
+    models = _model_bundle()
     runtime = _assert_cuda_available()
 
     nifti = nib.load(public_ct)
@@ -231,15 +257,26 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
             "workspace": str(workspace),
             "logs": str(workspace / "logs/BodyCompositionFast_{timestamp}.log"),
             "weights": {
-                "int-vertebrae": str(model_root / "Dataset601_VertebralBodies"),
-                "int-bodycomposition": str(model_root / "Dataset611_BodyComposition"),
+                "spineps": str(models["spineps"]),
+                "int-bodycomposition": str(models["tissue"]),
             },
             "cache": str(workspace / "cache"),
         },
         "logging_level": {"file": "INFO", "console": "WARNING"},
         "run": {"reset": False, "skip": True, "timeout": 1800},
+        "orientation": {
+            "model": {"checkpoint_path": str(models["ctdeeprot"])},
+        },
         "segmentation": {"save_label": True},
-        "vertebrae": {"save_mask": False},
+        "vertebrae": {
+            "backend": "spineps_veridah_ct_v1",
+            "save_mask": True,
+            "spineps": {
+                "device": "cuda",
+                "save_native_outputs": True,
+                "review_enabled": True,
+            },
+        },
         "tissue": {"save_mask": True},
     }
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -275,7 +312,15 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
     assert not orientation_report["manual_review_required"]
 
     ct_image = sitk.ReadImage(str(public_ct))
-    vertebrae_image = sitk.ReadImage(str(workspace / f"labels/{case_id}_int-vertebrae.nii.gz"))
+    vertebral_body_image = sitk.ReadImage(
+        str(workspace / f"masks/{case_id}_vertebral-bodies.nii.gz")
+    )
+    spineps_semantic_image = sitk.ReadImage(
+        str(workspace / f"masks/{case_id}_spineps-semantic.nii.gz")
+    )
+    spineps_whole_image = sitk.ReadImage(
+        str(workspace / f"masks/{case_id}_spineps-vertebrae.nii.gz")
+    )
     tissue_label_image = sitk.ReadImage(
         str(workspace / f"labels/{case_id}_int-bodycomposition.nii.gz")
     )
@@ -283,7 +328,9 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
         str(workspace / f"masks/{case_id}_int-bodycomposition.nii.gz")
     )
 
-    assert _same_geometry(ct_image, vertebrae_image)
+    assert _same_geometry(ct_image, vertebral_body_image)
+    assert _same_geometry(ct_image, spineps_semantic_image)
+    assert _same_geometry(ct_image, spineps_whole_image)
     assert _same_geometry(tissue_label_image, tissue_mask_image)
     assert np.allclose(tissue_label_image.GetSpacing(), ct_image.GetSpacing())
     assert np.allclose(tissue_label_image.GetDirection(), ct_image.GetDirection())
@@ -296,10 +343,27 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
     assert np.isclose(crop_start[2], round(crop_start[2]), atol=1e-4)
     assert 0 <= round(crop_start[2]) < ct_image.GetSize()[2]
 
-    vertebrae_values = np.unique(sitk.GetArrayViewFromImage(vertebrae_image)).tolist()
+    vertebral_body = sitk.GetArrayFromImage(vertebral_body_image)
+    spineps_semantic = sitk.GetArrayFromImage(spineps_semantic_image)
+    spineps_whole = sitk.GetArrayFromImage(spineps_whole_image)
+    expected_vertebral_body = np.where(spineps_semantic == 49, spineps_whole, 0)
+    assert np.array_equal(vertebral_body, expected_vertebral_body)
+    assert np.all((vertebral_body == 0) | (vertebral_body == spineps_whole))
+    assert np.count_nonzero(vertebral_body) <= np.count_nonzero(spineps_whole)
+
+    vertebrae_values = np.unique(vertebral_body).tolist()
     tissue_values = np.unique(sitk.GetArrayViewFromImage(tissue_mask_image)).tolist()
-    assert {14, 15, 16}.issubset(vertebrae_values)
+    assert {21, 22, 23}.issubset(vertebrae_values)
     assert {1, 3}.issubset(tissue_values)
+
+    vertebral_result = json.loads(
+        (workspace / f"qc/{case_id}_vertebral-result.json").read_text(encoding="utf-8")
+    )
+    assert vertebral_result["backend_id"] == "spineps_veridah_ct_v1"
+    assert vertebral_result["execution_status"] == "succeeded"
+    assert vertebral_result["label_schema"]["22"] == "L3"
+    assert vertebral_result["provenance"]["vibeseg_precomputed"] is True
+    assert str(models["spineps"]) not in json.dumps(vertebral_result)
 
     raw = pd.read_csv(workspace / f"exports/{case_id}_raw.csv")
     l3_summary = pd.read_csv(workspace / "exports/all_L3Mean.csv")
@@ -341,7 +405,14 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
         "asset_id": case_id,
         "input_sha256": manifest["integrity"]["sha256"],
         "input_bytes": manifest["integrity"]["bytes"],
-        "model_sha256": MODEL_ASSETS,
+        "ctdeeprot_sha256": CHECKPOINT_SHA256,
+        "tissue_model_sha256": TISSUE_MODEL_ASSETS,
+        "spineps_model_sha256": {
+            asset.asset_name: asset.sha256 for asset in SPINEPS_MODEL_ASSETS
+        },
+        "vibeseg_model_sha256": {
+            asset.asset_name: asset.sha256 for asset in VIBESEG_CROP_ASSETS
+        },
         "runtime": runtime,
         "ct_size_xyz": list(ct_image.GetSize()),
         "ct_spacing_xyz_mm": list(ct_image.GetSpacing()),

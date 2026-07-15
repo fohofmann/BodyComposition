@@ -5,13 +5,16 @@ def BodyComposition(pipeline):
     from BodyComposition.actions.data_loading import LoadMetadata
     from BodyComposition.actions.data_postprocessing import DataCombine, DataExport
     from BodyComposition.actions.masks_int import MasksInternalTissue
-    from BodyComposition.actions.segm_int import SegmIntBodyComposition, SegmIntVertebrae
+    from BodyComposition.actions.segm_int import SegmIntBodyComposition
+    from BodyComposition.actions.vertebral import vertebral_backend_actions
+
+    vertebral_actions, vertebral_mask = vertebral_backend_actions(pipeline)
 
     return [
-        SegmIntVertebrae(pipeline, image="tmp/index", model="ResEncL"),
+        *vertebral_actions,
         SegmIntBodyComposition(pipeline, image="tmp/index", model="ResEncL"),
         MasksInternalTissue(pipeline, image="tmp/index"),
-        CalcVertebralLevel(pipeline, mask="labels/{caseid}_int-vertebrae.nii.gz"),
+        CalcVertebralLevel(pipeline, mask=vertebral_mask),
         CalcMeasures(
             pipeline,
             mask="masks/{caseid}_int-bodycomposition.nii.gz",
@@ -38,20 +41,23 @@ def BodyCompositionFast(pipeline):
         DataSubset,
     )
     from BodyComposition.actions.masks_int import MasksInternalTissue
-    from BodyComposition.actions.segm_int import SegmIntBodyComposition, SegmIntVertebrae
+    from BodyComposition.actions.segm_int import SegmIntBodyComposition
+    from BodyComposition.actions.vertebral import vertebral_backend_actions
+
+    vertebral_actions, vertebral_mask = vertebral_backend_actions(pipeline)
 
     return [
-        SegmIntVertebrae(pipeline, image="tmp/index", model="ResEncM"),
+        *vertebral_actions,
         CreateBoundingBox(
             pipeline,
-            label="labels/{caseid}_int-vertebrae.nii.gz",
+            label=vertebral_mask,
             task="L234CranioCaudal",
         ),
         ApplyBoundingBox(pipeline, input="tmp/index"),
-        ApplyBoundingBox(pipeline, input="labels/{caseid}_int-vertebrae.nii.gz"),
+        ApplyBoundingBox(pipeline, input=vertebral_mask),
         SegmIntBodyComposition(pipeline, image="tmp/index", model="ResEncM"),
         MasksInternalTissue(pipeline, image="tmp/index"),
-        CalcVertebralLevel(pipeline, mask="labels/{caseid}_int-vertebrae.nii.gz"),
+        CalcVertebralLevel(pipeline, mask=vertebral_mask),
         CalcMeasures(pipeline, mask="masks/{caseid}_int-bodycomposition.nii.gz"),
         LoadMetadata(pipeline, input="metadata/{caseid}.csv"),
         DataCombine(pipeline),

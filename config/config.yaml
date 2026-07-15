@@ -3,6 +3,7 @@ paths:
   logs: ./logs/{method}_{timestamp}.log # available: method, filter, timestamp
   weights:
     int-vertebrae: ./models/Dataset601_VertebralBodies
+    spineps: ./models/SPINEPS/spineps-veridah-ct-v1
     int-bodycomposition: ./models/Dataset611_BodyComposition
     stanford-spine: ./models/Task252_StanfordSpine
     stanford-tissue: ./models/Task253_StanfordTissue
@@ -50,6 +51,7 @@ segmentation:
   save_label: True
 
 vertebrae:
+  backend: spineps_veridah_ct_v1
   save_mask: True
   min_voxels_per_vertebra: 20
   fill_undefined_levels: True
@@ -57,6 +59,11 @@ vertebrae:
   correct_monotonicity_max_windowsize: 10
   center_of_mass: True
   deprioritize_labels: [19] # Sacrum
+  deprioritize_anatomical: [SACRUM]
+  spineps:
+    device: auto
+    save_native_outputs: True
+    review_enabled: True
 
 tissue:
   save_mask: True
@@ -109,9 +116,11 @@ crop:
     margin: [-20, -20, 0, 0, 0, 0] # in mm, is transformed to px later
   L3CranioCaudal:
     roi: [15] # labels
+    roi_anatomical: [L3]
     axes: [True, True, False, False, False, False] # SAR+: inferor -> superior, posterior -> anterior, left -> right
     margin: [0, 0, 0, 0, 0, 0] # SAR+: inferor -> superior, posterior -> anterior, left -> right
   L234CranioCaudal:
     roi: [14,15,16] # labels
+    roi_anatomical: [L2, L3, L4]
     axes: [True, True, False, False, False, False] # SAR+: inferor -> superior, posterior -> anterior, left -> right
     margin: [0, 0, 0, 0, 0, 0] # SAR+: inferor -> superior, posterior -> anterior, left -> right

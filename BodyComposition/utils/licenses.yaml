@@ -6,6 +6,36 @@ ctdeeprot:
   license: 'BSD-3-Clause code; checkpoint fetched from pinned upstream and not redistributed'
   citation: 'Jakubicek R, Vicar T, Chmelik J. A Tool for Automatic Estimation of Patient Position in Spinal CT Data. IFMBE Proceedings. 2021;80:51-56.'
 
+spineps:
+  title: 'SPINEPS 2.0.0 (default vertebral segmentation backend)'
+  link:
+    - 'https://github.com/Hendrik-code/spineps'
+    - 'https://doi.org/10.1007/s00330-024-11155-y'
+  license: 'Apache-2.0 code; pinned model archives synchronized from upstream and not redistributed'
+  citation: 'Möller H, Graf R, Schmitt J, et al. SPINEPS—automatic whole spine segmentation of T2-weighted MR images using a two-phase approach to multi-class semantic and instance segmentation. European Radiology. 2024. https://doi.org/10.1007/s00330-024-11155-y'
+
+veridah:
+  title: 'VERIDAH vertebra labeling model (SPINEPS ct_labeling)'
+  link:
+    - 'https://github.com/Hendrik-code/spineps'
+    - 'https://arxiv.org/abs/2601.14066'
+  license: 'Code under SPINEPS Apache-2.0; model archive synchronized from its original upstream release and not redistributed'
+  citation: 'Möller H, Schoen H, Graf R, et al. VERIDAH: Solving Enumeration Anomaly Aware Vertebra Labeling across Imaging Sequences. arXiv:2601.14066. 2026.'
+
+tptbox:
+  title: 'TPTBox 0.7.5'
+  link: 'https://github.com/Hendrik-code/TPTBox'
+  license: 'Apache-2.0 project license; pinned wheel metadata discrepancy documented in THIRD_PARTY_NOTICES.md'
+  citation: 'TPTBox contributors. Torso Processing ToolBox. https://github.com/Hendrik-code/TPTBox'
+
+vibeseg:
+  title: 'VIBESegmentator Dataset100 crop model via pinned TPTBox'
+  link:
+    - 'https://github.com/robert-graf/VIBESegmentator'
+    - 'https://doi.org/10.1007/s00330-025-12035-9'
+  license: 'Apache-2.0 code; Dataset100 archives synchronized from their original upstream release and not redistributed'
+  citation: 'Graf R, Platzek P, Riedel EO, et al. VIBESegmentator: full body MRI segmentation for the NAKO and UK Biobank. European Radiology. 2025. https://doi.org/10.1007/s00330-025-12035-9'
+
 totalsegmentator:
   title: 'TotalSegmentator dataset & model weights'
   link:

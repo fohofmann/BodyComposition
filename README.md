@@ -8,16 +8,19 @@ This package combines existing models of [TotalSegmentator](https://github.com/w
    git clone https://github.com/fohofmann/BodyComposition.git
    cd BodyComposition
    ```
-2. Create a separate environment and install the project. Local development uses `uv`:
+2. Create the pinned Python 3.11 environment with `uv`:
    ```bash
-   uv venv
-   uv pip install -e .
+   uv sync --frozen
    ```
 3. Make sure the required model weights are available.
 
 ## Model weights
 
-This pipeline uses model weights derived from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) for tissue segmentation, and model weights from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) or [Comp2Comp](https://huggingface.co/louisblankemeier/stanford_spine) or [an modified model](https://huggingface.co/fhofmann), based on labels from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator/) and [VerSe](https://github.com/anjany/verse), for spine segmentation. The pipeline combines these models with pre- and postprocessing steps. Details on the models can be found in [docs/models.md](docs/models.md), and how to combine them in [docs/pipeline.md](docs/pipeline.md).
+The default vertebral backend is pinned SPINEPS 2.0.0 plus its VERIDAH
+`ct_labeling` model. VibeSeg Dataset100, called through pinned TPTBox 0.7.5,
+provides the required crop mask. The internal ResEncL and ResEncM vertebral
+models remain explicitly selectable. Details are in
+[docs/models.md](docs/models.md).
 
 **Pipelines that use TotalSegmentator require the `tissue_types` and, for some configurations, `vertebrae_body` tasks. We do not provide these weights directly; obtain and use them under the applicable TotalSegmentator license.**
 
@@ -34,12 +37,13 @@ This pipeline uses model weights derived from [TotalSegmentator](https://github.
   - By default, the pipeline uses the `./models` directory to store the model weights other than TotalSegmentator. You can set individual paths by editing `config/config.yaml` and setting `paths/weights`. 
 
 4. Download model weights.
-  - **If you use TotalSegmentator models only,** you can skip this. TotalSegmentator will download the models automatically, if not available.
-  - **Alternatively, you can download the model weights using `bodycomposition_download_models`**:
+  - Download the exact models required by a pipeline using `bodycomposition_download_models`:
     ```bash
     bodycomposition_download_models --pipeline BodyCompositionFast
     ```
-    This script will download the models and store them in the directories as defined in `config/config.yaml`. You can download single models (using `--model`), or all models required for a specific pipeline (using `--pipeline`).
+    This script stores models in the directories defined in `config/config.yaml`.
+    Default inference never downloads SPINEPS, VERIDAH, VibeSeg, or CTDeepRot
+    assets implicitly.
 
 The orientation-enabled pipelines also require the approximately 43 MiB
 CTDeepRot 2D checkpoint. Synchronize it explicitly from the pinned upstream
@@ -55,13 +59,41 @@ the case with an instruction to run the synchronization command. Set
 `BODYCOMPOSITION_CTDEEPROT_CHECKPOINT` only when a verified checkpoint is kept
 at a controlled alternative path.
 
+The default vertebral backend additionally requires three pinned SPINEPS model
+archives and all three VibeSeg Dataset100 archives (about 3.2 GB combined):
+
+```bash
+bodycomposition_download_models --model SPINEPS-VERIDAH
+bodycomposition_download_models --model SPINEPS-VERIDAH --check
+```
+
+The synchronization is checksum-verified, atomic, and idempotent. Model weights
+are fetched from their exact original upstream release URLs and are never
+redistributed in the source, wheel, or public container. SPINEPS, VERIDAH,
+TPTBox, VibeSeg, and their papers must be acknowledged as described in
+`THIRD_PARTY_NOTICES.md`.
+
+The container uses a mounted model directory. Hydrate it with the same
+BodyComposition command; no separate SPINEPS or VibeSeg installation is needed:
+
+```bash
+docker run --rm \
+  --entrypoint bodycomposition_download_models \
+  --mount type=bind,src=/absolute/path/to/models,dst=/app/models \
+  bodycomposition:0.3 \
+  --pipeline BodyCompositionFast
+```
+
+Reuse the same host directory at `/app/models` for every inference container.
+The image itself remains weight-free.
+
 ## Model-free checks
 
 The geometry, measurement, action-contract, configuration, CLI, and synthetic-pipeline tests do not download model weights:
 
 ```bash
-uv pip install -e '.[test]'
-uv run python -m pytest -q
+uv sync --frozen --extra test
+uv run --frozen python -m pytest -q
 ```
 
 ## Opt-in public CT integration test
@@ -82,6 +114,12 @@ BODYCOMPOSITION_MODEL_ROOT=/absolute/path/to/models \
 BODYCOMPOSITION_TEST_DATA_CACHE=/absolute/path/to/test-cache \
 uv run python -m pytest -m real_world tests/test_public_real_world.py -v
 ```
+
+The model root follows the default cache layout: `Dataset611_BodyComposition`,
+`SPINEPS/spineps-veridah-ct-v1`, and
+`CTDeepRot/492114b8f9f3a7f058d4e97c0dd3643fb8d39649/net2d.pt`. An explicitly
+mounted CTDeepRot checkpoint can instead be selected with
+`BODYCOMPOSITION_CTDEEPROT_CHECKPOINT`.
 
 To use an already downloaded copy instead of allowing network access, set
 `BODYCOMPOSITION_PUBLIC_CT_PATH=/absolute/path/to/ct_org_volume-0_0000.nii.gz`.
@@ -137,7 +175,7 @@ The following flags are available:
 - `--input` / `-i`: Path to input, either directory (e.g., `data/images`) or datalist file (*.json) or single NiFTI file
 - `--filter` / `-f`: Regex string to filter and subset input files (e.g., `'^ct_.*\.nii\.gz$'`)
 - `--config` / `-c`: Path to configuration file (*.yaml), or dictionary. Can be used to update the default configuration. For options, see [docs/config.md](docs/config.md).
-- `--method` / `-m`: Name of pipeline method to be run, as defined in the [pipeline_registry.py](BodyComposition/pipeline_registry.py). Currently available options are described in [docs/pipeline.md](docs/pipeline.md). Default pipeline is `BodyCompositionFast`, which uses TotalSegmentator for tissue segmentation and [an modified model](https://huggingface.co/fhofmann/VertebralBodiesCT-ResEncM), based on labels from [TotalSegmentator](https://github.com/wasserth/TotalSegmentator/) and [VerSe](https://github.com/anjany/verse), for vertebral body segmentation.
+- `--method` / `-m`: Name of pipeline method to be run, as defined in the [pipeline_registry.py](BodyComposition/pipeline_registry.py). Currently available options are described in [docs/pipeline.md](docs/pipeline.md). `BodyCompositionFast` uses SPINEPS/VERIDAH by default; select `vertebral_bodies_resenc_l` or `vertebral_bodies_resenc_m` through `vertebrae.backend` in a configuration override when required. A backend failure never triggers another model automatically.
 
 *`bin/run_batch.py` is just an command line access point to `python_api.py`. You can also use this API directly from your scripts. For details, [have a look at the file](BodyComposition/python_api.py).*
 
