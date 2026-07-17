@@ -1,27 +1,65 @@
 # libraries
-import cv2
 import numpy as np
 from skimage import measure
 import logging
-from scipy.ndimage import label as ndi_label, sum as ndi_sum, median_filter as ndi_median_filter
+from scipy.ndimage import label as ndi_label, sum as ndi_sum
+
+
+def _connectivity_rank(ndim: int, connectivity: int) -> int:
+    mapping = {
+        2: {4: 1, 8: 2},
+        3: {6: 1, 18: 2, 26: 3},
+    }
+    try:
+        return mapping[ndim][connectivity]
+    except KeyError as error:
+        allowed = sorted(mapping.get(ndim, {}))
+        raise ValueError(
+            f"Connectivity for a {ndim}D mask must be one of {allowed}, "
+            f"got {connectivity}."
+        ) from error
+
+
+def _component_size_threshold(
+    value: float,
+    *,
+    size_unit: str,
+    physical_voxel_size: float,
+) -> float:
+    if size_unit == "physical":
+        return float(value) / physical_voxel_size
+    if size_unit == "voxel":
+        return float(value)
+    raise ValueError("size_unit must be 'physical' or 'voxel'.")
 
 # function to remove small objects, per slice (2d)
-def _remove_small_objects_2d(mask, min_size=10):
-    components, output, stats, centroids = cv2.connectedComponentsWithStats(
-        mask.astype(np.uint8), connectivity=8
+def _remove_small_objects_2d(mask, min_size=10, connectivity=8):
+    labels = measure.label(
+        np.asarray(mask, dtype=bool),
+        connectivity=_connectivity_rank(2, connectivity),
     )
-    sizes = stats[1:, -1]
-    mask = np.zeros(output.shape, dtype=bool)
-    for i in range(0, components - 1):
-        if sizes[i] >= min_size:
-            mask[output == i + 1] = True
-    return mask
+    sizes = np.bincount(labels.ravel())
+    keep = sizes >= float(min_size)
+    keep[0] = False
+    return keep[labels]
 
 # function to remove small objects, 3d volume
-def _remove_small_objects_3d(mask, min_size=100, min_extent=0.1):
-    labels = measure.label(mask, connectivity=3)
+def _remove_small_objects_3d(
+    mask,
+    min_size=100,
+    min_extent=0.1,
+    connectivity=26,
+):
+    labels = measure.label(
+        np.asarray(mask, dtype=bool),
+        connectivity=_connectivity_rank(3, connectivity),
+    )
     props = measure.regionprops(labels)
-    labels_filtered = [prop.label for prop in props if prop.area >= min_size and prop.extent >= min_extent]
+    labels_filtered = [
+        prop.label
+        for prop in props
+        if prop.area >= float(min_size) and prop.extent >= min_extent
+    ]
     return np.isin(labels, labels_filtered)
 
 
@@ -32,8 +70,22 @@ def filter_hu(image_np: np.ndarray, hu_range: list):
 
 
 # function to remove small objects
-def remove_small_objects(mask_np, spacing_xyz, limit_size_version,
-                         limit_size_2D = 0, limit_size_3D = 0):
+def remove_small_objects(
+    mask_np,
+    spacing_xyz,
+    limit_size_version,
+    limit_size_2D=0,
+    limit_size_3D=0,
+    *,
+    size_unit="physical",
+    connectivity=None,
+):
+    """Remove connected components below a configured threshold in-place.
+
+    ``size_unit='physical'`` interprets the 2D/3D thresholds as mm2/mm3.
+    ``size_unit='voxel'`` interprets them as pixels/voxels, which is retained
+    only for reproducing resolution-dependent published implementations.
+    """
 
     spacing_xyz = np.asarray(spacing_xyz, dtype=float)
     if spacing_xyz.shape != (3,) or not np.all(np.isfinite(spacing_xyz)) or np.any(spacing_xyz <= 0):
@@ -45,14 +97,126 @@ def remove_small_objects(mask_np, spacing_xyz, limit_size_version,
     
     # remove small objects, 2d or 3d
     if limit_size_version == '2D' and limit_size_2D > 0:
+        connectivity = 8 if connectivity is None else int(connectivity)
+        threshold = _component_size_threshold(
+            limit_size_2D,
+            size_unit=size_unit,
+            physical_voxel_size=pix_area,
+        )
         for i in range(mask_np.shape[0]):
-            mask_np[i, :, :][~_remove_small_objects_2d(mask_np[i, :, :], limit_size_2D/pix_area)] = 0
-        logging.info(f"  removed small objects (2D size < {limit_size_2D} mm^2)")
+            mask_np[i, :, :] = _remove_small_objects_2d(
+                mask_np[i, :, :],
+                threshold,
+                connectivity=connectivity,
+            )
+        unit = "mm^2" if size_unit == "physical" else "pixels"
+        logging.info(
+            "  removed small objects (2D size < %s %s; connectivity=%s)",
+            limit_size_2D,
+            unit,
+            connectivity,
+        )
     elif limit_size_version == '3D' and limit_size_3D > 0:
+        connectivity = 26 if connectivity is None else int(connectivity)
+        threshold = _component_size_threshold(
+            limit_size_3D,
+            size_unit=size_unit,
+            physical_voxel_size=pix_vol,
+        )
         mask_np[:] = _remove_small_objects_3d(mask_np,
-                                              min_size=limit_size_3D/pix_vol,
-                                              min_extent=0)
-        logging.info(f"  removed small objects (3D size < {limit_size_3D} mm^3)")
+                                              min_size=threshold,
+                                              min_extent=0,
+                                              connectivity=connectivity)
+        unit = "mm^3" if size_unit == "physical" else "voxels"
+        logging.info(
+            "  removed small objects (3D size < %s %s; connectivity=%s)",
+            limit_size_3D,
+            unit,
+            connectivity,
+        )
+
+
+def _fill_small_holes_nd(mask: np.ndarray, maximum_size: float, connectivity: int) -> np.ndarray:
+    """Fill enclosed background components smaller than ``maximum_size``."""
+
+    boolean = np.asarray(mask, dtype=bool)
+    labels = measure.label(
+        ~boolean,
+        connectivity=_connectivity_rank(boolean.ndim, connectivity),
+    )
+    if not np.any(labels):
+        return boolean.copy()
+    border = np.concatenate(
+        [
+            labels.take(0, axis=axis).ravel()
+            for axis in range(boolean.ndim)
+        ]
+        + [
+            labels.take(-1, axis=axis).ravel()
+            for axis in range(boolean.ndim)
+        ]
+    )
+    exterior = np.unique(border)
+    sizes = np.bincount(labels.ravel())
+    fill = sizes < float(maximum_size)
+    fill[0] = False
+    fill[exterior] = False
+    return boolean | fill[labels]
+
+
+def fill_small_holes(
+    mask_np,
+    spacing_xyz,
+    limit_size_version,
+    limit_size_2D=0,
+    limit_size_3D=0,
+    *,
+    size_unit="physical",
+    connectivity=None,
+):
+    """Fill small enclosed holes in-place using explicit dimensions and units."""
+
+    spacing_xyz = np.asarray(spacing_xyz, dtype=float)
+    if spacing_xyz.shape != (3,) or not np.all(np.isfinite(spacing_xyz)) or np.any(spacing_xyz <= 0):
+        raise ValueError(f'spacing_xyz must contain three finite positive values, got {spacing_xyz}.')
+    pix_area = float(spacing_xyz[0] * spacing_xyz[1])
+    pix_vol = float(np.prod(spacing_xyz))
+
+    if limit_size_version == "2D" and limit_size_2D > 0:
+        connectivity = 8 if connectivity is None else int(connectivity)
+        threshold = _component_size_threshold(
+            limit_size_2D,
+            size_unit=size_unit,
+            physical_voxel_size=pix_area,
+        )
+        for index in range(mask_np.shape[0]):
+            mask_np[index] = _fill_small_holes_nd(
+                mask_np[index],
+                threshold,
+                connectivity,
+            )
+        unit = "mm^2" if size_unit == "physical" else "pixels"
+        logging.info(
+            "  filled holes (2D size < %s %s; connectivity=%s)",
+            limit_size_2D,
+            unit,
+            connectivity,
+        )
+    elif limit_size_version == "3D" and limit_size_3D > 0:
+        connectivity = 26 if connectivity is None else int(connectivity)
+        threshold = _component_size_threshold(
+            limit_size_3D,
+            size_unit=size_unit,
+            physical_voxel_size=pix_vol,
+        )
+        mask_np[:] = _fill_small_holes_nd(mask_np, threshold, connectivity)
+        unit = "mm^3" if size_unit == "physical" else "voxels"
+        logging.info(
+            "  filled holes (3D size < %s %s; connectivity=%s)",
+            limit_size_3D,
+            unit,
+            connectivity,
+        )
 
 
 

@@ -1,0 +1,7 @@
+tissue:
+  profile_id: boa_optional_median_1x3x3_v1
+  hu_denoise:
+    method: median
+    apply_to: [imat, sm, vat, sat]
+    filter_median: true
+    filter_median_kernel: [1, 3, 3]

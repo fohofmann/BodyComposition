@@ -80,6 +80,7 @@ def test_internal_size_filter_removes_small_eligible_tissue_islands_after_inters
             "filter_size": True,
             "filter_size_version": "2D",
             "filter_size_2D": 2,
+            "filter_size_connectivity": 8,
         }
     )
     action = MasksInternalTissue(pipeline_stub, image="tmp/index")
@@ -100,6 +101,7 @@ def test_internal_size_filter_removes_small_eligible_tissue_islands_after_inters
     action(memory)
 
     output = memory[action.output_mask_name].data
+    assert label.path.exists()
     assert output[0, 2, 2] == 0
     assert np.all(output[0, 5:7, 5:7] == action.LBL_TISSUE_R["SM"])
 
@@ -117,6 +119,7 @@ def test_imat_size_filter_does_not_connect_through_pixels_outside_muscle_compart
             "filter_size": True,
             "filter_size_version": "2D",
             "filter_size_2D": 2,
+            "filter_size_connectivity": 8,
         }
     )
     action = MasksInternalTissue(pipeline_stub, image="tmp/index")

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bodycomposition.local/schemas/reporting_config.schema.json",
+  "title": "BodyComposition reporting configuration",
+  "type": "object",
+  "required": [
+    "enabled",
+    "layout",
+    "individual_pdf",
+    "combined_pdf",
+    "page_size",
+    "spine_view",
+    "measure_aggregation",
+    "measurement_columns",
+    "vertebral_range",
+    "include_qc_flags",
+    "manual_review_summary",
+    "numeric_precision",
+    "locale",
+    "missing_value_symbol",
+    "ct_window",
+    "overlay_opacity",
+    "sagittal_slab_margin_mm",
+    "projection_spacing_mm"
+  ],
+  "properties": {
+    "enabled": {"type": "boolean"},
+    "layout": {"enum": ["spine_overview_v1", "spine_profile_v2"]},
+    "individual_pdf": {"const": true},
+    "combined_pdf": {"type": "boolean"},
+    "page_size": {"const": "A4_landscape"},
+    "spine_view": {"const": "sagittal_thick_slab_v1"},
+    "measure_aggregation": {"const": "territory_mean"},
+    "measurement_columns": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "sm_mean_csa_cm2",
+          "sm_mean_hu",
+          "imat_mean_csa_cm2",
+          "total_vat_mean_csa_cm2",
+          "sat_mean_csa_cm2",
+          "trunk_mean_circumference_cm"
+        ]
+      }
+    },
+    "vertebral_range": {"const": "detected"},
+    "include_qc_flags": {"const": true},
+    "manual_review_summary": {"const": "auto"},
+    "numeric_precision": {"type": "integer", "minimum": 0, "maximum": 3},
+    "locale": {"const": "en"},
+    "missing_value_symbol": {"type": "string", "minLength": 1, "pattern": "^[\\x20-\\x7E]+$"},
+    "ct_window": {
+      "type": "array",
+      "prefixItems": [{"type": "number"}, {"type": "number"}],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "overlay_opacity": {"type": "number", "minimum": 0, "maximum": 1},
+    "sagittal_slab_margin_mm": {"type": "number", "exclusiveMinimum": 0},
+    "projection_spacing_mm": {"type": "number", "exclusiveMinimum": 0, "maximum": 3}
+  },
+  "additionalProperties": false
+}

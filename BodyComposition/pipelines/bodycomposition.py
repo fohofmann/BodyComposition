@@ -23,6 +23,7 @@ def _canonical_bodycomposition_pipeline(pipeline, *, tissue_model: str):
         )
     vertebral_actions, vertebral_body_source = vertebral_backend_actions(pipeline)
     tissue_mask = "masks/{caseid}_int-bodycomposition.nii.gz"
+    compartment_mask = "labels/{caseid}_int-bodycomposition.nii.gz"
     measurement_actions = measurement_support_actions(
         pipeline,
         tissue_mask=tissue_mask,
@@ -38,11 +39,16 @@ def _canonical_bodycomposition_pipeline(pipeline, *, tissue_model: str):
             tissue_mask=tissue_mask,
             tissue_backend_id=tissue_backend_id,
             vertebral_body_source=vertebral_body_source,
+            compartment_mask=compartment_mask,
         ),
     ]
     if pipeline.config["measurements"]["review"]["enabled"]:
         actions.append(WriteMeasurementReview(pipeline))
     actions.append(ExportMeasurementBundle(pipeline))
+    if pipeline.config["reporting"]["enabled"]:
+        from BodyComposition.actions.reporting import RenderCaseReport
+
+        actions.append(RenderCaseReport(pipeline))
     return actions
 
 

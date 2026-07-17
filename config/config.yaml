@@ -66,13 +66,27 @@ vertebrae:
     review_enabled: True
 
 tissue:
+  profile_id: hofmann_2025_canonical_raw_v1
   save_mask: True
+  save_compartment_mask: True
 
   hu_denoise:
+    # Classification preprocessing only. Canonical attenuation measurements
+    # always use the untouched prepared CT.
+    method: none # none, median, adaptive_median, curvature_anisotropic_diffusion
+    apply_to: [imat, sm, vat, sat]
     filter_outliers: False
     filter_outliers_range: [-1024, 3071] # clipping metal implants and noisy outliers
+    # Legacy compatibility flag; when true, method must be median.
     filter_median: False
     filter_median_kernel: [1,3,3] # z y x
+    adaptive_median_min_kernel: [1,3,3]
+    adaptive_median_max_kernel: [1,7,7]
+    anisotropic_diffusion:
+      dimensionality: 2D
+      iterations: 5
+      time_step: 0.0625
+      conductance: 3.0
 
   imat:
     filter_hu: True
@@ -83,6 +97,14 @@ tissue:
     filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 10 # mm^2
     filter_size_3D: 20 # mm^3
+    filter_size_unit: physical # physical or voxel (pixels in 2D)
+    filter_size_connectivity: 26
+    fill_holes: False
+    fill_holes_version: 2D
+    fill_holes_2D: 0
+    fill_holes_3D: 0
+    fill_holes_unit: physical
+    fill_holes_connectivity: 8
 
   sm:
     filter_hu: True
@@ -91,6 +113,14 @@ tissue:
     filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 10 # mm^2
     filter_size_3D: 20 # mm^3
+    filter_size_unit: physical
+    filter_size_connectivity: 26
+    fill_holes: False
+    fill_holes_version: 2D
+    fill_holes_2D: 0
+    fill_holes_3D: 0
+    fill_holes_unit: physical
+    fill_holes_connectivity: 8
 
   vat: # in some studies differently defined than sat
     filter_hu: True
@@ -99,6 +129,14 @@ tissue:
     filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 20 # mm^2
     filter_size_3D: 20 # mm^3
+    filter_size_unit: physical
+    filter_size_connectivity: 26
+    fill_holes: False
+    fill_holes_version: 2D
+    fill_holes_2D: 0
+    fill_holes_3D: 0
+    fill_holes_unit: physical
+    fill_holes_connectivity: 8
 
   sat:
     filter_hu: True
@@ -107,12 +145,84 @@ tissue:
     filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 20 # mm^2
     filter_size_3D: 50 # mm^3
+    filter_size_unit: physical
+    filter_size_connectivity: 26
+    fill_holes: False
+    fill_holes_version: 2D
+    fill_holes_2D: 0
+    fill_holes_3D: 0
+    fill_holes_unit: physical
+    fill_holes_connectivity: 8
 
 measurements:
   enabled: True
   totalsegmentator_version: 2.15.0
   full_coverage_tolerance: 0.999
   l3_slab_length_mm: 200
+  # These phenotypes are derived from the untouched compartment labels and
+  # raw prepared CT. Disabled definitions can be activated by a literature
+  # profile without rerunning segmentation.
+  tissue_definitions:
+    muscle_compartment:
+      enabled: True
+      source_labels: [SM, IMAT]
+      hu_range: null
+    learned_imat:
+      enabled: True
+      source_labels: [IMAT]
+      hu_range: null
+    whole_bone_anatomical:
+      enabled: True
+      source_labels: [BONE]
+      hu_range: null
+    bone_tissue_hu_152_1000:
+      enabled: True
+      source_labels: [BONE]
+      hu_range: [152, 1000]
+    skeletal_muscle_tissue_hu_m29_150:
+      enabled: True
+      source_labels: [SM, IMAT]
+      hu_range: [-29, 150]
+    lama_hu_m29_29:
+      enabled: True
+      source_labels: [SM, IMAT]
+      hu_range: [-29, 29]
+    nama_hu_30_150:
+      enabled: True
+      source_labels: [SM, IMAT]
+      hu_range: [30, 150]
+    imat_ct_hu_m190_m30:
+      enabled: True
+      source_labels: [SM, IMAT]
+      hu_range: [-190, -30]
+    sat_total_hu_m190_m30:
+      enabled: True
+      source_labels: [SAT]
+      hu_range: [-190, -30]
+    vat_total_hu_m190_m30:
+      enabled: True
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-190, -30]
+    vat_total_hu_m150_m50:
+      enabled: True
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-150, -50]
+    vat_total_hu_m205_m51:
+      enabled: False
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-205, -51]
+    vat_total_hu_m195_m45:
+      enabled: False
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-195, -45]
+    vat_total_hu_m250_m50:
+      enabled: False
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-250, -50]
+    vat_total_hu_m274_m49:
+      enabled: False
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-274, -49]
   body_surface:
     backend: tissue_segmentation_envelope_v1
     save_mask: True
@@ -139,6 +249,34 @@ measurements:
   export:
     parquet: True
     csv: False
+
+# Optional derived PDF report. Canonical NIfTI/Parquet/JSON outputs remain
+# authoritative. Both released layouts are fixed ISO A4 landscape pages.
+reporting:
+  enabled: False
+  layout: spine_overview_v1 # or spine_profile_v2
+  individual_pdf: True
+  combined_pdf: True
+  page_size: A4_landscape
+  spine_view: sagittal_thick_slab_v1
+  measure_aggregation: territory_mean
+  measurement_columns:
+    - sm_mean_csa_cm2
+    - sm_mean_hu
+    - imat_mean_csa_cm2
+    - total_vat_mean_csa_cm2
+    - sat_mean_csa_cm2
+    - trunk_mean_circumference_cm
+  vertebral_range: detected
+  include_qc_flags: True
+  manual_review_summary: auto
+  numeric_precision: 1
+  locale: en
+  missing_value_symbol: NA
+  ct_window: [-450, 1050]
+  overlay_opacity: 0.42
+  sagittal_slab_margin_mm: 25
+  projection_spacing_mm: 1.5
 
 
 crop:

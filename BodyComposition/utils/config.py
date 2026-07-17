@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -122,6 +123,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         "vertebrae.spineps.save_native_outputs",
         "vertebrae.spineps.review_enabled",
         "tissue.save_mask",
+        "tissue.save_compartment_mask",
         "tissue.hu_denoise.filter_outliers",
         "tissue.hu_denoise.filter_median",
         "measurements.enabled",
@@ -216,13 +218,81 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     ):
         raise ConfigError("vertebrae.deprioritize_anatomical must be a list of names.")
 
+    tissue = _require_mapping(config, "tissue")
+    profile_id = tissue.get("profile_id")
+    if not isinstance(profile_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", profile_id):
+        raise ConfigError(
+            "tissue.profile_id must be a non-empty lowercase profile identifier."
+        )
     _require_range(config, "tissue.hu_denoise.filter_outliers_range")
-    median_kernel = _value(config, "tissue.hu_denoise.filter_median_kernel")
-    if not isinstance(median_kernel, list) or len(median_kernel) != 3 or any(
-        isinstance(value, bool) or not isinstance(value, int) or value <= 0
-        for value in median_kernel
+
+    def require_kernel(path: str) -> list[int]:
+        kernel = _value(config, path)
+        if not isinstance(kernel, list) or len(kernel) != 3 or any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+            or value % 2 == 0
+            for value in kernel
+        ):
+            raise ConfigError(
+                f"{path} must contain three positive odd integers."
+            )
+        return kernel
+
+    require_kernel("tissue.hu_denoise.filter_median_kernel")
+    adaptive_minimum = require_kernel("tissue.hu_denoise.adaptive_median_min_kernel")
+    adaptive_maximum = require_kernel("tissue.hu_denoise.adaptive_median_max_kernel")
+    if any(lower > upper for lower, upper in zip(adaptive_minimum, adaptive_maximum, strict=True)):
+        raise ConfigError(
+            "tissue.hu_denoise adaptive-median minimum kernel must not exceed its maximum."
+        )
+    denoise_method = _value(config, "tissue.hu_denoise.method")
+    if denoise_method not in {
+        "none",
+        "median",
+        "adaptive_median",
+        "curvature_anisotropic_diffusion",
+    }:
+        raise ConfigError("Unknown tissue.hu_denoise.method.")
+    apply_to = _value(config, "tissue.hu_denoise.apply_to")
+    if (
+        not isinstance(apply_to, list)
+        or len(set(apply_to)) != len(apply_to)
+        or any(name not in {"imat", "sm", "vat", "sat"} for name in apply_to)
     ):
-        raise ConfigError("tissue.hu_denoise.filter_median_kernel must contain three positive integers.")
+        raise ConfigError(
+            "tissue.hu_denoise.apply_to must be a unique subset of "
+            "[imat, sm, vat, sat]."
+        )
+    legacy_median = _value(config, "tissue.hu_denoise.filter_median")
+    if legacy_median != (denoise_method == "median"):
+        raise ConfigError(
+            "tissue.hu_denoise.filter_median is a legacy alias and must be true "
+            "exactly when method is median."
+        )
+    diffusion = _require_mapping(config, "tissue.hu_denoise.anisotropic_diffusion")
+    if diffusion.get("dimensionality") not in {"2D", "3D"}:
+        raise ConfigError(
+            "tissue.hu_denoise.anisotropic_diffusion.dimensionality must be 2D or 3D."
+        )
+    iterations = diffusion.get("iterations")
+    if isinstance(iterations, bool) or not isinstance(iterations, int) or iterations <= 0:
+        raise ConfigError(
+            "tissue.hu_denoise.anisotropic_diffusion.iterations must be a positive integer."
+        )
+    for key in ("time_step", "conductance"):
+        value = diffusion.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ConfigError(
+                f"tissue.hu_denoise.anisotropic_diffusion.{key} must be positive."
+            )
+    stable_time_step = 0.125 if diffusion["dimensionality"] == "2D" else 0.0625
+    if float(diffusion["time_step"]) > stable_time_step:
+        raise ConfigError(
+            "tissue.hu_denoise.anisotropic_diffusion.time_step exceeds the "
+            f"{diffusion['dimensionality']} stability limit {stable_time_step}."
+        )
 
     for tissue_name in ("imat", "sm", "vat", "sat"):
         base = f"tissue.{tissue_name}"
@@ -234,8 +304,94 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             raise ConfigError(f"Configuration value {base}.filter_size_version must be 2D or 3D.")
         _require_nonnegative_number(config, f"{base}.filter_size_2D")
         _require_nonnegative_number(config, f"{base}.filter_size_3D")
+        size_unit = _value(config, f"{base}.filter_size_unit")
+        if size_unit not in {"physical", "voxel"}:
+            raise ConfigError(f"{base}.filter_size_unit must be physical or voxel.")
+        size_connectivity = _value(config, f"{base}.filter_size_connectivity")
+        allowed_connectivity = {4, 8} if version == "2D" else {6, 18, 26}
+        if size_connectivity not in allowed_connectivity:
+            raise ConfigError(
+                f"{base}.filter_size_connectivity must be one of "
+                f"{sorted(allowed_connectivity)} for {version}."
+            )
+        _require_bool(config, f"{base}.fill_holes")
+        holes_version = _value(config, f"{base}.fill_holes_version")
+        if holes_version not in {"2D", "3D"}:
+            raise ConfigError(f"{base}.fill_holes_version must be 2D or 3D.")
+        _require_nonnegative_number(config, f"{base}.fill_holes_2D")
+        _require_nonnegative_number(config, f"{base}.fill_holes_3D")
+        holes_unit = _value(config, f"{base}.fill_holes_unit")
+        if holes_unit not in {"physical", "voxel"}:
+            raise ConfigError(f"{base}.fill_holes_unit must be physical or voxel.")
+        holes_connectivity = _value(config, f"{base}.fill_holes_connectivity")
+        allowed_holes_connectivity = {4, 8} if holes_version == "2D" else {6, 18, 26}
+        if holes_connectivity not in allowed_holes_connectivity:
+            raise ConfigError(
+                f"{base}.fill_holes_connectivity must be one of "
+                f"{sorted(allowed_holes_connectivity)} for {holes_version}."
+            )
 
     measurement = _require_mapping(config, "measurements")
+    definitions = _require_mapping(config, "measurements.tissue_definitions")
+    required_definitions = {
+        "muscle_compartment",
+        "skeletal_muscle_tissue_hu_m29_150",
+        "lama_hu_m29_29",
+        "nama_hu_30_150",
+        "imat_ct_hu_m190_m30",
+        "sat_total_hu_m190_m30",
+        "vat_total_hu_m190_m30",
+        "vat_total_hu_m150_m50",
+    }
+    for definition_name, definition in definitions.items():
+        if not isinstance(definition_name, str) or not re.fullmatch(
+            r"[a-z][a-z0-9_]*",
+            definition_name,
+        ):
+            raise ConfigError(
+                "measurements.tissue_definitions keys must use lowercase snake_case."
+            )
+        if not isinstance(definition, Mapping):
+            raise ConfigError(
+                f"measurements.tissue_definitions.{definition_name} must be a mapping."
+            )
+        enabled = definition.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ConfigError(
+                f"measurements.tissue_definitions.{definition_name}.enabled must be boolean."
+            )
+        sources = definition.get("source_labels")
+        if (
+            not isinstance(sources, list)
+            or not sources
+            or any(not isinstance(source, str) or not source.strip() for source in sources)
+        ):
+            raise ConfigError(
+                f"measurements.tissue_definitions.{definition_name}.source_labels "
+                "must be a non-empty list of names."
+            )
+        hu_range = definition.get("hu_range")
+        if hu_range is not None and (
+            not isinstance(hu_range, list)
+            or len(hu_range) != 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                for value in hu_range
+            )
+        ):
+            raise ConfigError(
+                f"measurements.tissue_definitions.{definition_name}.hu_range "
+                "must be null or a two-number list."
+            )
+    missing_definitions = sorted(required_definitions - definitions.keys())
+    disabled_required = sorted(
+        name for name in required_definitions if name in definitions and not definitions[name]["enabled"]
+    )
+    if missing_definitions or disabled_required:
+        raise ConfigError(
+            "Canonical tissue definitions must remain enabled; "
+            f"missing={missing_definitions}, disabled={disabled_required}."
+        )
     if measurement.get("totalsegmentator_version") != "2.15.0":
         raise ConfigError("measurements.totalsegmentator_version must be pinned to 2.15.0.")
     body_backend = _value(config, "measurements.body_surface.backend")
@@ -301,6 +457,15 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         raise ConfigError("Canonical measurements require Parquet export.")
     if measurement["enabled"] and measurement["export"]["csv"]:
         raise ConfigError("Canonical measurements do not permit duplicate CSV export.")
+
+    try:
+        from BodyComposition.reporting.contracts import ReportingSettings
+
+        reporting = ReportingSettings.from_mapping(config)
+    except (TypeError, ValueError) as error:
+        raise ConfigError(str(error)) from error
+    if reporting.enabled and not measurement["enabled"]:
+        raise ConfigError("reporting.enabled requires canonical measurements.enabled=true.")
 
     for crop_name, crop in _require_mapping(config, "crop").items():
         if not isinstance(crop, Mapping):

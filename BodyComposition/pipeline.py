@@ -33,12 +33,47 @@ def _run_case(pipeline, memory):
         return True, output
     except TimeoutError as error:
         logging.warning(f"TIMEOUT CASE {memory['id']}\n")
+        _try_render_failure_page(pipeline, memory, error)
         return False, error
     except Exception as error:
         logging.error(f"ERROR CASE {memory['id']}:\n {error}\n {traceback.format_exc()}\n")
+        _try_render_failure_page(pipeline, memory, error)
         return False, error
     finally:
         signal.alarm(0)
+
+
+def _try_render_failure_page(pipeline, memory, error):
+    """Best-effort explicit status page; never mask the original failure."""
+
+    try:
+        from BodyComposition.reporting.contracts import ReportingSettings
+        from BodyComposition.reporting.service import render_failed_case_report
+
+        settings = ReportingSettings.from_mapping(pipeline.config)
+        if not settings.enabled:
+            return
+        stage = str(memory.get("tmp/current_action", "pipeline"))
+        prepared_outcome = memory.get("tmp/prepared_image")
+        prepared_image = getattr(prepared_outcome, "prepared_image", None)
+        vertebral_result = memory.get("tmp/vertebral_result")
+        result = render_failed_case_report(
+            case_id=str(memory["id"]),
+            analysis_id=str(memory.get("analysis_id", "analysis_unavailable")),
+            output_directory=Path(memory["workspace"]) / "reports" / str(memory["id"]),
+            settings=settings,
+            failure_stage=stage,
+            failure_code=f"{stage}_{error.__class__.__name__}",
+            prepared_image=prepared_image,
+            vertebral_result=vertebral_result,
+        )
+        memory["tmp/report_result"] = result
+    except Exception as report_error:
+        logging.error(
+            "Could not generate explicit report failure page for case %s: %s",
+            memory.get("id", "unknown"),
+            report_error.__class__.__name__,
+        )
 
 
 def _raise_case_failures(case_ids):
@@ -67,6 +102,8 @@ def run_batch(pipeline, input_datalist):
     logging.info(f"STARTING PIPELINE:\n")
     output = None
     failed_case_ids = []
+    report_results = []
+    report_workspaces = []
     for caseid, input_file, workspace in tqdm(input_datalist, total=len(input_datalist),
                                                desc="Processing", unit="case", position=0, leave=True, file=sys.stdout, ncols=80):
         memory = {'id': caseid,
@@ -77,6 +114,33 @@ def run_batch(pipeline, input_datalist):
             output = case_output
         else:
             failed_case_ids.append(caseid)
+        if "tmp/report_result" in memory:
+            report_results.append(memory["tmp/report_result"])
+            report_workspaces.append(Path(workspace))
+    reporting = pipeline.config.get("reporting", {})
+    if reporting.get("enabled") and reporting.get("combined_pdf") and report_results:
+        if len(report_results) != len(input_datalist):
+            failed_case_ids.append("report_export_incomplete")
+        elif len(set(report_workspaces)) != 1:
+            failed_case_ids.append("report_export_requires_common_workspace")
+        else:
+            try:
+                from BodyComposition.reporting.contracts import ReportingSettings
+                from BodyComposition.reporting.service import collate_reports
+
+                export_id = f"run-{pipeline.timestamp}"
+                memory_output = collate_reports(
+                    report_results,
+                    export_id=export_id,
+                    output_directory=(
+                        report_workspaces[0] / "aggregate" / "reports" / export_id
+                    ),
+                    settings=ReportingSettings.from_mapping(pipeline.config),
+                )
+                logging.info("combined report: %s", memory_output["pdf_path"])
+            except Exception as error:
+                logging.error("Combined report generation failed: %s", error)
+                failed_case_ids.append("combined_report")
     logging.info("FINISHED PIPELINE.")
     _raise_case_failures(failed_case_ids)
     return output
@@ -179,6 +243,13 @@ class PipelineBuilder():
             from BodyComposition.actions.orientation import AssessOrientation
 
             self.actions.insert(0, AssessOrientation(self))
+        if self.config["reporting"]["enabled"] and not any(
+            action.__class__.__name__ == "RenderCaseReport" for action in self.actions
+        ):
+            raise ValueError(
+                f"Reporting is not supported by pipeline {method!r}; use a canonical "
+                "BodyComposition pipeline or the explicit post-hoc reporting service."
+            )
 
         # check if all actions are valid
         for action in self.actions:
@@ -236,6 +307,7 @@ class PipelineBuilder():
         logging.info(f"workspace: {memory['workspace']}")
         timer = time()
         for action in self.actions:
+            memory["tmp/current_action"] = action.__class__.__name__
             action(memory)
             action.validate_outputs(memory)
         logging.info(f"FINISHED CASE {memory['id']} ({time() - timer:.1f}s)\n")

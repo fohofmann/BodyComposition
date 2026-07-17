@@ -274,6 +274,15 @@ def test_parquet_export_round_trip_api_and_cli_views(base_config, tmp_path, monk
         "aggregation"
     ] == "territory_mean"
     assert l3_measurements(table_directory, aggregation="slice").iloc[0]["aggregation"] == "slice"
+    indexed_l3 = l3_measurements(
+        table_directory,
+        aggregation="slice",
+        height_m=2.0,
+    ).iloc[0]
+    assert indexed_l3["smi_skeletal_muscle_tissue_hu_m29_150_cm2_m2"] == pytest.approx(
+        indexed_l3["skeletal_muscle_tissue_hu_m29_150_area_cm2"] / 4.0
+    )
+    assert indexed_l3["height_source"] == "caller_supplied_measured_height"
     named = range_measurements(
         table_directory,
         start_level="T12",
@@ -282,6 +291,19 @@ def test_parquet_export_round_trip_api_and_cli_views(base_config, tmp_path, monk
     assert named.iloc[0]["range_valid"]
     assert named.iloc[0]["analysis_id"] == bundle.identity.analysis_id
     assert named.iloc[0]["aggregation"] == "physical_range"
+    indexed_range = range_measurements(
+        table_directory,
+        start_level="T12",
+        end_level="L5",
+        height_m=2.0,
+    ).iloc[0]
+    assert indexed_range[
+        "skeletal_muscle_tissue_hu_m29_150_volume_index_cm3_m2"
+    ] == pytest.approx(
+        indexed_range["skeletal_muscle_tissue_hu_m29_150_volume_cm3"] / 4.0
+    )
+    with pytest.raises(ValueError, match="positive"):
+        l3_measurements(table_directory, height_m=0.0)
     qc = json.loads((tmp_path / "qc" / "case-001_measurement-qc.json").read_text())
     schema = json.loads(
         Path("BodyComposition/schemas/measurement_qc.schema.json").read_text()
@@ -301,11 +323,14 @@ def test_parquet_export_round_trip_api_and_cli_views(base_config, tmp_path, monk
             "l3",
             "--aggregation",
             "slice",
+            "--height-m",
+            "2.0",
         ],
     )
     measurement_view.main()
     payload = json.loads(capsys.readouterr().out)
     assert payload[0]["aggregation"] == "slice"
+    assert payload[0]["height_m"] == 2.0
 
     monkeypatch.setattr(
         sys,
@@ -609,6 +634,27 @@ def test_measurement_analysis_identity_is_order_stable_and_content_sensitive(bas
             "orientation_changed": False,
         },
     )
+    compartments = tissues.copy()
+    with_compartments = measurement_analysis_id(
+        image,
+        tissues,
+        body_surface,
+        vertebral_result,
+        {"alpha": 1, "beta": 2},
+        compartment_labels_zyx=compartments,
+        compartment_label_schema=base_config["LBL_TISSUE"],
+    )
+    changed_compartments = compartments.copy()
+    changed_compartments[0, 0, 0] = 2
+    with_changed_compartments = measurement_analysis_id(
+        image,
+        tissues,
+        body_surface,
+        vertebral_result,
+        {"alpha": 1, "beta": 2},
+        compartment_labels_zyx=changed_compartments,
+        compartment_label_schema=base_config["LBL_TISSUE"],
+    )
 
     assert first == reordered
     assert first.startswith("analysis-")
@@ -617,6 +663,7 @@ def test_measurement_analysis_identity_is_order_stable_and_content_sensitive(bas
     assert first != with_landmarks
     assert first != with_tissue_contract
     assert first != with_orientation_provenance
+    assert with_compartments != with_changed_compartments
 
 
 def test_measurement_identity_configuration_excludes_output_and_review_policy(base_config):

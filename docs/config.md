@@ -95,7 +95,13 @@ reflection-like concerns must be supplied as a forced-review reason.
   the collision between legacy label 19 and SPINEPS label 19 (T12).
 
 ### Tissue
+- `profile_id`: Stable lowercase identifier included in scientific provenance
+  and `analysis_id`. The default is `hofmann_2025_canonical_raw_v1`.
 - `save_mask`: If `True`, the [tissue masks](labels.md) are saved. If `False`, the masks are just saved to the temporary pipeline memory.
+- `save_compartment_mask`: Persists the untouched model compartment labels
+  even when the speed preset disables general segmentation-label storage. The
+  canonical default is `true` because later HU definitions must remain
+  auditable and reproducible.
 
 The canonical defaults use calibrated, unsmoothed HU values and do not delete
 small SM, IMAT, VAT, or SAT islands. The configurable size thresholds remain
@@ -103,42 +109,73 @@ available for prespecified sensitivity analyses, but enabling one changes the
 measurement identity and must be reported.
 
 #### Filter: HU Denoise
+- `method`: `none` (default), `median`, `adaptive_median`, or
+  `curvature_anisotropic_diffusion`. This image is used only to assign a
+  compatibility mask; canonical attenuation outputs always use the untouched
+  prepared CT.
+- `apply_to`: Unique subset of `imat`, `sm`, `vat`, and `sat`. This prevents a
+  fat-specific literature method from silently changing muscle classification.
 - `filter_outliers`: If `True`, outliers are clipped. If `False`, no clipping is performed.
 - `filter_outliers_range`: Range for clipping outliers, e.g. metal implants or noisy outliers [-1024, 3071]
-- `filter_median`: If `True`, a median filter is applied. If `False`, no median filter is applied.
+- `filter_median`: Legacy compatibility flag. It must be `true` exactly when
+  `method: median` and `false` otherwise.
 - `filter_median_kernel`: Kernel size in NumPy z-y-x order, e.g. `[1,3,3]` for in-plane filtering without smoothing across slices.
+- `adaptive_median_min_kernel` and `adaptive_median_max_kernel`: Positive odd
+  z-y-x kernels for the standard two-stage adaptive median algorithm.
+- `anisotropic_diffusion`: Dimensionality, iterations, stable time step, and
+  conductance for SimpleITK curvature anisotropic diffusion. Published profiles
+  with incompletely reported parameters are explicitly labeled sensitivity
+  implementations.
+
+Every IMAT/SM/VAT/SAT block uses the same optional cleanup controls. Hole
+filling is performed before small-component removal.
+
+- `filter_size_unit`: `physical` means mm² in 2D or mm³ in 3D; `voxel` means
+  pixels in 2D or voxels in 3D.
+- `filter_size_connectivity`: 4 or 8 in 2D; 6, 18, or 26 in 3D.
+- `fill_holes`: Enables bounded filling of enclosed background components.
+- `fill_holes_version`, `fill_holes_2D`, `fill_holes_3D`,
+  `fill_holes_unit`, and `fill_holes_connectivity`: Explicit dimension,
+  threshold, unit, and connectivity. Background connected to the image border
+  is never filled.
 
 #### Filter: IMAT
 - `filter_hu`: If `True`, IMAT is determined by using a HU range of voxels within the [muscle compartment](labels.md). If `False`, the filter is not applied.
 - `filter_hu_range`: Range for determining IMAT, e.g. [-190, -30].
 - `filter_size`: If `True`, the IMAT (determined by HU range) is filtered by size. If `False`, the filter is not applied.
 - `filter_size_version`: Version of the filter. Options are `2D` and `3D`.
-- `filter_size_2D`: Size for the 2D filter, e.g. 10 mm^2 (calculated based on voxel spacing). Only areas larger than this are considered as IMAT.
-- `filter_size_3D`: Size for the 3D filter, e.g. 80 mm^3 (calculated based on voxel spacing). Only volumes larger than this are considered as IMAT.
+- `filter_size_2D`: Minimum 2D area or pixel count, according to `filter_size_unit`.
+- `filter_size_3D`: Minimum 3D volume or voxel count, according to `filter_size_unit`.
 
 #### Filter: SM
 - `filter_hu`: If `True`, SM is determined by using a HU range of voxels within the [muscle compartment](labels.md). If `False`, the filter is not applied.
 - `filter_hu_range`: Range for determining SM tissue, e.g. [-29, 150].
 - `filter_size`: If `True`, the SM (determined by HU range) is filtered by size. If `False`, the filter is not applied.
 - `filter_size_version`: Version of the filter. Options are `2D` and `3D`.
-- `filter_size_2D`: Size for the 2D filter, e.g. 10 mm^2 (calculated based on voxel spacing). Only areas larger than this are considered as SM.
-- `filter_size_3D`: Size for the 3D filter, e.g. 80 mm^3 (calculated based on voxel spacing). Only volumes larger than this are considered as SM.
+- `filter_size_2D`: Minimum 2D area or pixel count, according to `filter_size_unit`.
+- `filter_size_3D`: Minimum 3D volume or voxel count, according to `filter_size_unit`.
 
 #### Filter: VAT
 - `filter_hu`: If `True`, VAT is determined by using a HU range of voxels within the [visceral compartment](labels.md). If `False`, the filter is not applied.
 - `filter_hu_range`: Range for determining VAT, e.g. [-190, -30].
 - `filter_size`: If `True`, the VAT (determined by HU range) is filtered by size. If `False`, the filter is not applied.
 - `filter_size_version`: Version of the filter. Options are `2D` and `3D`.
-- `filter_size_2D`: Size for the 2D filter, e.g. 10 mm^2 (calculated based on voxel spacing). Only areas larger than this are considered as VAT.
-- `filter_size_3D`: Size for the 3D filter, e.g. 80 mm^3 (calculated based on voxel spacing). Only volumes larger than this are considered as VAT.
+- `filter_size_2D`: Minimum 2D area or pixel count, according to `filter_size_unit`.
+- `filter_size_3D`: Minimum 3D volume or voxel count, according to `filter_size_unit`.
 
 #### Filter: SAT
 - `filter_hu`: If `True`, SAT is determined by using a HU range of voxels within the [subcutaneous compartment](labels.md). If `False`, the filter is not applied.
 - `filter_hu_range`: Range for determining SAT, e.g. [-190, -30].
 - `filter_size`: If `True`, the SAT (determined by HU range) is filtered by size. If `False`, the filter is not applied.
 - `filter_size_version`: Version of the filter. Options are `2D` and `3D`.
-- `filter_size_2D`: Size for the 2D filter, e.g. 10 mm^2 (calculated based on voxel spacing). Only areas larger than this are considered as SAT.
-- `filter_size_3D`: Size for the 3D filter, e.g. 80 mm^3 (calculated based on voxel spacing). Only volumes larger than this are considered as SAT.
+- `filter_size_2D`: Minimum 2D area or pixel count, according to `filter_size_unit`.
+- `filter_size_3D`: Minimum 3D volume or voxel count, according to `filter_size_unit`.
+
+Named overrides for every reproducibly specified literature window and cleanup
+branch are in [`config/tissue_profiles`](../config/tissue_profiles). The
+evidence, default choice, exact operation order, and limits of the sensitivity
+implementations are documented in
+[tissue_definitions.md](tissue_definitions.md).
 
 ### Measurements
 
@@ -150,6 +187,12 @@ measurement identity and must be reported.
   range or vertebral-territory bin. The default is `0.999`.
 - `l3_slab_length_mm`: Fixed L3-centred comparator length. The canonical value
   is `200` mm.
+- `tissue_definitions`: Named raw-compartment derivations. Each definition has
+  `enabled`, a non-empty `source_labels` list, and either a two-number
+  `hu_range` or `null` for the full anatomical compartment. Required canonical
+  definitions cannot be disabled; additional validated anatomy or HU windows
+  can be added without changing code. Names become output-column prefixes and
+  must therefore use lowercase snake case.
 - `body_surface.backend`: The default
   `tissue_segmentation_envelope_v1` derives body/trunk envelopes from the
   existing postprocessed tissue labels. Explicit alternatives are
@@ -183,6 +226,48 @@ measurement identity and must be reported.
 
 Definitions, units, physical aggregation, territories, and missing reasons are
 documented in [measurements.md](measurements.md).
+
+### Reporting
+
+Reporting is a derived, optional final stage of the canonical pipelines. It
+does not change `analysis_id` and never replaces the Parquet, NIfTI, or JSON
+outputs.
+
+- `enabled`: Default `false`. When true, retain one individual PDF and report
+  manifest for every selected case.
+- `layout`: `spine_overview_v1` or `spine_profile_v2`. Both use fixed ISO A4
+  landscape pages. The second layout adds the native-mm stacked tissue-area
+  profile.
+- `individual_pdf`: Must remain `true` in released layouts.
+- `combined_pdf`: Collate batch reports when all cases share one explicit
+  workspace. Explicit post-hoc exports use an ordered export manifest.
+- `page_size`: Fixed `A4_landscape`.
+- `spine_view`: Fixed `sagittal_thick_slab_v1`. This is a projection for
+  research/QC, not a diagnostic MPR.
+- `measure_aggregation`: Fixed `territory_mean`. CSA and circumference are
+  reconstructed from the three measurement stage bins with
+  `bin_integration_length_mm`; HU uses the corresponding tissue-volume
+  weights.
+- `measurement_columns`: Ordered selection of one to six released measures.
+  Defaults to SM CSA, SM HU, IMAT CSA, total VAT CSA, SAT CSA, and trunk
+  circumference.
+- `vertebral_range`: Currently fixed `detected`; T13, L6, and sacrum remain
+  native labels.
+- `include_qc_flags`: Must remain `true`.
+- `manual_review_summary`: Fixed `auto`; the summary is absent when no case is
+  canonically flagged.
+- `numeric_precision`: Display precision from zero to three decimals. Source
+  values remain unrounded in the report manifest.
+- `locale`: Currently `en`; `missing_value_symbol` must be ASCII.
+- `ct_window`: Frozen lower/upper HU display window.
+- `overlay_opacity`: Vertebral-body overlay opacity from zero to one.
+- `sagittal_slab_margin_mm`: Physical lateral margin around valid vertebral
+  centroids.
+- `projection_spacing_mm`: Canonical physical projection resolution, at most
+  3 mm.
+
+See [reporting.md](reporting.md) for layouts, output paths, privacy, and the
+explicit post-hoc manifest format.
 
 ### Crop
 Legacy/noncanonical pipelines may segment vertebrae and crop to a configured

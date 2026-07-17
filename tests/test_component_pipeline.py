@@ -198,6 +198,7 @@ def test_fast_pipeline_completion_markers_only_include_persisted_files(pipeline_
         "masks/{caseid}_spineps-vertebrae.nii.gz",
         "qc/{caseid}_spine-review.png",
         "masks/{caseid}_int-bodycomposition.nii.gz",
+        "labels/{caseid}_int-bodycomposition.nii.gz",
         "masks/{caseid}_body-surface.nii.gz",
         "qc/{caseid}_measurement-review.png",
         "tables/{caseid}/slices.parquet",

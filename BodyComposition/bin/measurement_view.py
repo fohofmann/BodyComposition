@@ -50,11 +50,20 @@ def main() -> None:
     parser.add_argument("--start-level")
     parser.add_argument("--end-level")
     parser.add_argument("--allow-partial", action="store_true")
+    parser.add_argument(
+        "--height-m",
+        type=float,
+        help="Measured height in metres; enables explicit SMI/volume indices.",
+    )
     parser.add_argument("--format", choices=("json", "csv"), default="json")
     args = parser.parse_args()
 
     if args.view == "l3":
-        table = l3_measurements(args.tables, aggregation=args.aggregation)
+        table = l3_measurements(
+            args.tables,
+            aggregation=args.aggregation,
+            height_m=args.height_m,
+        )
     else:
         if not args.start_level or not args.end_level:
             parser.error("--start-level and --end-level are required for --view range.")
@@ -63,6 +72,7 @@ def main() -> None:
             start_level=args.start_level,
             end_level=args.end_level,
             allow_partial=args.allow_partial,
+            height_m=args.height_m,
         )
     if args.format == "csv":
         print(table.to_csv(index=False), end="")

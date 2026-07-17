@@ -1,0 +1,9 @@
+tissue:
+  profile_id: derstine_2022_vat_m205_m51_v1
+  vat:
+    filter_hu_range: [-205, -51]
+
+measurements:
+  tissue_definitions:
+    vat_total_hu_m205_m51:
+      enabled: true

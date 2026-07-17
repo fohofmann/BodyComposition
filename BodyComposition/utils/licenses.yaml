@@ -102,3 +102,21 @@ boa:
     - 'https://zenodo.org/records/7918824'
   license: 'Apache-2.0/MIT'
   citation: 'Haubold, J., Baldini, G., Parmar, V., Schaarschmidt, B.M., Koitka, S., Kroll, L., van Landeghem, N., Umutlu, L., Forsting, M., Nensa, F., & Hosch, R. (2023). BOA: A CT-Based Body and Organ Analysis for Radiologists at the Point of Care. Investigative Radiology. https://doi.org/10.1097/RLI.0000000000001040'
+
+reportlab:
+  title: 'ReportLab PDF Toolkit'
+  link: 'https://www.reportlab.com/'
+  license: 'BSD-3-Clause'
+  citation: 'ReportLab Inc. ReportLab PDF Toolkit.'
+
+pypdf:
+  title: 'pypdf'
+  link: 'https://pypdf.readthedocs.io/'
+  license: 'BSD-3-Clause'
+  citation: 'pypdf contributors. pypdf.'
+
+bitstream_vera:
+  title: 'Bitstream Vera fonts embedded in generated reports'
+  link: 'https://www.gnome.org/fonts/'
+  license: 'Bitstream Vera Fonts Copyright'
+  citation: 'Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.'

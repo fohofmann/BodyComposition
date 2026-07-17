@@ -118,6 +118,12 @@ them.
 - **ExportMeasurementBundle**: Atomically writes the three Parquet tables and
   structured measurement-QC JSON. See the
   [measurement data dictionary](measurements.md).
+- **RenderCaseReport**: Optional final derived stage. It consumes the immutable
+  prepared image, vertebral-body labels, and exported measurement stage contract;
+  it does not run inference or recalculate scientific measurements. It writes
+  exactly one A4 landscape case page and a report manifest. Batch collation
+  follows the selected case order and conditionally inserts the canonical
+  manual-review summary. See [reporting.md](reporting.md).
 
 The following actions remain available to legacy/noncanonical registered
 pipelines:

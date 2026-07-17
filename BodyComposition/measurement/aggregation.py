@@ -22,6 +22,7 @@ from BodyComposition.measurement.physical import (
     interval_overlap_mm,
     mask_physical_extent,
 )
+from BodyComposition.measurement.tissues import DERIVED_RATIO_DEFINITIONS
 from BodyComposition.vertebral.contracts import VertebralResult
 
 
@@ -338,6 +339,43 @@ def _set_metric(
     output[f"{name}_coverage_fraction"] = float(coverage)
 
 
+def _add_aggregate_composition_ratios(output: dict[str, Any]) -> None:
+    """Derive ratios from integrated volumes, never from averaged slice ratios."""
+
+    for name, numerator, denominator in DERIVED_RATIO_DEFINITIONS:
+        required = tuple(dict.fromkeys((numerator, *denominator)))
+        value_keys = [f"{prefix}_volume_cm3" for prefix in required]
+        if any(key not in output for key in value_keys):
+            continue
+        components_valid = all(
+            bool(output.get(f"{prefix}_volume_cm3_valid", False))
+            for prefix in required
+        )
+        numerator_value = output[f"{numerator}_volume_cm3"]
+        denominator_values = [
+            output[f"{prefix}_volume_cm3"] for prefix in denominator
+        ]
+        finite = bool(
+            np.isfinite(numerator_value)
+            and all(np.isfinite(value) for value in denominator_values)
+        )
+        denominator_value = (
+            float(np.sum(denominator_values)) if finite else np.nan
+        )
+        valid = bool(components_valid and finite and denominator_value > 0)
+        value = float(numerator_value / denominator_value) if valid else None
+        coverage = min(
+            float(output.get(f"{prefix}_volume_cm3_coverage_fraction", 0.0))
+            for prefix in required
+        )
+        reason = None if valid else (
+            "zero_denominator"
+            if components_valid and finite and denominator_value <= 0
+            else "invalid_measurement"
+        )
+        _set_metric(output, name, value, valid, reason, coverage)
+
+
 def _validity_column(table: pd.DataFrame, column: str) -> np.ndarray:
     if column not in table:
         return np.ones(len(table), dtype=bool)
@@ -568,6 +606,7 @@ def aggregate_physical_range(
             ),
             metric_coverage,
         )
+    _add_aggregate_composition_ratios(output)
     return output
 
 

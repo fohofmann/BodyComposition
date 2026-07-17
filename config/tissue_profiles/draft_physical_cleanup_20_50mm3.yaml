@@ -1,0 +1,26 @@
+tissue:
+  profile_id: local_draft_physical_cleanup_20_50mm3_v1
+  imat:
+    filter_size: true
+    filter_size_version: 3D
+    filter_size_3D: 20
+    filter_size_unit: physical
+    filter_size_connectivity: 26
+  sm:
+    filter_size: true
+    filter_size_version: 3D
+    filter_size_3D: 20
+    filter_size_unit: physical
+    filter_size_connectivity: 26
+  vat:
+    filter_size: true
+    filter_size_version: 3D
+    filter_size_3D: 20
+    filter_size_unit: physical
+    filter_size_connectivity: 26
+  sat:
+    filter_size: true
+    filter_size_version: 3D
+    filter_size_3D: 50
+    filter_size_unit: physical
+    filter_size_connectivity: 26

@@ -14,7 +14,7 @@ from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCStatus
 
 
-MEASUREMENT_SCHEMA_VERSION = "2.0.0"
+MEASUREMENT_SCHEMA_VERSION = "2.1.0"
 VERTEBRAL_TERRITORY_SCHEMA_VERSION = "native-physical-territories-v1-bins3"
 BINS_PER_VERTEBRAL_TERRITORY = 3
 

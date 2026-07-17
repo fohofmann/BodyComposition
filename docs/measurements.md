@@ -23,7 +23,9 @@ later from the native-mm tables after a coverage audit.
 Every table row carries `schema_version`, `case_id`, `run_id`, and
 `analysis_id`. Parquet metadata repeats the table and identity fields. The
 reader rejects missing columns, mixed identities, changed field order/types,
-and unsupported schema versions.
+and unsupported schema versions. Schema `2.1.0` adds raw-compartment-derived
+tissue classes and composition ratios while retaining the native compatibility
+labels from schema 2.0.
 
 ## Geometry and units
 
@@ -107,10 +109,20 @@ when both are present, or the native VAT label when that is the source schema.
 `total_segmented_tissue_area_cm2` is the union of all non-zero tissue labels;
 it is not called body or trunk CSA.
 
-The canonical slice export intentionally omits redundant compartment
-intersections, fractions, body perimeter, vertebral-overlap lists, and local
-centroid coordinates. These can be derived for a prespecified study if they
-later become necessary.
+Schema 2.1 additionally derives explicitly named classes from the untouched
+anatomical compartment label map and untouched prepared CT. Defaults include
+the muscle compartment, learned IMAT, -29/150 HU skeletal-muscle tissue,
+LAMA, NAMA, -190/-30 HU CT-IMAT, matched SAT/VAT, the -150/-50 HU VAT
+compatibility window, whole-bone anatomy, and the 152/1000 HU foundational
+bone-tissue class. The bone outputs are not trabecular attenuation or BMD. It
+also exports four explicitly denominated composition ratios. Multilevel ratios
+are recalculated from integrated volumes rather than averaging slice ratios. See the
+[tissue-definition contract](tissue_definitions.md) for exact names and
+rationale.
+
+The canonical slice export continues to omit body perimeter,
+vertebral-overlap lists, and local centroid coordinates. It does not emit an
+opaque binary sarcopenia or myosteatosis phenotype.
 
 ### Trunk and QC fields
 

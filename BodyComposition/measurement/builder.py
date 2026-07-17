@@ -55,6 +55,8 @@ def measurement_analysis_id(
     landmarks: LandmarkSet | None = None,
     tissue_label_schema: Mapping[int, str] | None = None,
     tissue_preprocessing: Mapping[str, Any] | None = None,
+    compartment_labels_zyx: np.ndarray | None = None,
+    compartment_label_schema: Mapping[int, str] | None = None,
     orientation_provenance: Mapping[str, Any] | None = None,
 ) -> str:
     """Return the deterministic measurement stage stage identity.
@@ -67,11 +69,16 @@ def measurement_analysis_id(
     if vertebral_result.vertebral_body_labels is None:
         raise ValueError("Vertebral body labels are required for measurement identity.")
     payload = {
-        "schema": "measurement-measurement-analysis-v2",
+        "schema": "measurement-measurement-analysis-v3",
         "bodycomposition_version": __version__,
         "geometry_sha256": geometry_digest(body_surface.geometry),
         "image_sha256": _array_digest(image_zyx),
         "tissue_sha256": _array_digest(tissue_labels_zyx),
+        "compartment_sha256": (
+            _array_digest(compartment_labels_zyx)
+            if compartment_labels_zyx is not None
+            else None
+        ),
         "body_sha256": _array_digest(body_surface.body_mask_zyx),
         "trunk_sha256": _array_digest(body_surface.trunk_mask_zyx),
         "vertebral_body_sha256": _array_digest(vertebral_result.vertebral_body_labels),
@@ -89,6 +96,14 @@ def measurement_analysis_id(
                 for label, name in sorted(tissue_label_schema.items())
             }
             if tissue_label_schema is not None
+            else None
+        ),
+        "compartment_label_schema": (
+            {
+                str(label): name
+                for label, name in sorted(compartment_label_schema.items())
+            }
+            if compartment_label_schema is not None
             else None
         ),
         "tissue_preprocessing": dict(tissue_preprocessing or {}),
@@ -137,6 +152,8 @@ def build_measurement_bundle(
     settings: Mapping[str, Any],
     orientation_changed: bool = False,
     orientation_provenance: Mapping[str, Any] | None = None,
+    compartment_labels_zyx: np.ndarray | None = None,
+    compartment_label_schema: Mapping[int, str] | None = None,
 ) -> MeasurementBundle:
     """Build all canonical tables from one immutable set of prepared inputs."""
 
@@ -171,6 +188,9 @@ def build_measurement_bundle(
         identity,
         tissue_backend_id=tissue_backend_id,
         tissue_preprocessing=tissue_preprocessing,
+        compartment_labels_zyx=compartment_labels_zyx,
+        compartment_label_schema=compartment_label_schema,
+        tissue_definitions=settings.get("tissue_definitions"),
         orientation_changed=orientation_changed,
     )
     orientation = dict(orientation_provenance or {})
@@ -533,6 +553,12 @@ def build_measurement_bundle(
             "tissue": {
                 "backend_id": tissue_backend_id,
                 "preprocessing": dict(tissue_preprocessing),
+                "compartment_source": (
+                    "raw_model_labels"
+                    if compartment_labels_zyx is not None
+                    else "postprocessed_tissue_fallback"
+                ),
+                "definitions": dict(settings.get("tissue_definitions", {})),
             },
             "body_surface": {
                 "backend_id": body_surface.backend_id,

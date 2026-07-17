@@ -228,12 +228,34 @@ bodycomposition_measurements \
 Definitions, units, anatomical territories, missingness, and volume
 reconstruction are in
 [docs/measurements.md](docs/measurements.md).
+The literature review, default SAT/VAT/SM/IMAT/LAMA/NAMA definitions,
+rationale, and executable compatibility profiles are in
+[docs/tissue_definitions.md](docs/tissue_definitions.md).
+
+Optional one-page PDF research/QC reports can be enabled without changing the
+scientific analysis identity:
+
+```yaml
+reporting:
+  enabled: true
+  layout: spine_overview_v1  # or spine_profile_v2
+```
+
+Every case report is exactly one A4 landscape page. Batch runs with a common
+workspace also produce an ordered combined PDF; a manual-review summary is
+inserted as its first page only when at least one canonical review flag is
+present. `spine_profile_v2` adds the unsmoothed native-mm stacked tissue-area
+profile defined by measurement stage. Reports use only vertebral-body segmentations and the
+canonical measurement tables. See [docs/reporting.md](docs/reporting.md) for the
+configuration, post-hoc manifest API/CLI, outputs, and QC limitations.
 
 ## More
 - A detailed description of the pipeline and the integrated actions can be found in [docs/pipeline.md](docs/pipeline.md).
 - A short description of the integrated models (and underlying labels) can be found in [docs/models.md](docs/models.md).
 - The differentiation between segmentations (= `labels`) and postprocessed segmentations (= `masks`) are described in [docs/labels.md](docs/labels.md).
+- Tissue-compartment definitions, raw-HU defaults, evidence, and literature sensitivity profiles are documented in [docs/tissue_definitions.md](docs/tissue_definitions.md).
 - For more information regarding the [config/](config/)-files and available options, see [docs/config.md](docs/config.md).
+- Optional derived PDF reports and post-hoc collation are documented in [docs/reporting.md](docs/reporting.md).
 
 ## Citations
 

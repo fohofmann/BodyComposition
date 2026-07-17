@@ -290,10 +290,12 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         tissue_mask: str,
         tissue_backend_id: str,
         vertebral_body_source: str,
+        compartment_mask: str | None = None,
     ):
         super().__init__(pipeline)
         self.tissue_mask_name = tissue_mask
         self.tissue_backend_id = tissue_backend_id
+        self.compartment_mask_name = compartment_mask
         self.vertebral_body_source_name = vertebral_body_source
         self.settings = self.config["measurements"]
         self.timestamp = pipeline.timestamp
@@ -303,6 +305,8 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             "tmp/vertebral_result",
             "tmp/body_surface_result",
         ]
+        if compartment_mask is not None:
+            self.io_inputs.append(compartment_mask)
         if self.settings["landmarks"]["enabled"]:
             self.io_inputs.append("tmp/measurement_landmarks")
         self.io_outputs = [
@@ -325,11 +329,24 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             reference_name="prepared CT",
             candidate_name="tissue mask",
         )
+        compartment = (
+            memory[self.compartment_mask_name]
+            if self.compartment_mask_name is not None
+            else tissue
+        )
+        compartment.validate()
+        assert_same_physical_domain(
+            geometry,
+            compartment.geometry,
+            reference_name="prepared CT",
+            candidate_name="raw tissue-compartment labels",
+        )
         body_surface = memory["tmp/body_surface_result"]
         vertebral_result = memory["tmp/vertebral_result"]
         orientation_result = memory["tmp/prepared_image"].result
         measurement_config = _scientific_measurement_configuration(self.settings)
         tissue_preprocessing = {
+            "profile_id": self.config["tissue"]["profile_id"],
             "hu_denoise": self.config["tissue"]["hu_denoise"],
             "tissue_rules": {
                 name: self.config["tissue"][name]
@@ -345,6 +362,8 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             landmarks=memory.get("tmp/measurement_landmarks"),
             tissue_label_schema=self.config["LBL_TISSUE"],
             tissue_preprocessing=tissue_preprocessing,
+            compartment_labels_zyx=compartment.data,
+            compartment_label_schema=self.config["LBL_TISSUE"],
             orientation_provenance=orientation_result.to_dict(),
         )
         identity = MeasurementIdentity(
@@ -366,6 +385,8 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             settings=self.settings,
             orientation_changed=bool(orientation_result.orientation_changed),
             orientation_provenance=orientation_result.to_dict(),
+            compartment_labels_zyx=compartment.data,
+            compartment_label_schema=self.config["LBL_TISSUE"],
         )
         memory["analysis_id"] = identity.analysis_id
         memory["run_id"] = identity.run_id

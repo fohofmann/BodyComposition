@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bodycomposition.local/schemas/report_case_input.schema.json",
+  "title": "BodyComposition post-hoc case-report input",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_id",
+    "prepared_ct",
+    "vertebral_body_mask",
+    "vertebral_result_json",
+    "measurement_directory",
+    "orientation_report_json",
+    "measurement_qc_json"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "case_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "prepared_ct": {"type": "string", "minLength": 1},
+    "vertebral_body_mask": {"type": "string", "minLength": 1},
+    "vertebral_result_json": {"type": "string", "minLength": 1},
+    "measurement_directory": {"type": "string", "minLength": 1},
+    "orientation_report_json": {"type": "string", "minLength": 1},
+    "measurement_qc_json": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

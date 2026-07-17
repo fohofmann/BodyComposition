@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -12,27 +11,12 @@ import pandas as pd
 from BodyComposition.measurement.contours import external_contour_measurement
 from BodyComposition.measurement.contracts import BodySurfaceResult, MeasurementIdentity
 from BodyComposition.measurement.physical import slice_geometry_table, validate_array_zyx
+from BodyComposition.measurement.tissues import (
+    DERIVED_RATIO_DEFINITIONS,
+    canonical_tissue_name,
+    derive_configured_tissue_masks,
+)
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
-
-
-TISSUE_NAME_ALIASES = {
-    "sm": "sm",
-    "skeletalmuscle": "sm",
-    "bone": "bone",
-    "sat": "sat",
-    "avat": "avat",
-    "tvat": "tvat",
-    "vat": "vat",
-    "heart": "heart",
-    "lung": "lung",
-    "imat": "imat",
-    "psoas": "psoas",
-}
-
-
-def canonical_tissue_name(name: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]", "", str(name).lower())
-    return TISSUE_NAME_ALIASES.get(normalized, normalized)
 
 
 def _validated_label_schema(labels: Mapping[int, str]) -> dict[int, str]:
@@ -62,8 +46,7 @@ def _internal_support_gaps(voxel_counts: np.ndarray) -> np.ndarray:
     return gaps
 
 
-def _add_tissue_measurements(
-    table: pd.DataFrame,
+def _tissue_measurement_columns(
     *,
     name: str,
     tissue_mask_zyx: np.ndarray,
@@ -71,7 +54,7 @@ def _add_tissue_measurements(
     body_mask_zyx: np.ndarray,
     storage_indices_z: np.ndarray,
     pixel_area_cm2: float,
-) -> None:
+) -> dict[str, Any]:
     counts = np.count_nonzero(tissue_mask_zyx, axis=(1, 2)).astype(np.int64)
     inside_body = np.count_nonzero(
         tissue_mask_zyx & body_mask_zyx,
@@ -87,22 +70,69 @@ def _add_tissue_measurements(
     selected_counts = counts[storage_indices_z]
     selected_nonempty = nonempty[storage_indices_z]
     selected_area_valid = area_valid[storage_indices_z]
-    table[f"{name}_voxel_count"] = selected_counts
-    table[f"{name}_area_cm2"] = selected_counts.astype(float) * pixel_area_cm2
-    table[f"{name}_area_valid"] = selected_area_valid
-    table[f"{name}_area_reason"] = np.where(
-        selected_area_valid,
-        None,
-        "invalid_measurement",
-    )
-    table[f"{name}_mean_hu"] = mean_hu[storage_indices_z]
     hu_valid = selected_nonempty & selected_area_valid
-    table[f"{name}_hu_valid"] = hu_valid
-    table[f"{name}_hu_reason"] = np.where(
-        hu_valid,
-        None,
-        np.where(selected_nonempty, "invalid_measurement", "empty_tissue"),
+    return {
+        f"{name}_voxel_count": selected_counts,
+        f"{name}_area_cm2": selected_counts.astype(float) * pixel_area_cm2,
+        f"{name}_area_valid": selected_area_valid,
+        f"{name}_area_reason": np.where(
+            selected_area_valid,
+            None,
+            "invalid_measurement",
+        ),
+        f"{name}_mean_hu": mean_hu[storage_indices_z],
+        f"{name}_hu_valid": hu_valid,
+        f"{name}_hu_reason": np.where(
+            hu_valid,
+            None,
+            np.where(selected_nonempty, "invalid_measurement", "empty_tissue"),
+        ),
+    }
+
+
+def _slice_composition_ratio_columns(
+    table: pd.DataFrame,
+    *,
+    name: str,
+    numerator: str,
+    denominator: tuple[str, ...],
+) -> dict[str, Any]:
+    required = (numerator, *denominator)
+    if any(f"{prefix}_voxel_count" not in table for prefix in required):
+        return {}
+    numerator_count = pd.to_numeric(
+        table[f"{numerator}_voxel_count"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    denominator_counts = [
+        pd.to_numeric(table[f"{prefix}_voxel_count"], errors="coerce").to_numpy(
+            dtype=float
+        )
+        for prefix in denominator
+    ]
+    denominator_count = np.sum(denominator_counts, axis=0)
+    components_valid = np.ones(len(table), dtype=bool)
+    for prefix in dict.fromkeys(required):
+        components_valid &= table[f"{prefix}_area_valid"].fillna(False).to_numpy(
+            dtype=bool
+        )
+    valid = (
+        components_valid
+        & np.isfinite(numerator_count)
+        & np.isfinite(denominator_count)
+        & (denominator_count > 0)
     )
+    value = np.full(len(table), np.nan, dtype=float)
+    value[valid] = numerator_count[valid] / denominator_count[valid]
+    return {
+        name: value,
+        f"{name}_valid": valid,
+        f"{name}_reason": np.where(
+            valid,
+            None,
+            np.where(components_valid, "zero_denominator", "invalid_measurement"),
+        ),
+    }
 
 
 def calculate_canonical_slice_measurements(
@@ -115,6 +145,9 @@ def calculate_canonical_slice_measurements(
     *,
     tissue_backend_id: str,
     tissue_preprocessing: Mapping[str, Any] | None = None,
+    compartment_labels_zyx: np.ndarray | None = None,
+    compartment_label_schema: Mapping[int, str] | None = None,
+    tissue_definitions: Mapping[str, Mapping[str, Any]] | None = None,
     orientation_changed: bool = False,
 ) -> pd.DataFrame:
     """Calculate physical CSA, pooled-HU primitives, and trunk contour per slice.
@@ -216,46 +249,109 @@ def calculate_canonical_slice_measurements(
     table["trunk_mask_fragmented"] = fragmented
 
     tissue_masks: dict[str, np.ndarray] = {}
+    tissue_columns: dict[str, Any] = {}
     for label, name in schema.items():
         tissue_mask = labels == label
         tissue_masks[name] = tissue_mask
-        _add_tissue_measurements(
-            table,
+        tissue_columns.update(_tissue_measurement_columns(
             name=name,
             tissue_mask_zyx=tissue_mask,
             image_zyx=image,
             body_mask_zyx=body_surface.body_mask_zyx,
             storage_indices_z=storage,
             pixel_area_cm2=pixel_area_cm2,
-        )
+        ))
 
     if "avat" in tissue_masks and "tvat" in tissue_masks:
         total_vat_mask = tissue_masks["avat"] | tissue_masks["tvat"]
-        table["total_vat_source"] = "avat_plus_tvat"
+        tissue_columns["total_vat_source"] = ["avat_plus_tvat"] * len(table)
     elif "vat" in tissue_masks:
         total_vat_mask = tissue_masks["vat"]
-        table["total_vat_source"] = "native_vat"
+        tissue_columns["total_vat_source"] = ["native_vat"] * len(table)
     else:
         total_vat_mask = None
-        table["total_vat_source"] = "unavailable"
+        tissue_columns["total_vat_source"] = ["unavailable"] * len(table)
     if total_vat_mask is not None:
-        _add_tissue_measurements(
-            table,
+        tissue_columns.update(_tissue_measurement_columns(
             name="total_vat",
             tissue_mask_zyx=total_vat_mask,
             image_zyx=image,
             body_mask_zyx=body_surface.body_mask_zyx,
             storage_indices_z=storage,
             pixel_area_cm2=pixel_area_cm2,
-        )
+        ))
     else:
-        table["total_vat_voxel_count"] = pd.array([pd.NA] * len(table), dtype="Int64")
-        table["total_vat_area_cm2"] = np.nan
-        table["total_vat_area_valid"] = False
-        table["total_vat_area_reason"] = "invalid_measurement"
-        table["total_vat_mean_hu"] = np.nan
-        table["total_vat_hu_valid"] = False
-        table["total_vat_hu_reason"] = "invalid_measurement"
+        tissue_columns.update(
+            {
+                "total_vat_voxel_count": pd.array(
+                    [pd.NA] * len(table),
+                    dtype="Int64",
+                ),
+                "total_vat_area_cm2": np.full(len(table), np.nan),
+                "total_vat_area_valid": np.zeros(len(table), dtype=bool),
+                "total_vat_area_reason": ["invalid_measurement"] * len(table),
+                "total_vat_mean_hu": np.full(len(table), np.nan),
+                "total_vat_hu_valid": np.zeros(len(table), dtype=bool),
+                "total_vat_hu_reason": ["invalid_measurement"] * len(table),
+            }
+        )
+
+    if tissue_definitions:
+        compartment_labels = (
+            labels
+            if compartment_labels_zyx is None
+            else validate_array_zyx(
+                compartment_labels_zyx,
+                geometry,
+                "compartment_labels_zyx",
+            )
+        )
+        if not np.issubdtype(compartment_labels.dtype, np.integer):
+            raise TypeError("Compartment labels must be integer-valued.")
+        compartment_schema = (
+            schema
+            if compartment_label_schema is None
+            else _validated_label_schema(compartment_label_schema)
+        )
+        derived_masks = derive_configured_tissue_masks(
+            image,
+            compartment_labels,
+            compartment_schema,
+            tissue_definitions,
+        )
+        reserved_names = {*tissue_masks, "total_vat"}
+        collisions = sorted(reserved_names.intersection(derived_masks))
+        if collisions:
+            raise ValueError(
+                f"Derived tissue definitions collide with native outputs: {collisions}."
+            )
+        for name, tissue_mask in derived_masks.items():
+            tissue_columns.update(_tissue_measurement_columns(
+                name=name,
+                tissue_mask_zyx=tissue_mask,
+                image_zyx=image,
+                body_mask_zyx=body_surface.body_mask_zyx,
+                storage_indices_z=storage,
+                pixel_area_cm2=pixel_area_cm2,
+            ))
+
+    table = pd.concat(
+        [table, pd.DataFrame(tissue_columns, index=table.index)],
+        axis=1,
+    )
+    if tissue_definitions:
+        ratio_columns: dict[str, Any] = {}
+        for ratio_name, numerator, denominator in DERIVED_RATIO_DEFINITIONS:
+            ratio_columns.update(_slice_composition_ratio_columns(
+                table,
+                name=ratio_name,
+                numerator=numerator,
+                denominator=denominator,
+            ))
+        table = pd.concat(
+            [table, pd.DataFrame(ratio_columns, index=table.index)],
+            axis=1,
+        )
 
     segmented_counts = np.count_nonzero(labels, axis=(1, 2)).astype(np.int64)
     tissue_outside_body = (labels != 0) & ~body_surface.body_mask_zyx

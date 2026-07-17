@@ -1,0 +1,31 @@
+tissue:
+  profile_id: comp2comp_pixel_cleanup_v1
+  imat:
+    filter_size: true
+    filter_size_version: 2D
+    filter_size_2D: 10
+    filter_size_unit: voxel
+    filter_size_connectivity: 8
+    fill_holes: true
+    fill_holes_version: 2D
+    fill_holes_2D: 5
+    fill_holes_unit: voxel
+    fill_holes_connectivity: 8
+  sm:
+    fill_holes: true
+    fill_holes_version: 2D
+    fill_holes_2D: 5
+    fill_holes_unit: voxel
+    fill_holes_connectivity: 8
+  vat:
+    fill_holes: true
+    fill_holes_version: 2D
+    fill_holes_2D: 5
+    fill_holes_unit: voxel
+    fill_holes_connectivity: 8
+  sat:
+    fill_holes: true
+    fill_holes_version: 2D
+    fill_holes_2D: 50
+    fill_holes_unit: voxel
+    fill_holes_connectivity: 8

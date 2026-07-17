@@ -27,6 +27,88 @@ TABLE_NAMES = ("slices", "vertebrae", "summaries")
 IDENTITY_COLUMNS = ("schema_version", "run_id", "analysis_id", "case_id")
 
 
+def _validated_height_m(height_m: float | None) -> float | None:
+    if height_m is None:
+        return None
+    if isinstance(height_m, bool) or not isinstance(height_m, (int, float)):
+        raise TypeError("height_m must be a measured numeric height in metres.")
+    value = float(height_m)
+    if not np.isfinite(value) or value <= 0:
+        raise ValueError("height_m must be finite and positive.")
+    return value
+
+
+def _add_l3_height_index(table: pd.DataFrame, height_m: float | None) -> pd.DataFrame:
+    height = _validated_height_m(height_m)
+    if height is None:
+        return table
+    output = table.copy()
+    source = next(
+        (
+            column
+            for column in (
+                "skeletal_muscle_tissue_hu_m29_150_area_cm2",
+                "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
+            )
+            if column in output
+        ),
+        None,
+    )
+    output["height_m"] = height
+    output["height_source"] = "caller_supplied_measured_height"
+    name = "smi_skeletal_muscle_tissue_hu_m29_150_cm2_m2"
+    if source is None:
+        output[name] = np.nan
+        output[f"{name}_valid"] = False
+        output[f"{name}_reason"] = "invalid_measurement"
+        return output
+    values = pd.to_numeric(output[source], errors="coerce")
+    source_valid_column = source.removesuffix("_area_cm2") + "_area_valid"
+    if source.endswith("_mean_csa_cm2"):
+        source_valid_column = source.removesuffix("_mean_csa_cm2") + "_mean_csa_cm2_valid"
+    source_valid = (
+        output[source_valid_column].fillna(False)
+        if source_valid_column in output
+        else values.notna()
+    )
+    valid = source_valid & values.notna()
+    output[name] = values / (height**2)
+    output[f"{name}_valid"] = valid
+    output[f"{name}_reason"] = np.where(valid, None, "invalid_measurement")
+    return output
+
+
+def _add_range_volume_indices(
+    table: pd.DataFrame,
+    height_m: float | None,
+) -> pd.DataFrame:
+    height = _validated_height_m(height_m)
+    if height is None:
+        return table
+    output = table.copy()
+    output["height_m"] = height
+    output["height_source"] = "caller_supplied_measured_height"
+    for prefix in (
+        "skeletal_muscle_tissue_hu_m29_150",
+        "imat_ct_hu_m190_m30",
+        "sat_total_hu_m190_m30",
+        "vat_total_hu_m190_m30",
+    ):
+        source = f"{prefix}_volume_cm3"
+        if source not in output:
+            continue
+        name = f"{prefix}_volume_index_cm3_m2"
+        values = pd.to_numeric(output[source], errors="coerce")
+        valid = (
+            output.get(f"{source}_valid", values.notna()).fillna(False)
+            & values.notna()
+        )
+        output[name] = values / (height**2)
+        output[f"{name}_valid"] = valid
+        output[f"{name}_reason"] = np.where(valid, None, "invalid_measurement")
+    return output
+
+
 def _full_coverage_tolerance(slices: pd.DataFrame) -> float:
     values = pd.to_numeric(
         slices["full_coverage_tolerance"],
@@ -152,14 +234,16 @@ def l3_measurements(
     directory: str | Path,
     *,
     aggregation: str = "territory_mean",
+    height_m: float | None = None,
 ) -> pd.DataFrame:
     tables = load_measurement_tables(directory)
-    return select_l3_view(
+    selected = select_l3_view(
         tables["slices"],
         tables["vertebrae"],
         aggregation=aggregation,
         full_coverage_tolerance=_full_coverage_tolerance(tables["slices"]),
     )
+    return _add_l3_height_index(selected, height_m)
 
 
 def range_measurements(
@@ -168,6 +252,7 @@ def range_measurements(
     start_level: str,
     end_level: str,
     allow_partial: bool = False,
+    height_m: float | None = None,
 ) -> pd.DataFrame:
     tables = load_measurement_tables(directory)
     slices = tables["slices"]
@@ -214,4 +299,4 @@ def range_measurements(
             "aggregation": "physical_range",
         }
     )
-    return pd.DataFrame([result])
+    return _add_range_volume_indices(pd.DataFrame([result]), height_m)
