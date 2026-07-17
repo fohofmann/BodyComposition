@@ -22,12 +22,22 @@ provides the required crop mask. The internal ResEncL and ResEncM vertebral
 models remain explicitly selectable. Details are in
 [docs/models.md](docs/models.md).
 
-**Pipelines that use TotalSegmentator require the `tissue_types` and, for some configurations, `vertebrae_body` tasks. We do not provide these weights directly; obtain and use them under the applicable TotalSegmentator license.**
+The canonical `BodyComposition` pipelines derive the default body/trunk
+envelope from the existing tissue segmentation. TotalSegmentator's open fast
+`total` task is used only when rib/iliac landmarks are enabled, and its open
+`body` task remains an explicit alternative body-surface backend. The upstream
+project lists these tasks as openly available for any usage under Apache-2.0.
+Legacy pipelines may additionally use separately licensed, non-commercial
+tasks such as `tissue_types` or `vertebrae_body`; obtain and use those only
+under their applicable terms. Disabling landmarks while retaining the default
+tissue envelope removes TotalSegmentator inference from the canonical run.
 
-1. Set your TotalSegmentator license.
-  - **If you are already using TotalSegmentator in your current environment**, and have set a license, skip this.
-  - **If you have not obtained a license so far**, you have to do so using the [provided form](https://github.com/wasserth/TotalSegmentator#subtasks) and [set your license](https://github.com/wasserth/TotalSegmentator?tab=readme-ov-file#other-commands) (e.g. `totalseg_set_license -l aca_12345678910`). *Please note and respect TotalSegmentator's license conditions, especially regarding the non-commercial use!*
-  - **If you have a license already available in an other environment**, you can also provide it manually by editing `config/config.yaml`: Set `paths/totalsegmentator_config` to the home directory of TotalSegmentator that includes TotalSegmentator's configuration file (e.g., `./models/totalsegmentator_config`).
+1. Configure a TotalSegmentator license only when selecting one of its
+   separately licensed subtasks. The optional measurement stage `body` and `total` paths do
+   not require that license. If needed, use the
+   [upstream instructions](https://github.com/wasserth/TotalSegmentator#subtasks)
+   and point `paths/totalsegmentator_config` to the directory containing the
+   resulting TotalSegmentator configuration.
 
 2. Set TotalSegmentator model weights path.
   - **If you are already using TotalSegmentator in your current environment**, skip this. As we use TotalSegmentator's python API, the pipeline should find TotalSegmentators configuration file and model weights automatically.
@@ -42,8 +52,8 @@ models remain explicitly selectable. Details are in
     bodycomposition_download_models --pipeline BodyCompositionFast
     ```
     This script stores models in the directories defined in `config/config.yaml`.
-    Default inference never downloads SPINEPS, VERIDAH, VibeSeg, or CTDeepRot
-    assets implicitly.
+    Default inference never downloads SPINEPS, VERIDAH, VibeSeg, CTDeepRot, or
+    TotalSegmentator assets implicitly.
 
 The orientation-enabled pipelines also require the approximately 43 MiB
 CTDeepRot 2D checkpoint. Synchronize it explicitly from the pinned upstream
@@ -72,6 +82,27 @@ are fetched from their exact original upstream release URLs and are never
 redistributed in the source, wheel, or public container. SPINEPS, VERIDAH,
 TPTBox, VibeSeg, and their papers must be acknowledged as described in
 `THIRD_PARTY_NOTICES.md`.
+
+With the released defaults, the canonical measurement stage additionally uses
+TotalSegmentator task 297 for anatomical mid-waist landmarks. Task 299 is
+synchronized only when its alternative body-surface backend is selected. The
+model manager honors the active configuration, fetches exact original GitHub
+release archives, verifies pinned byte sizes and SHA-256 digests before
+extraction, and atomically promotes verified contents into the mounted model
+directory:
+
+```bash
+bodycomposition_download_models --model TotalSegmentator-body
+bodycomposition_download_models --model TotalSegmentator-body --check
+bodycomposition_download_models --model TotalSegmentator-total-fast
+bodycomposition_download_models --model TotalSegmentator-total-fast --check
+```
+
+The task-297 landmark source runs once as the upstream fast `total` model; the
+adapter then reads only bilateral hip and rib labels. The pipeline does not use
+TotalSegmentator's `roi_subset` path because that path requests an additional
+task-298 model. A cache-only guard turns any unexpected model request into a
+clear error instead of an inference-time download.
 
 The container uses a mounted model directory. Hydrate it with the same
 BodyComposition command; no separate SPINEPS or VibeSeg installation is needed:
@@ -116,7 +147,8 @@ uv run python -m pytest -m real_world tests/test_public_real_world.py -v
 ```
 
 The model root follows the default cache layout: `Dataset611_BodyComposition`,
-`SPINEPS/spineps-veridah-ct-v1`, and
+`SPINEPS/spineps-veridah-ct-v1`,
+`Dataset297_TotalSegmentator_total_3mm_1559subj`, and
 `CTDeepRot/492114b8f9f3a7f058d4e97c0dd3643fb8d39649/net2d.pt`. An explicitly
 mounted CTDeepRot checkpoint can instead be selected with
 `BODYCOMPOSITION_CTDEEPROT_CHECKPOINT`.
@@ -178,6 +210,24 @@ The following flags are available:
 - `--method` / `-m`: Name of pipeline method to be run, as defined in the [pipeline_registry.py](BodyComposition/pipeline_registry.py). Currently available options are described in [docs/pipeline.md](docs/pipeline.md). `BodyCompositionFast` uses SPINEPS/VERIDAH by default; select `vertebral_bodies_resenc_l` or `vertebral_bodies_resenc_m` through `vertebrae.backend` in a configuration override when required. A backend failure never triggers another model automatically.
 
 *`bin/run_batch.py` is just an command line access point to `python_api.py`. You can also use this API directly from your scripts. For details, [have a look at the file](BodyComposition/python_api.py).*
+
+`BodyComposition` and `BodyCompositionFast` write the canonical full-volume
+measurement bundle to `tables/{case_id}/`: `slices.parquet`,
+`vertebrae.parquet`, and `summaries.parquet`. The slice table preserves the
+native-mm longitudinal profile; the vertebral table contains three physical
+bins per detected native level, including sacrum. Read L3 or named-range
+convenience views without creating duplicate exports:
+
+```bash
+bodycomposition_measurements \
+  --tables ./data/output/BodyCompositionFast/tables/case-001 \
+  --view l3 \
+  --aggregation territory_mean
+```
+
+Definitions, units, anatomical territories, missingness, and volume
+reconstruction are in
+[docs/measurements.md](docs/measurements.md).
 
 ## More
 - A detailed description of the pipeline and the integrated actions can be found in [docs/pipeline.md](docs/pipeline.md).

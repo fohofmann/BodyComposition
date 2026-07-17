@@ -481,7 +481,12 @@ def test_bodycomposition_pipelines_route_only_vertebral_bodies_downstream(
         downstream_keys = {
             value
             for action in actions[1:]
-            for attribute in ("input_label_name", "input_mask_name", "input_name")
+            for attribute in (
+                "input_label_name",
+                "input_mask_name",
+                "input_name",
+                "vertebral_body_source_name",
+            )
             if (value := getattr(action, attribute, None))
             in {SPINEPS_BODY_MASK, SPINEPS_WHOLE_MASK}
         }

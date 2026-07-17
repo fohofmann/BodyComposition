@@ -15,13 +15,38 @@ import json
 
 # defining models per collection
 definition_pipelines = {
-    'BodyComposition': ['CTDeepRot-2D', 'SPINEPS-VERIDAH', 'BodyCompositionCT-ResEncL'],
-    'BodyCompositionFast': ['CTDeepRot-2D', 'SPINEPS-VERIDAH', 'BodyCompositionCT-ResEncM'],
+    'BodyComposition': ['CTDeepRot-2D', 'SPINEPS-VERIDAH', 'TotalSegmentator-total-fast', 'BodyCompositionCT-ResEncL'],
+    'BodyCompositionFast': ['CTDeepRot-2D', 'SPINEPS-VERIDAH', 'TotalSegmentator-total-fast', 'BodyCompositionCT-ResEncM'],
     'SarcopeniaTotalSegmentator': ['CTDeepRot-2D', 'TotalSegmentator-spine', 'TotalSegmentator-muscles', 'TotalSegmentator-body', 'TotalSegmentator-vertebrae_body', 'TotalSegmentator-tissue_types'],
     'SarcopeniaTotalSegmentatorFast': ['CTDeepRot-2D', 'TotalSegmentator-spine', 'TotalSegmentator-tissue_types'],
     'SarcopeniaStanfordFast': ['CTDeepRot-2D', 'Stanford-Spine', 'Stanford-Tissue'],
     'BodyAndOrganAnalysis': ['CTDeepRot-2D', 'BodyAndOrganAnalysis', 'TotalSegmentator-spine'],
 }
+
+
+def configured_pipeline_models(pipeline_name, config_dict):
+    """Return the models required by the selected pipeline configuration."""
+
+    model_titles = list(definition_pipelines[pipeline_name])
+    if pipeline_name not in {'BodyComposition', 'BodyCompositionFast'}:
+        return model_titles
+
+    optional_measurement_models = {
+        'TotalSegmentator-body',
+        'TotalSegmentator-total-fast',
+    }
+    model_titles = [
+        title for title in model_titles
+        if title not in optional_measurement_models
+    ]
+    measurement = config_dict['measurements']
+    insertion_index = max(len(model_titles) - 1, 0)
+    if measurement['body_surface']['backend'] == 'totalsegmentator_body_task299_v1':
+        model_titles.insert(insertion_index, 'TotalSegmentator-body')
+        insertion_index += 1
+    if measurement['landmarks']['enabled']:
+        model_titles.insert(insertion_index, 'TotalSegmentator-total-fast')
+    return model_titles
 
 # defining sources
 definition_sources = {
@@ -62,7 +87,13 @@ definition_sources = {
     },
     'TotalSegmentator-body': {
         'source': 'totalsegmentator',
-        'ts_id': 299
+        'ts_id': 299,
+        'measurement_task': 'bodytrunk',
+    },
+    'TotalSegmentator-total-fast': {
+        'source': 'totalsegmentator',
+        'ts_id': 297,
+        'measurement_task': 'body_landmarks',
     },
     'TotalSegmentator-vertebrae_body': {
         'source': 'totalsegmentator',
@@ -160,13 +191,13 @@ def main():
     parser.add_argument('--model', '-m', type=str,
                         help='Single model to be downloaded',
                         choices=['CTDeepRot-2D', 'SPINEPS-VERIDAH', 'VertebralBodiesCT-ResEncM', 'VertebralBodiesCT-ResEncL', 'BodyCompositionCT-ResEncM', 'BodyCompositionCT-ResEncL',
-                                 'TotalSegmentator-total', 'TotalSegmentator-spine', 'TotalSegmentator-body', 'TotalSegmentator-vertebrae_body', 'TotalSegmentator-tissue_types',
+                                 'TotalSegmentator-total-fast', 'TotalSegmentator-spine', 'TotalSegmentator-body', 'TotalSegmentator-vertebrae_body', 'TotalSegmentator-tissue_types',
                                  'Stanford-Spine', 'Stanford-Tissue',
                                  'BodyAndOrganAnalysis'])
     parser.add_argument(
         '--check',
         action='store_true',
-        help='Check the selected SPINEPS/VERIDAH bundle without downloading.',
+        help='Verify the selected pinned model bundle without downloading.',
     )
     args = parser.parse_args()
 
@@ -201,7 +232,7 @@ def main():
 
     # load model names
     if args.pipeline:
-        model_titles = definition_pipelines[args.pipeline]
+        model_titles = configured_pipeline_models(args.pipeline, config_dict)
     elif args.model:
         model_titles = [args.model]
     else:
@@ -209,12 +240,33 @@ def main():
         return
 
     if args.check:
-        if model_titles != ['SPINEPS-VERIDAH']:
-            raise ValueError('--check currently requires --model SPINEPS-VERIDAH.')
-        from BodyComposition.vertebral.spineps_backend import SpinepsVeridahAdapter
+        if model_titles == ['SPINEPS-VERIDAH']:
+            from BodyComposition.vertebral.spineps_backend import SpinepsVeridahAdapter
 
-        model_root = Path(config_weights['spineps'])
-        report = SpinepsVeridahAdapter(model_root).check(full_models=True)
+            model_root = Path(config_weights['spineps'])
+            report = SpinepsVeridahAdapter(model_root).check(full_models=True)
+        elif len(model_titles) == 1 and model_titles[0] in {
+            'TotalSegmentator-body',
+            'TotalSegmentator-total-fast',
+        }:
+            from BodyComposition.measurement.totalsegmentator_assets import (
+                check_measurement_model,
+            )
+
+            task = (
+                'bodytrunk'
+                if model_titles[0] == 'TotalSegmentator-body'
+                else 'body_landmarks'
+            )
+            report = check_measurement_model(
+                task,
+                Path(config_weights['totalsegmentator']),
+            )
+        else:
+            raise ValueError(
+                '--check requires one of SPINEPS-VERIDAH, TotalSegmentator-body, '
+                'or TotalSegmentator-total-fast.'
+            )
         print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
         if not report.ready:
             raise SystemExit(1)
@@ -275,7 +327,18 @@ def main():
             logging.info("  finished.")
         elif model['source'] == 'totalsegmentator':
             logging.info(f"Downloading `TotalSegmentator/{model_title}`, task_id {model['ts_id']} to `{config_weights['totalsegmentator']}`...")
-            download_pretrained_weights(model['ts_id'])
+            measurement_task = model.get('measurement_task')
+            if measurement_task is not None:
+                from BodyComposition.measurement.totalsegmentator_assets import (
+                    sync_measurement_model,
+                )
+
+                sync_measurement_model(
+                    measurement_task,
+                    Path(config_weights['totalsegmentator']),
+                )
+            else:
+                download_pretrained_weights(model['ts_id'])
             logging.info("  finished.")
         elif model['source'] == 'github':
             download_dir = config_weights[model['local_id']]

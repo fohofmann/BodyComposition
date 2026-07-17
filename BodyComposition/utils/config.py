@@ -124,6 +124,12 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         "tissue.save_mask",
         "tissue.hu_denoise.filter_outliers",
         "tissue.hu_denoise.filter_median",
+        "measurements.enabled",
+        "measurements.body_surface.save_mask",
+        "measurements.landmarks.enabled",
+        "measurements.review.enabled",
+        "measurements.export.parquet",
+        "measurements.export.csv",
     ):
         _require_bool(config, path)
 
@@ -228,6 +234,73 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             raise ConfigError(f"Configuration value {base}.filter_size_version must be 2D or 3D.")
         _require_nonnegative_number(config, f"{base}.filter_size_2D")
         _require_nonnegative_number(config, f"{base}.filter_size_3D")
+
+    measurement = _require_mapping(config, "measurements")
+    if measurement.get("totalsegmentator_version") != "2.15.0":
+        raise ConfigError("measurements.totalsegmentator_version must be pinned to 2.15.0.")
+    body_backend = _value(config, "measurements.body_surface.backend")
+    if body_backend not in {
+        "tissue_segmentation_envelope_v1",
+        "totalsegmentator_body_task299_v1",
+        "deterministic_body_mask_v1",
+    }:
+        raise ConfigError("Unknown measurements.body_surface.backend.")
+    landmark_backend = _value(config, "measurements.landmarks.backend")
+    if landmark_backend != "totalsegmentator_total_task297_landmarks_v1":
+        raise ConfigError("Unknown measurements.landmarks.backend.")
+    for path in (
+        "measurements.body_surface.min_component_volume_mm3",
+        "measurements.body_surface.minimum_component_area_mm2",
+        "measurements.landmarks.maximum_side_disagreement_mm",
+        "measurements.qc.circumference_jump.maximum_gap_mm",
+        "measurements.qc.circumference_jump.minimum_absolute_jump_cm",
+        "measurements.qc.circumference_jump.minimum_relative_jump",
+    ):
+        value = _value(config, path)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ConfigError(f"Configuration value {path} must be positive.")
+    for path in (
+        "measurements.body_surface.closing_radius_mm",
+        "measurements.body_surface.smoothing_sigma_mm",
+    ):
+        value = _value(config, path)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(f"Configuration value {path} must be non-negative.")
+    maximum_removed_fraction = _value(
+        config,
+        "measurements.vertebral_extent.maximum_removed_fraction",
+    )
+    if (
+        isinstance(maximum_removed_fraction, bool)
+        or not isinstance(maximum_removed_fraction, (int, float))
+        or not 0 <= maximum_removed_fraction < 1
+    ):
+        raise ConfigError(
+            "measurements.vertebral_extent.maximum_removed_fraction must be in [0, 1)."
+        )
+    for path in (
+        "measurements.l3_slab_length_mm",
+        "measurements.full_coverage_tolerance",
+    ):
+        value = _value(config, path)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ConfigError(f"Configuration value {path} must be positive.")
+    if _value(config, "measurements.full_coverage_tolerance") > 1:
+        raise ConfigError("measurements.full_coverage_tolerance must not exceed one.")
+    for path in (
+        "measurements.landmarks.minimum_voxels",
+        "measurements.vertebral_extent.minimum_component_voxels",
+    ):
+        value = _value(config, path)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ConfigError(f"Configuration value {path} must be a positive integer.")
+    threshold_hu = _value(config, "measurements.body_surface.threshold_hu")
+    if isinstance(threshold_hu, bool) or not isinstance(threshold_hu, (int, float)):
+        raise ConfigError("measurements.body_surface.threshold_hu must be numeric.")
+    if measurement["enabled"] and not measurement["export"]["parquet"]:
+        raise ConfigError("Canonical measurements require Parquet export.")
+    if measurement["enabled"] and measurement["export"]["csv"]:
+        raise ConfigError("Canonical measurements do not permit duplicate CSV export.")
 
     for crop_name, crop in _require_mapping(config, "crop").items():
         if not isinstance(crop, Mapping):

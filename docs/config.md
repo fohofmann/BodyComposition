@@ -97,6 +97,11 @@ reflection-like concerns must be supplied as a forced-review reason.
 ### Tissue
 - `save_mask`: If `True`, the [tissue masks](labels.md) are saved. If `False`, the masks are just saved to the temporary pipeline memory.
 
+The canonical defaults use calibrated, unsmoothed HU values and do not delete
+small SM, IMAT, VAT, or SAT islands. The configurable size thresholds remain
+available for prespecified sensitivity analyses, but enabling one changes the
+measurement identity and must be reported.
+
 #### Filter: HU Denoise
 - `filter_outliers`: If `True`, outliers are clipped. If `False`, no clipping is performed.
 - `filter_outliers_range`: Range for clipping outliers, e.g. metal implants or noisy outliers [-1024, 3071]
@@ -135,8 +140,57 @@ reflection-like concerns must be supplied as a forced-review reason.
 - `filter_size_2D`: Size for the 2D filter, e.g. 10 mm^2 (calculated based on voxel spacing). Only areas larger than this are considered as SAT.
 - `filter_size_3D`: Size for the 3D filter, e.g. 80 mm^3 (calculated based on voxel spacing). Only volumes larger than this are considered as SAT.
 
+### Measurements
+
+- `enabled`: Required for the canonical `BodyComposition` pipelines. Other
+  registered pipelines may run without the measurement bundle.
+- `totalsegmentator_version`: Pinned optional body/landmark adapter version. It
+  must be `2.15.0` when either TotalSegmentator support backend is enabled.
+- `full_coverage_tolerance`: Minimum physical interval coverage for a strict
+  range or vertebral-territory bin. The default is `0.999`.
+- `l3_slab_length_mm`: Fixed L3-centred comparator length. The canonical value
+  is `200` mm.
+- `body_surface.backend`: The default
+  `tissue_segmentation_envelope_v1` derives body/trunk envelopes from the
+  existing postprocessed tissue labels. Explicit alternatives are
+  `totalsegmentator_body_task299_v1` and `deterministic_body_mask_v1`. A
+  failure never causes backend substitution.
+- `body_surface.save_mask`: Persists the encoded body/trunk QC mask. Trunk is
+  label 1; full body is the union of labels 1 and 2.
+- `body_surface.minimum_component_area_mm2`, `closing_radius_mm`, and
+  `smoothing_sigma_mm`: Physical parameters of the tissue-derived envelope.
+- `body_surface.threshold_hu` and `min_component_volume_mm3`: Parameters used
+  only by the deterministic alternative.
+- `landmarks.enabled`: Runs the anatomical mid-waist landmark stage. Disabling
+  it leaves mid-waist null; it does not substitute the minimum waist.
+- `landmarks.backend`: Pinned task-297 rib/hip adapter.
+- `landmarks.minimum_voxels`: Minimum retained landmark component.
+- `landmarks.maximum_side_disagreement_mm`: Maximum bilateral position
+  disagreement before a landmark is uncertain.
+- `vertebral_extent.minimum_component_voxels`: Minimum largest vertebral-body
+  component.
+- `vertebral_extent.maximum_removed_fraction`: Maximum fraction that may be
+  removed as smaller isolated components while retaining a valid extent.
+- `qc.circumference_jump.maximum_gap_mm`: Largest adjacent physical gap on
+  which longitudinal jump QC is evaluated.
+- `qc.circumference_jump.minimum_absolute_jump_cm` and
+  `minimum_relative_jump`: Both thresholds must be exceeded to flag an
+  implausible adjacent-slice circumference discontinuity.
+- `review.enabled`: Writes the identifier-free measurement review PNG.
+- `export.parquet`: Must remain `true` for the canonical bundle.
+- `export.csv`: Reserved interoperability setting; canonical measurement CSV
+  duplication is disabled and must remain `false`.
+
+Definitions, units, physical aggregation, territories, and missing reasons are
+documented in [measurements.md](measurements.md).
+
 ### Crop
-For the fast versions of the pipeline, we segment the vertebrae, and then crop the image to the region of interest for all further analyses. The region of interest can be defined in this section of the configuration file, and is then used by the [CreateBoundingBox](../BodyComposition/actions/crop.py) class. For each region of interest, the following parameters can be defined:
+Legacy/noncanonical pipelines may segment vertebrae and crop to a configured
+region of interest. The canonical `BodyCompositionFast` pipeline intentionally
+does not crop: the native-mm longitudinal table and vertebral territories
+require the complete prepared CT. Crop definitions remain available to actions that
+explicitly use [CreateBoundingBox](../BodyComposition/actions/crop.py). For
+each region of interest, the following parameters can be defined:
 
 - `roi`: List of labels that define the region of interest.
 - `roi_anatomical`: Preferred backend-independent names. These are resolved

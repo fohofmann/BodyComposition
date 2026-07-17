@@ -61,3 +61,30 @@ The labels are equivalent to the (v2-) labels as described in the [TotalSegmenta
 | 3 | SM |
 | 4 | PSOAS |
 | 5 | IMAT |
+
+## Canonical internal tissue mask
+
+The full-volume `BodyComposition` pipelines use the following native tissue
+mask. measurement stage preserves each component and derives `total_vat` as the union of
+aVAT and tVAT; it does not replace either source label.
+
+| Label | Name |
+| --- | --- |
+| 1 | SM |
+| 2 | BONE |
+| 3 | SAT |
+| 4 | aVAT |
+| 5 | tVAT |
+| 6 | HEART |
+| 7 | LUNG |
+| 8 | IMAT |
+
+## Body-surface mask
+
+`masks/{caseid}_body-surface.nii.gz` is an encoded QC/measurement mask aligned
+to the complete prepared CT. Label 1 is the trunk and label 2 is the
+remaining full-body component (normally visible extremities). The full patient
+body is the union of labels 1 and 2. The default mask is derived from the
+postprocessed tissue labels. If TotalSegmentator task 299 is explicitly
+selected, its unchanged upstream label may additionally be stored under
+`labels/`; the canonical encoded mask remains distinct.

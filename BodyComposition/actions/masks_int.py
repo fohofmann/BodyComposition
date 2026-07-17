@@ -9,6 +9,18 @@ from BodyComposition.utils.geometry import assert_same_physical_domain
 from BodyComposition.utils.nifti import NiftiDataContainer
 from BodyComposition.utils.masks import filter_hu, remove_small_objects
 
+
+def _apply_configured_size_filter(mask, settings, spacing_xyz):
+    if settings['filter_size']:
+        remove_small_objects(
+            mask_np=mask,
+            spacing_xyz=spacing_xyz,
+            limit_size_version=settings['filter_size_version'],
+            limit_size_2D=settings['filter_size_2D'],
+            limit_size_3D=settings['filter_size_3D'],
+        )
+    return mask
+
 # action class
 class MasksInternalTissue(PipelineAction):
     """Action class for postprocessing tissue segmentations derived from internal body composition segmetation."""
@@ -89,17 +101,17 @@ class MasksInternalTissue(PipelineAction):
         # filter: intermuscular adipose tissue IMAT; special case as introducing extra label
         if self.config_tissue['imat']['filter_hu']:
             logging.info(f" HU filter muscle compartment")
-            # create AT mask, doing this first to account for smaller objects at the edge of SM segmentation
-            mask_tmp = filter_hu(image_np, self.config_tissue['imat']['filter_hu_range'])
-            if self.config_tissue['imat']['filter_size']:
-                remove_small_objects(mask_np = mask_tmp,
-                                     spacing_xyz=input_image.spacing,
-                                     limit_size_version=self.config_tissue['imat']['filter_size_version'],
-                                     limit_size_2D=self.config_tissue['imat']['filter_size_2D'],
-                                     limit_size_3D=self.config_tissue['imat']['filter_size_3D'])
-                
-            # intersection of AT and SM -> add to IMAT
-            mask_tmp = np.isin(output_np, [self.LBL_TISSUE_R['SM']]) & mask_tmp
+            mask_tmp = (
+                output_np == self.LBL_TISSUE_R['SM']
+            ) & filter_hu(
+                image_np,
+                self.config_tissue['imat']['filter_hu_range'],
+            )
+            _apply_configured_size_filter(
+                mask_tmp,
+                self.config_tissue['imat'],
+                input_image.spacing,
+            )
             output_np[mask_tmp] = self.LBL_TISSUE_R['IMAT']
             logging.debug(f"  identified everything in IMAT HU-range within label SM as IMAT (={self.LBL_TISSUE_R['IMAT']})")
 
@@ -107,45 +119,53 @@ class MasksInternalTissue(PipelineAction):
         # filter: skeletal muscle SM
         if self.config_tissue['sm']['filter_hu']:
             logging.info(f" HU filter muscle compartment(s)")
-            mask_tmp = filter_hu(image_np, self.config_tissue['sm']['filter_hu_range'])
-            mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['SM']]) & np.logical_not(mask_tmp)
-            if self.config_tissue['sm']['filter_size']:
-                remove_small_objects(mask_np = mask_tmp_not,
-                                     spacing_xyz=input_image.spacing,
-                                     limit_size_version=self.config_tissue['sm']['filter_size_version'],
-                                     limit_size_2D=self.config_tissue['sm']['filter_size_2D'],
-                                     limit_size_3D=self.config_tissue['sm']['filter_size_3D'])
-            output_np[mask_tmp_not] = 0
+            compartment = output_np == self.LBL_TISSUE_R['SM']
+            mask_tmp = compartment & filter_hu(
+                image_np,
+                self.config_tissue['sm']['filter_hu_range'],
+            )
+            _apply_configured_size_filter(
+                mask_tmp,
+                self.config_tissue['sm'],
+                input_image.spacing,
+            )
+            output_np[compartment & ~mask_tmp] = 0
             logging.debug(f"  removed everything out of SM HU-range from label SM")
 
 
         # filter: visceral adipose tissue VAT 
         if self.config_tissue['vat']['filter_hu']:
             logging.info(f" HU filter visceral compartment(s)")
-            mask_tmp = filter_hu(image_np, self.config_tissue['vat']['filter_hu_range'])
-            mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['aVAT'], self.LBL_TISSUE_R['tVAT']]) & np.logical_not(mask_tmp)
-            if self.config_tissue['vat']['filter_size']:
-                remove_small_objects(mask_np = mask_tmp_not,
-                                     spacing_xyz=input_image.spacing,
-                                     limit_size_version=self.config_tissue['vat']['filter_size_version'],
-                                     limit_size_2D=self.config_tissue['vat']['filter_size_2D'],
-                                     limit_size_3D=self.config_tissue['vat']['filter_size_3D'])
-            output_np[mask_tmp_not] = 0
+            hu_mask = filter_hu(
+                image_np,
+                self.config_tissue['vat']['filter_hu_range'],
+            )
+            for label_name in ('aVAT', 'tVAT'):
+                compartment = output_np == self.LBL_TISSUE_R[label_name]
+                mask_tmp = compartment & hu_mask
+                _apply_configured_size_filter(
+                    mask_tmp,
+                    self.config_tissue['vat'],
+                    input_image.spacing,
+                )
+                output_np[compartment & ~mask_tmp] = 0
             logging.debug(f"  removed everything out of VAT HU-range from label aVAT, tVAT")
 
 
         # filter: subcutaneous adipose tissue SAT
         if self.config_tissue['sat']['filter_hu']:
             logging.info(f" HU filter subcutaneous compartment")
-            mask_tmp = filter_hu(image_np, self.config_tissue['sat']['filter_hu_range'])
-            mask_tmp_not = np.isin(output_np, [self.LBL_TISSUE_R['SAT']]) & np.logical_not(mask_tmp)
-            if self.config_tissue['sat']['filter_size']:
-                remove_small_objects(mask_np = mask_tmp_not,
-                                     spacing_xyz=input_image.spacing,
-                                     limit_size_version=self.config_tissue['sat']['filter_size_version'],
-                                     limit_size_2D=self.config_tissue['sat']['filter_size_2D'],
-                                     limit_size_3D=self.config_tissue['sat']['filter_size_3D'])
-            output_np[mask_tmp_not] = 0
+            compartment = output_np == self.LBL_TISSUE_R['SAT']
+            mask_tmp = compartment & filter_hu(
+                image_np,
+                self.config_tissue['sat']['filter_hu_range'],
+            )
+            _apply_configured_size_filter(
+                mask_tmp,
+                self.config_tissue['sat'],
+                input_image.spacing,
+            )
+            output_np[compartment & ~mask_tmp] = 0
             logging.debug(f"  removed everything out of SAT HU-range from label SAT")
 
         # logging

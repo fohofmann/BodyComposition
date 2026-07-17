@@ -79,7 +79,7 @@ tissue:
     filter_hu_range: [-190, -30]
 
     # special case: positive & negative filter: -SM, +IMAT:
-    filter_size: True
+    filter_size: False
     filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 10 # mm^2
     filter_size_3D: 20 # mm^3
@@ -87,7 +87,7 @@ tissue:
   sm:
     filter_hu: True
     filter_hu_range: [-29, 150]
-    filter_size: True
+    filter_size: False
     filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 10 # mm^2
     filter_size_3D: 20 # mm^3
@@ -95,7 +95,7 @@ tissue:
   vat: # in some studies differently defined than sat
     filter_hu: True
     filter_hu_range: [-190, -30]
-    filter_size: True
+    filter_size: False
     filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 20 # mm^2
     filter_size_3D: 20 # mm^3
@@ -103,10 +103,42 @@ tissue:
   sat:
     filter_hu: True
     filter_hu_range: [-190, -30]
-    filter_size: True
+    filter_size: False
     filter_size_version: 3D # options: 2D, 3D
     filter_size_2D: 20 # mm^2
     filter_size_3D: 50 # mm^3
+
+measurements:
+  enabled: True
+  totalsegmentator_version: 2.15.0
+  full_coverage_tolerance: 0.999
+  l3_slab_length_mm: 200
+  body_surface:
+    backend: tissue_segmentation_envelope_v1
+    save_mask: True
+    minimum_component_area_mm2: 100
+    closing_radius_mm: 6
+    smoothing_sigma_mm: 2
+    threshold_hu: -500
+    min_component_volume_mm3: 10000
+  landmarks:
+    enabled: True
+    backend: totalsegmentator_total_task297_landmarks_v1
+    minimum_voxels: 20
+    maximum_side_disagreement_mm: 30
+  vertebral_extent:
+    minimum_component_voxels: 20
+    maximum_removed_fraction: 0.05
+  qc:
+    circumference_jump:
+      maximum_gap_mm: 10
+      minimum_absolute_jump_cm: 15
+      minimum_relative_jump: 0.15
+  review:
+    enabled: True
+  export:
+    parquet: True
+    csv: False
 
 
 crop:

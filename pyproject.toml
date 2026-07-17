@@ -27,6 +27,7 @@ dependencies = [
     "numpy",
     "opencv-python-headless",
     "pandas",
+    "pyarrow",
     "psutil",
     "pydicom",
     "requests == 2.27.1",
@@ -40,7 +41,7 @@ dependencies = [
     "nnunetv2",
     "torch",
     "torchvision",
-    "TotalSegmentator"
+    "TotalSegmentator==2.15.0"
 ]
 
 [project.optional-dependencies]
@@ -57,6 +58,7 @@ Issues = "https://github.com/fohofmann/BodyComposition/issues"
 [project.scripts]
 bodycomposition = "BodyComposition.bin.run_batch:main"
 bodycomposition_download_models = "BodyComposition.bin.pre_download_models:main"
+bodycomposition_measurements = "BodyComposition.bin.measurement_view:main"
 bodycomposition_segmentation = "BodyComposition.bin.run_segmentation_only:main"
 bodycomposition_transform_dcm_to_nifti = "BodyComposition.bin.pre_transform_dcm_to_nifti:main"
 

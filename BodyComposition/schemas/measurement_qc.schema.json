@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fohofmann/BodyComposition/schemas/measurement_qc.schema.json",
+  "title": "BodyComposition measurement QC",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "analysis_id",
+    "case_id",
+    "qc_status",
+    "manual_review_required",
+    "body_surface_backend",
+    "provenance",
+    "qc_flags"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0.0"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysis_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "qc_status": {
+      "enum": ["pass", "review", "fail"]
+    },
+    "manual_review_required": {
+      "type": "boolean"
+    },
+    "body_surface_backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "qc_flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "stage",
+          "severity",
+          "reason",
+          "observed",
+          "thresholds",
+          "suggested_review_action",
+          "reviewer",
+          "reviewed_at",
+          "adjudication",
+          "review_comment"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "stage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": ["info", "warning", "error"]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observed": {
+            "type": "object"
+          },
+          "thresholds": {
+            "type": "object"
+          },
+          "suggested_review_action": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reviewer": {
+            "type": ["string", "null"]
+          },
+          "reviewed_at": {
+            "type": ["string", "null"]
+          },
+          "adjudication": {
+            "type": ["string", "null"]
+          },
+          "review_comment": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    }
+  }
+}

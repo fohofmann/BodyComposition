@@ -35,8 +35,11 @@ __pycache__/
 # Ignore build artifacts
 build/
 dist/
+*.egg-info/
 .attempts/
 outputs/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Local automation state

@@ -19,6 +19,9 @@ from BodyComposition.orientation.ctdeeprot import (
     UPSTREAM_COMMIT as CTDEEPROT_COMMIT,
     verify_checkpoint,
 )
+from BodyComposition.measurement.totalsegmentator_assets import (
+    check_measurement_model,
+)
 from BodyComposition.vertebral.spineps_assets import verify_model_bundle
 from BodyComposition.vertebral.spineps_manifest import (
     MODEL_BUNDLE_VERSION,
@@ -47,8 +50,13 @@ EXPECTED_OUTPUTS = (
     "qc/{case_id}_spine-review.png",
     "labels/{case_id}_int-bodycomposition.nii.gz",
     "masks/{case_id}_int-bodycomposition.nii.gz",
-    "exports/{case_id}_raw.csv",
-    "exports/all_L3Mean.csv",
+    "labels/{case_id}_tseg-body_landmarks.nii.gz",
+    "masks/{case_id}_body-surface.nii.gz",
+    "tables/{case_id}/slices.parquet",
+    "tables/{case_id}/vertebrae.parquet",
+    "tables/{case_id}/summaries.parquet",
+    "qc/{case_id}_measurement-qc.json",
+    "qc/{case_id}_measurement-review.png",
 )
 
 
@@ -121,7 +129,8 @@ def _model_bundle() -> dict[str, Path]:
     configured = os.environ.get("BODYCOMPOSITION_MODEL_ROOT")
     assert configured, (
         "BODYCOMPOSITION_MODEL_ROOT must point to the directory containing "
-        "Dataset611_BodyComposition, SPINEPS/spineps-veridah-ct-v1, and CTDeepRot."
+        "Dataset611_BodyComposition, SPINEPS/spineps-veridah-ct-v1, CTDeepRot, "
+        "and the pinned TotalSegmentator task-297 directory."
     )
     root = Path(configured).expanduser().resolve()
     assert root.is_dir(), f"Model root does not exist: {root}"
@@ -138,10 +147,16 @@ def _model_bundle() -> dict[str, Path]:
         )
     ).expanduser().resolve()
     verify_checkpoint(checkpoint)
+    for task in ("body_landmarks",):
+        report = check_measurement_model(task, root)
+        assert report.ready, (
+            f"Pinned {report.model_title} assets are not ready: {report.errors}"
+        )
     return {
         "tissue": root / "Dataset611_BodyComposition",
         "spineps": spineps_root,
         "ctdeeprot": checkpoint,
+        "totalsegmentator": root,
     }
 
 
@@ -259,6 +274,7 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
             "weights": {
                 "spineps": str(models["spineps"]),
                 "int-bodycomposition": str(models["tissue"]),
+                "totalsegmentator": str(models["totalsegmentator"]),
             },
             "cache": str(workspace / "cache"),
         },
@@ -327,21 +343,16 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
     tissue_mask_image = sitk.ReadImage(
         str(workspace / f"masks/{case_id}_int-bodycomposition.nii.gz")
     )
+    body_surface_image = sitk.ReadImage(
+        str(workspace / f"masks/{case_id}_body-surface.nii.gz")
+    )
 
     assert _same_geometry(ct_image, vertebral_body_image)
     assert _same_geometry(ct_image, spineps_semantic_image)
     assert _same_geometry(ct_image, spineps_whole_image)
     assert _same_geometry(tissue_label_image, tissue_mask_image)
-    assert np.allclose(tissue_label_image.GetSpacing(), ct_image.GetSpacing())
-    assert np.allclose(tissue_label_image.GetDirection(), ct_image.GetDirection())
-    assert tissue_label_image.GetSize()[:2] == ct_image.GetSize()[:2]
-    assert 0 < tissue_label_image.GetSize()[2] <= ct_image.GetSize()[2]
-    crop_start = ct_image.TransformPhysicalPointToContinuousIndex(
-        tissue_label_image.GetOrigin()
-    )
-    assert np.allclose(crop_start[:2], (0.0, 0.0), atol=1e-4)
-    assert np.isclose(crop_start[2], round(crop_start[2]), atol=1e-4)
-    assert 0 <= round(crop_start[2]) < ct_image.GetSize()[2]
+    assert _same_geometry(ct_image, tissue_label_image)
+    assert _same_geometry(ct_image, body_surface_image)
 
     vertebral_body = sitk.GetArrayFromImage(vertebral_body_image)
     spineps_semantic = sitk.GetArrayFromImage(spineps_semantic_image)
@@ -365,19 +376,33 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
     assert vertebral_result["provenance"]["vibeseg_precomputed"] is True
     assert str(models["spineps"]) not in json.dumps(vertebral_result)
 
-    raw = pd.read_csv(workspace / f"exports/{case_id}_raw.csv")
-    l3_summary = pd.read_csv(workspace / "exports/all_L3Mean.csv")
-    assert len(raw) == tissue_label_image.GetSize()[2]
-    assert {"L2", "L3", "L4"}.issubset(set(raw["Level"].dropna()))
-    l3_rows = raw.loc[raw["Level"].eq("L3")]
-    assert not l3_rows.empty
-    for column in ("CSA_SM", "CSA_SAT"):
-        values = pd.to_numeric(l3_rows[column], errors="raise").to_numpy()
+    table_directory = workspace / f"tables/{case_id}"
+    slices = pd.read_parquet(table_directory / "slices.parquet")
+    vertebrae = pd.read_parquet(table_directory / "vertebrae.parquet")
+    summaries = pd.read_parquet(table_directory / "summaries.parquet")
+    assert len(slices) == ct_image.GetSize()[2]
+    assert slices["slice_id"].is_unique
+    assert np.all(np.diff(slices["position_superior_mm"].to_numpy()) > 0)
+    assert {"L2", "L3", "L4"}.issubset(set(vertebrae["vertebral_level"]))
+    l3_rows = vertebrae.loc[vertebrae["vertebral_level"].eq("L3")]
+    assert len(l3_rows) == 3
+    assert l3_rows["territory_bin"].tolist() == [1, 2, 3]
+    assert l3_rows["aggregation"].eq("vertebral_territory_third_mean").all()
+    for column in ("sm_mean_csa_cm2", "sat_mean_csa_cm2"):
+        values = l3_rows[column].to_numpy(dtype=float)
         assert np.isfinite(values).all()
-        assert (values > 0).all()
-        assert (values < 1000).all()
-    assert len(l3_summary) == 1
-    assert l3_summary.loc[0, "case_id"] == case_id
+        assert ((values > 0) & (values < 1000)).all()
+    assert len(summaries) == 1
+    assert summaries.loc[0, "case_id"] == case_id
+
+    measurement_qc = json.loads(
+        (workspace / f"qc/{case_id}_measurement-qc.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert measurement_qc["case_id"] == case_id
+    assert measurement_qc["body_surface_backend"] == "tissue_segmentation_envelope_v1"
+    assert measurement_qc["qc_status"] in {"pass", "review", "fail"}
 
     log_paths_after_first_run = set((workspace / "logs").glob("*.log"))
     assert log_paths_after_first_run
@@ -413,15 +438,19 @@ def test_bodycomposition_fast_on_pinned_public_ct(tmp_path):
         "vibeseg_model_sha256": {
             asset.asset_name: asset.sha256 for asset in VIBESEG_CROP_ASSETS
         },
+        "totalsegmentator_model_sha256": {
+            task: dict(check_measurement_model(task, models["totalsegmentator"]).checked_files)
+            for task in ("body_landmarks",)
+        },
         "runtime": runtime,
         "ct_size_xyz": list(ct_image.GetSize()),
         "ct_spacing_xyz_mm": list(ct_image.GetSpacing()),
         "prepared_size_xyz": list(tissue_label_image.GetSize()),
-        "crop_start_index_xyz": list(crop_start),
         "vertebrae_values": vertebrae_values,
         "tissue_values": tissue_values,
-        "raw_rows": len(raw),
-        "l3_rows": len(l3_rows),
+        "slice_rows": len(slices),
+        "vertebra_rows": len(vertebrae),
+        "vertebral_bins_per_level": 3,
         "output_snapshot": first_snapshot,
         "resume_unchanged": second_snapshot == first_snapshot,
     }

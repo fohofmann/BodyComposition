@@ -117,3 +117,44 @@ The complete Apache License 2.0 is available in the upstream repositories and
 in the installed distributions. Copyright remains with their respective
 authors and contributors. This acknowledgment does not imply endorsement of
 BodyComposition by those projects.
+
+## TotalSegmentator
+
+BodyComposition pins `TotalSegmentator==2.15.0` and can call its upstream
+Python API narrowly for optional canonical measurement support masks:
+
+- the 1.5-mm `body` model (task 299), when explicitly selected instead of the
+  default tissue-derived envelope, supplies `body_trunc` and
+  `body_extremities`; and
+- the 3-mm `total` model (task 297) runs once through the upstream fast API;
+  the BodyComposition landmark adapter consumes only its bilateral hip and rib
+  labels for anatomical mid-waist landmarks.
+
+The upstream project and installed 2.15.0 distribution carry the Apache
+License 2.0. TotalSegmentator's official task documentation lists `total` and
+`body` as openly available for any usage under Apache-2.0. These are distinct
+from TotalSegmentator subtasks such as `tissue_types` and `vertebrae_body`,
+which the upstream project places under separate licensed/non-commercial
+terms and which are not used for measurement stage's body surface or landmark inference.
+
+BodyComposition does not vendor TotalSegmentator source or models and does not
+place model weights in its repository, wheel, source distribution, or public
+container. The model-sync command downloads the exact task-299 and task-297
+archives from TotalSegmentator's original `v2.0.0-weights` GitHub release,
+verifies the pinned archive byte size and SHA-256 before safe extraction, checks
+the required extracted files, and atomically promotes the result into the
+configured mounted model directory. This narrow transfer/extraction boundary is
+implemented locally because the upstream downloader extracts directly into its
+final directory, cannot verify the archive against a published pin before
+extraction, and treats a partial existing directory as already downloaded. No
+segmentation or labeling code is copied. Before inference, the adapter requires
+the exact task-299 or task-297 model directory and checkpoint to exist; it does
+not permit the upstream API's normal inference-time download behavior to satisfy
+a missing asset.
+
+Analyses using these masks must acknowledge TotalSegmentator and nnU-Net and
+cite:
+
+> Wasserthal J, Breit H-C, Meyer MT, et al. TotalSegmentator: Robust
+> Segmentation of 104 Anatomic Structures in CT Images. Radiology: Artificial
+> Intelligence. 2023. https://doi.org/10.1148/ryai.230024

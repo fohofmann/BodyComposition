@@ -198,7 +198,12 @@ def test_fast_pipeline_completion_markers_only_include_persisted_files(pipeline_
         "masks/{caseid}_spineps-vertebrae.nii.gz",
         "qc/{caseid}_spine-review.png",
         "masks/{caseid}_int-bodycomposition.nii.gz",
-        "exports/{caseid}_raw.csv",
+        "masks/{caseid}_body-surface.nii.gz",
+        "qc/{caseid}_measurement-review.png",
+        "tables/{caseid}/slices.parquet",
+        "tables/{caseid}/vertebrae.parquet",
+        "tables/{caseid}/summaries.parquet",
+        "qc/{caseid}_measurement-qc.json",
     ]
     assert builder.get_reset_outputs() == [
         "masks/{caseid}_vertebral-bodies.nii.gz",
@@ -208,9 +213,21 @@ def test_fast_pipeline_completion_markers_only_include_persisted_files(pipeline_
         "qc/{caseid}_spine-review.png",
         "labels/{caseid}_int-bodycomposition.nii.gz",
         "masks/{caseid}_int-bodycomposition.nii.gz",
-        "exports/{caseid}_raw.csv",
-        "exports/all_L3Mean.csv",
+        "labels/{caseid}_tseg-body_landmarks.nii.gz",
+        "masks/{caseid}_body-surface.nii.gz",
+        "qc/{caseid}_measurement-review.png",
+        "tables/{caseid}/slices.parquet",
+        "tables/{caseid}/vertebrae.parquet",
+        "tables/{caseid}/summaries.parquet",
+        "qc/{caseid}_measurement-qc.json",
     ]
+
+
+def test_canonical_pipeline_requires_preparation_prepared_image_contract(pipeline_stub):
+    pipeline_stub.config["orientation"]["enabled"] = False
+
+    with pytest.raises(ValueError, match="orientation.enabled=true"):
+        BodyCompositionFast(pipeline_stub)
 
 
 def test_append_export_declares_output_without_using_it_as_completion_marker(

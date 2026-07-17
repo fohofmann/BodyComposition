@@ -49,6 +49,19 @@ class ImageGeometry:
             direction_lps=container.direction,
         )
 
+    @classmethod
+    def from_sitk(cls, image) -> "ImageGeometry":
+        """Construct geometry from a three-dimensional SimpleITK image."""
+
+        if image.GetDimension() != 3:
+            raise GeometryError("A three-dimensional SimpleITK image is required.")
+        return cls(
+            size_xyz=tuple(int(value) for value in image.GetSize()),
+            spacing_xyz=tuple(float(value) for value in image.GetSpacing()),
+            origin_lps_xyz=tuple(float(value) for value in image.GetOrigin()),
+            direction_lps=tuple(float(value) for value in image.GetDirection()),
+        )
+
     @property
     def direction_matrix_lps(self) -> np.ndarray:
         return np.asarray(self.direction_lps, dtype=float).reshape(3, 3)

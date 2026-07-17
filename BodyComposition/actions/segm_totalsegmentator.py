@@ -11,6 +11,62 @@ from totalsegmentator.config import setup_nnunet, setup_totalseg
 from BodyComposition.utils.logging import LoggingWriter, log_gpu_usage
 import contextlib
 import os
+import threading
+
+
+MEASUREMENT_TASK_IDS = {
+    "bodytrunk": 299,
+    "body_landmarks": 297,
+}
+_MEASUREMENT_INFERENCE_LOCK = threading.RLock()
+
+
+def _require_measurement_model(task: str) -> None:
+    """Prevent inference-time downloads for measurement stage's TotalSegmentator assets."""
+
+    if task not in {"bodytrunk", "body_landmarks"}:
+        return
+    from BodyComposition.measurement.totalsegmentator_assets import (
+        require_measurement_model,
+    )
+
+    require_measurement_model(task)
+
+
+@contextlib.contextmanager
+def _measurement_model_download_guard(task: str):
+    """Make measurement stage TotalSegmentator inference cache-only and task-pinned."""
+
+    if task not in MEASUREMENT_TASK_IDS:
+        with _MEASUREMENT_INFERENCE_LOCK:
+            yield
+        return
+
+    import totalsegmentator.python_api as upstream_api
+
+    _require_measurement_model(task)
+    expected_task_id = MEASUREMENT_TASK_IDS[task]
+    with _MEASUREMENT_INFERENCE_LOCK:
+        upstream_download = upstream_api.download_pretrained_weights
+        upstream_usage_stats = upstream_api.send_usage_stats
+
+        def require_cached(task_id) -> None:
+            requested = task_id if isinstance(task_id, list) else [task_id]
+            unexpected = [int(value) for value in requested if int(value) != expected_task_id]
+            if unexpected:
+                raise RuntimeError(
+                    "TotalSegmentator requested an unexpected model during cache-only "
+                    f"{task} inference: {unexpected}."
+                )
+            _require_measurement_model(task)
+
+        upstream_api.download_pretrained_weights = require_cached
+        upstream_api.send_usage_stats = lambda config, params: None
+        try:
+            yield
+        finally:
+            upstream_api.download_pretrained_weights = upstream_download
+            upstream_api.send_usage_stats = upstream_usage_stats
 
 # class
 class SegmTotalSegmentatorConfig(PipelineAction):
@@ -40,6 +96,8 @@ class SegmTotalSegmentator(PipelineAction):
 
     def __init__(self, pipeline, image: str, task: str, fast: bool = False):
         super().__init__(pipeline, task)
+        pipeline_device = getattr(pipeline.device, "type", str(pipeline.device))
+        self.device = "gpu" if pipeline_device == "cuda" else pipeline_device
 
         # define io
         self.input_image_name = image
@@ -71,6 +129,15 @@ class SegmTotalSegmentator(PipelineAction):
             'bodytrunk': {
                 'task': 'body',
                 'fast': fast,
+                'roi_subset': None,
+                'license_nc': False,
+            },
+            'body_landmarks': {
+                'task': 'total',
+                'fast': True,
+                # roi_subset would make upstream run and potentially download
+                # an additional rough task-298 model. Run the pinned fast total
+                # task once; the landmark adapter consumes only hips and ribs.
                 'roi_subset': None,
                 'license_nc': False,
             },
@@ -118,7 +185,11 @@ class SegmTotalSegmentator(PipelineAction):
             # do segmentation, redirect stdout and stderr to logging
             logging.info(f' running segmentation using totalsegmentator')
             sl = LoggingWriter(logging.DEBUG)
-            with contextlib.redirect_stdout(sl), contextlib.redirect_stderr(sl):
+            with (
+                _measurement_model_download_guard(self.task),
+                contextlib.redirect_stdout(sl),
+                contextlib.redirect_stderr(sl),
+            ):
                 output_label.img = totalsegmentator(input=input_image.imgNifti1,
                                                     output=None,
                                                     ml=True,
@@ -139,7 +210,7 @@ class SegmTotalSegmentator(PipelineAction):
                                                     verbose=True,
                                                     test=0,
                                                     skip_saving=True,
-                                                    device="gpu",
+                                                    device=self.device,
                                                     license_number=None,
                                                     statistics_exclude_masks_at_border=True,
                                                     no_derived_masks=False,

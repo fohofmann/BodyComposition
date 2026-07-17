@@ -40,8 +40,33 @@ reports and correction decisions expose rotations relative to that reference
 | Model (Repository) | Description | License | Download | Citation |
 | --- | --- | --- | --- | --- |
 | [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) | muscles (Task 294) | [Apache 2.0](https://choosealicense.com/licenses/apache-2.0/) / [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [GitHub](https://github.com/wasserth/TotalSegmentator/releases/tag/v2.0.0-weights) / [Zenodo](https://zenodo.org/record/6802366/) | 1 |
-| [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) | body (Task 299) | [Apache 2.0](https://choosealicense.com/licenses/apache-2.0/) / [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [GitHub](https://github.com/wasserth/TotalSegmentator/releases/tag/v2.0.0-weights) / [Zenodo](https://zenodo.org/records/7510286) | 1 |
 | [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) | tissue_types (Task 481) | [non-commercial](https://backend.totalsegmentator.com/license-academic/) | [backend totalsegmentator](https://backend.totalsegmentator.com/license-academic/) | 1 |
+
+## Measurement support
+
+The canonical `BodyComposition` pipelines pin `TotalSegmentator==2.15.0` for
+optional measurement stage support masks. The default body/trunk envelope is derived from
+the existing tissue segmentation and needs no additional model. The upstream
+`body` and `total` tasks remain explicitly selectable support backends. The
+official project lists both tasks as openly available for any usage under
+Apache-2.0. This does not change the separate terms for other subtasks such as
+`tissue_types` and `vertebrae_body`.
+
+| Model (Repository) | Description | License | Provisioning | Citation |
+| --- | --- | --- | --- | --- |
+| No additional model | `tissue_segmentation_envelope_v1`: smoothed body/trunk envelope from existing tissue labels (default) | BodyComposition implementation | No weights | — |
+| [TotalSegmentator 2.15.0](https://github.com/wasserth/TotalSegmentator) | `body` task 299: explicit alternative trunk and extremity labels | Apache-2.0 open task | Exact `v2.0.0-weights` upstream archive through `bodycomposition_download_models --model TotalSegmentator-body`; archive and required extracted files are checksum-verified | 1 |
+| [TotalSegmentator 2.15.0](https://github.com/wasserth/TotalSegmentator) | fast `total` task 297; BodyComposition consumes only bilateral hip and rib labels for mid-waist landmarks | Apache-2.0 open task | Exact `v2.0.0-weights` upstream archive through `bodycomposition_download_models --model TotalSegmentator-total-fast`; archive and required extracted files are checksum-verified | 1 |
+
+Inference never downloads these assets. They live only in the configured,
+mounted model directory and are not included in the repository, Python
+distribution, or container image.
+
+Task 297 intentionally runs without TotalSegmentator's `roi_subset` option:
+that upstream path invokes an additional rough task-298 model. The package
+instead runs the pinned fast model once and filters semantically in the
+landmark adapter. A cache-only inference guard rejects any unexpected upstream
+model request rather than downloading it.
 
 ## Citations
 1. Wasserthal, J., Breit, H.-C., Meyer, M.T., Pradella, M., Hinck, D., Sauter, A.W., Heye, T., Boll, D., Cyriac, J., Yang, S., Bach, M., Segeroth, M., 2023. TotalSegmentator: Robust Segmentation of 104 Anatomic Structures in CT Images. Radiology: Artificial Intelligence. https://doi.org/10.1148/ryai.230024
