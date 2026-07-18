@@ -15,20 +15,17 @@ from BodyComposition.actions.vertebral import (
     SegmSpinepsVeridah,
     vertebral_backend_actions,
 )
-from BodyComposition.bin.pre_download_models import definition_pipelines, definition_sources
-from BodyComposition.actions.calc_vertebrallevel import CalcVertebralLevel
-from BodyComposition.actions.crop import CreateBoundingBox
 from BodyComposition.orientation.core import OrientationOutcome, ReviewFlag
-from BodyComposition.pipelines.bodycomposition import BodyComposition, BodyCompositionFast
+from BodyComposition.pipelines.bodycomposition import canonical_actions
 from BodyComposition.utils.geometry import ImageGeometry
+from BodyComposition.utils.nifti import NiftiDataContainer
+from BodyComposition.vertebral import spineps_assets
 from BodyComposition.vertebral.contracts import ExecutionStatus, VertebralResult
-from BodyComposition.vertebral.legacy_adapter import adapt_internal_vertebral_bodies
+from BodyComposition.vertebral.internal_adapter import adapt_internal_vertebral_bodies
 from BodyComposition.vertebral.review import write_spine_review
+from BodyComposition.vertebral.spineps_assets import AssetVerificationError
 from BodyComposition.vertebral.spineps_backend import SpinepsVeridahAdapter
 from BodyComposition.vertebral.spineps_manifest import ModelAssetSpec, ReleaseAssetPin
-from BodyComposition.vertebral import spineps_assets
-from BodyComposition.vertebral.spineps_assets import AssetVerificationError
-from BodyComposition.utils.nifti import NiftiDataContainer
 
 
 def _zip_bytes(members: dict[str, bytes | str]) -> bytes:
@@ -166,7 +163,7 @@ def test_check_reports_missing_bundle_without_creating_or_downloading(
     assert not report.ready
     assert model_check.ready is False
     assert model_check.remediation == (
-        "bodycomposition_download_models --model SPINEPS-VERIDAH"
+        "bodycomposition models sync --model spineps_veridah_ct_v1"
     )
     assert not model_root.exists()
 
@@ -216,7 +213,9 @@ def _geometry(image: sitk.Image) -> ImageGeometry:
     )
 
 
-def test_adapter_run_uses_preparation_object_and_carries_review_state(tmp_path, monkeypatch):
+def test_adapter_run_uses_orientation_outcome_and_carries_review_state(
+    tmp_path, monkeypatch
+):
     image = _image()
     prepared = _prepared(image, changed=True)
     geometry = _geometry(image)
@@ -329,7 +328,7 @@ def test_adapter_returns_path_free_failed_result_when_backend_is_not_ready(
     assert "/private/sensitive" not in serialized
 
 
-def test_legacy_adapter_allows_body_only_result():
+def test_internal_adapter_allows_body_only_result():
     image = _image((4, 5, 6))
     geometry = _geometry(image)
     labels = np.zeros((4, 5, 6), dtype=np.uint8)
@@ -422,6 +421,7 @@ def test_pipeline_resume_revalidates_corpus_intersection_against_prepared_ct(
     pipeline_stub,
     tmp_path,
 ):
+    pipeline_stub.config["run"]["skip"] = True
     pipeline_stub.config["vertebrae"]["spineps"]["save_native_outputs"] = True
     pipeline_stub.config["vertebrae"]["spineps"]["review_enabled"] = False
     image = _image((4, 5, 6))
@@ -473,33 +473,24 @@ def test_pipeline_resume_revalidates_corpus_intersection_against_prepared_ct(
     assert not np.array_equal(memory[SPINEPS_BODY_MASK].data, whole)
 
 
-def test_bodycomposition_pipelines_route_only_vertebral_bodies_downstream(
+def test_canonical_pipeline_routes_only_vertebral_bodies_downstream(
     pipeline_stub,
 ):
-    for factory in (BodyComposition, BodyCompositionFast):
-        actions = factory(pipeline_stub)
-        downstream_keys = {
-            value
-            for action in actions[1:]
-            for attribute in (
-                "input_label_name",
-                "input_mask_name",
-                "input_name",
-                "vertebral_body_source_name",
-            )
-            if (value := getattr(action, attribute, None))
-            in {SPINEPS_BODY_MASK, SPINEPS_WHOLE_MASK}
-        }
+    actions = canonical_actions(pipeline_stub)
+    downstream_keys = {
+        value
+        for action in actions[1:]
+        for attribute in (
+            "input_label_name",
+            "input_mask_name",
+            "input_name",
+            "vertebral_body_source_name",
+        )
+        if (value := getattr(action, attribute, None))
+        in {SPINEPS_BODY_MASK, SPINEPS_WHOLE_MASK}
+    }
 
-        assert downstream_keys == {SPINEPS_BODY_MASK}
-
-
-def test_default_pipeline_model_sync_uses_one_bodycomposition_cache_key():
-    for pipeline_name in ("BodyComposition", "BodyCompositionFast"):
-        model_names = definition_pipelines[pipeline_name]
-        assert "SPINEPS-VERIDAH" in model_names
-        tissue_model = next(name for name in model_names if name.startswith("BodyCompositionCT"))
-        assert definition_sources[tissue_model]["local_id"] == "int-bodycomposition"
+    assert downstream_keys == {SPINEPS_BODY_MASK}
 
 
 def test_backend_selection_never_falls_back(pipeline_stub):
@@ -511,50 +502,3 @@ def test_backend_selection_never_falls_back(pipeline_stub):
         assert "No alternative backend was attempted" in str(error)
     else:
         raise AssertionError("Unknown backends must fail explicitly.")
-
-
-def test_t13_native_label_is_monotonic_in_anatomical_sequence(pipeline_stub):
-    action = CalcVertebralLevel(
-        pipeline_stub,
-        mask="masks/{caseid}_vertebral-bodies.nii.gz",
-    )
-    action.active_sequence_rank = action._sequence_rank(
-        {18: "T11", 19: "T12", 28: "T13", 20: "L1", 21: "L2", 22: "L3"}
-    )
-    inferior_to_superior = np.array([22, 21, 20, 28, 19, 18], dtype=np.uint8)
-
-    assert action.get_not_monotonical(inferior_to_superior) == []
-
-
-def test_anatomical_crop_resolves_spineps_native_labels(
-    pipeline_stub,
-    tmp_path,
-    container_factory,
-):
-    labels = np.zeros((8, 4, 4), dtype=np.uint8)
-    labels[1:3] = 23
-    labels[3:5] = 22
-    labels[5:7] = 21
-    container = container_factory(tmp_path / "masks" / "vertebrae.nii.gz", labels)
-    result = VertebralResult(
-        backend_id="spineps_veridah_ct_v1",
-        execution_status=ExecutionStatus.SUCCEEDED,
-        geometry=container.geometry,
-        whole_vertebra_labels=labels.copy(),
-        vertebral_body_labels=labels,
-        label_schema={21: "L2", 22: "L3", 23: "L4"},
-    )
-    memory = {
-        "id": "case001",
-        "workspace": tmp_path,
-        "masks/{caseid}_vertebral-bodies.nii.gz": container,
-        "tmp/vertebral_result": result,
-    }
-
-    CreateBoundingBox(
-        pipeline_stub,
-        label="masks/{caseid}_vertebral-bodies.nii.gz",
-        task="L234CranioCaudal",
-    )(memory)
-
-    assert memory["bbox"][:2] == [1, 7]

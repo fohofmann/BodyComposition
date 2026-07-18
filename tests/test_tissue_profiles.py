@@ -3,13 +3,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
+from BodyComposition.config import PipelineConfig
 from BodyComposition.measurement.aggregation import aggregate_physical_range
 from BodyComposition.measurement.contracts import BodySurfaceResult, MeasurementIdentity
 from BodyComposition.measurement.slices import calculate_canonical_slice_measurements
 from BodyComposition.measurement.tissues import derive_configured_tissue_masks
 from BodyComposition.tissue import cleanup_tissue_mask, prepare_classification_images
-from BodyComposition.utils.config import update_config, validate_config
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.utils.masks import fill_small_holes, remove_small_objects
 
@@ -19,11 +20,9 @@ def test_every_shipped_tissue_profile_is_a_valid_override():
     assert profiles
     profile_ids = set()
     for profile in profiles:
-        config = update_config({}, Path("config/config.yaml"))
-        config = update_config(config, Path("config/labels.yaml"))
-        config = update_config(config, profile)
-        validate_config(config)
-        profile_id = config["tissue"]["profile_id"]
+        override = yaml.safe_load(profile.read_text(encoding="utf-8"))
+        config = PipelineConfig.model_validate(override)
+        profile_id = config.normalized()["tissue"]["profile_id"]
         assert profile_id not in profile_ids
         profile_ids.add(profile_id)
 
@@ -113,7 +112,6 @@ def test_optional_noise_methods_are_selectable_without_mutating_raw_hu(
         {
             "method": method,
             "apply_to": ["vat"],
-            "filter_median": False,
         }
     )
     image = np.zeros((1, 9, 9), dtype=np.int16)

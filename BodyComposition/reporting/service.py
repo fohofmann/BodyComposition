@@ -2,22 +2,23 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
-from typing import Any, Mapping, Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import jsonschema
 import numpy as np
 import pandas as pd
 import pypdf
-from pypdf import PdfReader, PdfWriter
 import reportlab
 import SimpleITK as sitk
+from pypdf import PdfReader, PdfWriter
 
 from BodyComposition.measurement.physical import slice_geometry_table
 from BodyComposition.reporting.contracts import (
@@ -38,8 +39,14 @@ from BodyComposition.reporting.metrics import (
     collect_review_entries,
     public_text,
 )
-from BodyComposition.reporting.projection import SagittalProjection, build_sagittal_projection
+from BodyComposition.reporting.projection import (
+    AxialSegmentationView,
+    SagittalProjection,
+    build_axial_segmentation_view,
+    build_sagittal_projection,
+)
 from BodyComposition.reporting.render import (
+    LAYOUT_REVISION,
     PAGE_HEIGHT,
     PAGE_WIDTH,
     font_manifest,
@@ -100,13 +107,13 @@ def _array_digest(array: np.ndarray) -> str:
     value = np.ascontiguousarray(array)
     digest = hashlib.sha256()
     digest.update(str(value.dtype).encode("ascii"))
-    digest.update(_canonical_json(list(value.shape)))
+    digest.update(np.asarray(value.shape, dtype=np.int64).tobytes())
     digest.update(value.tobytes())
     return digest.hexdigest()
 
 
 def _sitk_pixel_digest(image: sitk.Image) -> str:
-    """Match the canonical preparation stage digest over a SimpleITK array_zyx."""
+    """Match the canonical orientation-stage digest over a SimpleITK array_zyx."""
 
     array_zyx = np.ascontiguousarray(sitk.GetArrayViewFromImage(image))
     digest = hashlib.sha256()
@@ -149,9 +156,7 @@ def _validate_orientation_link(
 ) -> None:
     for field in ("prepared_pixel_sha256", "orientation_changed"):
         if field not in candidate:
-            raise ReportValidationError(
-                f"{source_name} lacks canonical orientation field {field}."
-            )
+            raise ReportValidationError(f"{source_name} lacks canonical orientation field {field}.")
         if candidate[field] != reference[field]:
             raise ReportValidationError(
                 f"{source_name} disagrees with the supplied orientation result ({field})."
@@ -160,12 +165,10 @@ def _validate_orientation_link(
 
 def _validate_slice_geometry(case: CaseReportInput, geometry: ImageGeometry) -> None:
     observed = case.measurement_bundle.slices.reset_index(drop=True)
-    expected = slice_geometry_table(geometry).drop(
-        columns=["original_storage_index"]
-    )
+    expected = slice_geometry_table(geometry).drop(columns=["original_storage_index"])
     if len(observed) != len(expected):
         raise ReportValidationError(
-            "measurement stage slices do not retain exactly one row per prepared CT slice."
+            "Measurement slices do not retain exactly one row per orientation-prepared CT slice."
         )
     integer_columns = ("longitudinal_order", "slice_id", "slice_index_zyx_z")
     for column in integer_columns:
@@ -173,7 +176,7 @@ def _validate_slice_geometry(case: CaseReportInput, geometry: ImageGeometry) -> 
         wanted = pd.to_numeric(expected[column], errors="coerce").to_numpy(dtype=float)
         if not np.array_equal(actual, wanted):
             raise ReportValidationError(
-                f"measurement stage slices disagree with prepared CT geometry ({column})."
+                f"Measurement slices disagree with orientation-prepared CT geometry ({column})."
             )
     physical_columns = (
         "position_superior_mm",
@@ -194,19 +197,17 @@ def _validate_slice_geometry(case: CaseReportInput, geometry: ImageGeometry) -> 
         wanted = pd.to_numeric(expected[column], errors="coerce").to_numpy(dtype=float)
         if not np.allclose(actual, wanted, rtol=1e-7, atol=1e-6, equal_nan=False):
             raise ReportValidationError(
-                f"measurement stage slices disagree with prepared CT physical coordinates ({column})."
+                "Measurement slices disagree with orientation-prepared CT physical coordinates "
+                f"({column})."
             )
 
 
 def _validate_case_sources(case: CaseReportInput) -> None:
-    """Reject mixed or stale preparation stage/vertebral stage/measurement stage inputs before deriving identity."""
+    """Reject mixed or stale orientation, vertebral, and measurement inputs."""
 
     orientation = _orientation_data(case)
     expected_digest = orientation.get("prepared_pixel_sha256")
-    if (
-        not isinstance(expected_digest, str)
-        or not re.fullmatch(r"[a-f0-9]{64}", expected_digest)
-    ):
+    if not isinstance(expected_digest, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_digest):
         raise ReportValidationError(
             "The supplied orientation result lacks a valid prepared-pixel digest."
         )
@@ -225,10 +226,25 @@ def _validate_case_sources(case: CaseReportInput) -> None:
     assert_same_physical_domain(
         prepared_geometry,
         case.vertebral_result.geometry,
-        reference_name="prepared CT",
-        candidate_name="vertebral-body labels",
+        reference_name="orientation-prepared CT",
+        candidate_name="canonical vertebral-body labels",
     )
     _validate_slice_geometry(case, prepared_geometry)
+
+    tissue_provenance = case.measurement_bundle.provenance.get("tissue")
+    expected_tissue_digest = (
+        tissue_provenance.get("label_sha256") if isinstance(tissue_provenance, Mapping) else None
+    )
+    if not isinstance(expected_tissue_digest, str) or not re.fullmatch(
+        r"[a-f0-9]{64}", expected_tissue_digest
+    ):
+        raise ReportValidationError(
+            "The measurement bundle lacks the canonical tissue-label digest."
+        )
+    if _array_digest(case.tissue_labels_zyx) != expected_tissue_digest:
+        raise ReportValidationError(
+            "The report tissue labels disagree with the supplied measurement bundle."
+        )
 
     measurement_orientation = case.measurement_bundle.provenance.get("orientation")
     if not isinstance(measurement_orientation, Mapping):
@@ -249,18 +265,14 @@ def _validate_case_sources(case: CaseReportInput) -> None:
         )
 
     present_labels = {
-        int(value)
-        for value in np.unique(case.vertebral_result.vertebral_body_labels)
-        if value != 0
+        int(value) for value in np.unique(case.vertebral_result.vertebral_body_labels) if value != 0
     }
     table_labels = set(
-        pd.to_numeric(
-            case.measurement_bundle.vertebrae["native_label"], errors="raise"
-        ).astype(int)
+        pd.to_numeric(case.measurement_bundle.vertebrae["native_label"], errors="raise").astype(int)
     )
     if present_labels != table_labels:
         raise ReportValidationError(
-            "vertebral-body labels and measurement stage vertebral territories contain different native labels."
+            "Vertebral-body labels and measurement territories contain different native labels."
         )
     for native_label, group in case.measurement_bundle.vertebrae.groupby(
         "native_label", sort=False
@@ -269,7 +281,7 @@ def _validate_case_sources(case: CaseReportInput) -> None:
         expected_level = case.vertebral_result.label_schema.get(int(native_label))
         if len(levels) != 1 or expected_level not in levels:
             raise ReportValidationError(
-                "vertebral stage native label schema and measurement stage vertebral-level names disagree."
+                "The vertebral native-label schema and measurement level names disagree."
             )
 
 
@@ -296,11 +308,7 @@ def _failure_projection_rows(
     result: VertebralResult,
     settings: ReportingSettings,
 ) -> list[dict[str, Any]]:
-    present = {
-        int(value)
-        for value in np.unique(result.vertebral_body_labels)
-        if value != 0
-    }
+    present = {int(value) for value in np.unique(result.vertebral_body_labels) if value != 0}
     rows = []
     for centroid in result.centroids:
         if centroid.native_label not in present:
@@ -353,17 +361,14 @@ def _partial_failure_overview(
         return None, [], []
     if not isinstance(vertebral_result, VertebralResult):
         return None, [], []
-    if (
-        vertebral_result.geometry is None
-        or vertebral_result.vertebral_body_labels is None
-    ):
+    if vertebral_result.geometry is None or vertebral_result.vertebral_body_labels is None:
         return None, [], []
     try:
         assert_same_physical_domain(
             ImageGeometry.from_sitk(prepared_image),
             vertebral_result.geometry,
-            reference_name="prepared CT",
-            candidate_name="vertebral-body labels",
+            reference_name="orientation-prepared CT",
+            candidate_name="canonical vertebral-body labels",
         )
         source_artifacts = [
             {
@@ -381,17 +386,13 @@ def _partial_failure_overview(
                         "backend_id": vertebral_result.backend_id,
                         "label_schema": {
                             str(key): value
-                            for key, value in sorted(
-                                vertebral_result.label_schema.items()
-                            )
+                            for key, value in sorted(vertebral_result.label_schema.items())
                         },
                         "centroids": [
                             {
                                 "native_label": centroid.native_label,
                                 "anatomical_label": centroid.anatomical_label,
-                                "physical_lps_xyz": list(
-                                    centroid.physical_lps_xyz
-                                ),
+                                "physical_lps_xyz": list(centroid.physical_lps_xyz),
                             }
                             for centroid in vertebral_result.centroids
                         ],
@@ -415,7 +416,11 @@ def _partial_failure_overview(
 
 
 def renderer_manifest() -> dict[str, Any]:
+    from BodyComposition import __version__
+
     return {
+        "bodycomposition": __version__,
+        "layout_revision": LAYOUT_REVISION,
         "reportlab": reportlab.Version,
         "pypdf": pypdf.__version__,
         "font": font_manifest(),
@@ -429,6 +434,10 @@ def _source_artifacts(case: CaseReportInput) -> list[dict[str, str]]:
         {
             "name": "vertebral_body_labels",
             "sha256": _array_digest(case.vertebral_result.vertebral_body_labels),
+        },
+        {
+            "name": "tissue_labels",
+            "sha256": _array_digest(case.tissue_labels_zyx),
         },
         {"name": "slices.parquet_content", "sha256": _table_digest(bundle.slices)},
         {"name": "vertebrae.parquet_content", "sha256": _table_digest(bundle.vertebrae)},
@@ -448,9 +457,9 @@ def _case_identity_payload(
         "analysis_id": case.measurement_bundle.identity.analysis_id,
         "layout": settings.layout,
         "configuration": settings.normalized(),
+        "technical_metadata": dict(case.technical_metadata),
         "measurement_definitions": {
-            name: MEASUREMENT_DEFINITIONS[name]
-            for name in settings.measurement_columns
+            name: MEASUREMENT_DEFINITIONS[name] for name in settings.measurement_columns
         },
         "renderer": renderer_manifest(),
         "source_artifacts": source_artifacts,
@@ -461,7 +470,9 @@ def _validate_pdf(path: Path, *, expected_pages: int) -> None:
     try:
         reader = PdfReader(str(path), strict=True)
     except Exception as error:
-        raise ReportValidationError(f"Generated PDF cannot be parsed: {error.__class__.__name__}.") from error
+        raise ReportValidationError(
+            f"Generated PDF cannot be parsed: {error.__class__.__name__}."
+        ) from error
     if len(reader.pages) != expected_pages:
         raise ReportValidationError(
             f"Generated PDF has {len(reader.pages)} pages; expected {expected_pages}."
@@ -480,7 +491,9 @@ def _atomic_json(payload: Mapping[str, Any], destination: Path) -> None:
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.partial")
     try:
         temporary.write_bytes(
-            json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False).encode("ascii")
+            json.dumps(
+                payload, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False
+            ).encode("ascii")
             + b"\n"
         )
         os.replace(temporary, destination)
@@ -536,6 +549,43 @@ def validate_report_manifest(
     return payload
 
 
+def load_case_report_result(manifest_path: str | Path) -> CaseReportResult:
+    """Load and verify one immutable individual report for ordered collation."""
+
+    manifest = Path(manifest_path)
+    payload = validate_report_manifest(manifest)
+    if payload.get("manifest_type") != "case":
+        raise ReportValidationError("Expected an individual case report manifest.")
+    pdf_name = payload.get("pdf_file")
+    if pdf_name != CASE_REPORT_NAME:
+        raise ReportValidationError("Case report manifest has an unsupported PDF name.")
+    pdf_path = manifest.parent / str(pdf_name)
+    validate_report_manifest(manifest, pdf_path=pdf_path)
+    entries = tuple(
+        ReviewEntry(
+            case_id=str(value["case_id"]),
+            domain=str(value["domain"]),
+            code=str(value["code"]),
+            reason=str(value["reason"]),
+            automatic_action=str(value["automatic_action"]),
+            review_status=str(value.get("review_status", "not_adjudicated")),
+        )
+        for value in payload.get("review_entries", ())
+    )
+    return CaseReportResult(
+        case_id=str(payload["case_id"]),
+        report_id=str(payload["report_id"]),
+        layout=str(payload["layout"]),
+        status=str(payload["render_status"]),
+        pdf_path=pdf_path,
+        manifest_path=manifest,
+        pdf_sha256=str(payload["pdf_sha256"]),
+        manual_review_required=bool(payload["manual_review_required"]),
+        review_entries=entries,
+        warnings=tuple(str(value) for value in payload.get("warnings", ())),
+    )
+
+
 def _validate_case_result_for_collation(
     item: CaseReportResult,
     settings: ReportingSettings,
@@ -570,7 +620,11 @@ def render_case_report(
 ) -> CaseReportResult:
     """Render and atomically publish one complete, one-page case report."""
 
-    settings = settings if isinstance(settings, ReportingSettings) else ReportingSettings.from_mapping(settings)
+    settings = (
+        settings
+        if isinstance(settings, ReportingSettings)
+        else ReportingSettings.from_mapping(settings)
+    )
     settings.validate()
     if not settings.enabled:
         raise ValueError("Explicit case rendering requires reporting.enabled=true.")
@@ -591,11 +645,7 @@ def render_case_report(
         case.measurement_bundle,
         case.extra_review_entries,
     )
-    invalid_cells = sum(
-        not metric["valid"]
-        for row in rows
-        for metric in row["metrics"].values()
-    )
+    invalid_cells = sum(not metric["valid"] for row in rows for metric in row["metrics"].values())
     warnings = tuple(
         value
         for value, condition in (
@@ -615,6 +665,13 @@ def render_case_report(
             if all(value is not None for value in row["centroid_lps_xyz"])
         ],
     )
+    axial_view: AxialSegmentationView = build_axial_segmentation_view(
+        case.prepared_image,
+        case.tissue_labels_zyx,
+        case.vertebral_result,
+        rows,
+        spacing_mm=min(float(settings.projection_spacing_mm), 1.5),
+    )
 
     pdf_path = output / CASE_REPORT_NAME
     manifest_path = output / CASE_MANIFEST_NAME
@@ -626,9 +683,10 @@ def render_case_report(
             settings=settings,
             report_id=report_id,
             projection=projection,
+            axial_view=axial_view,
             rows=rows,
             review_entries=review_entries,
-            status=status,
+            warnings=warnings,
         )
         _validate_pdf(temporary_pdf, expected_pages=1)
         pdf_sha256 = _sha256(temporary_pdf)
@@ -697,7 +755,11 @@ def render_failed_case_report(
     """
 
     validate_case_id(case_id)
-    settings = settings if isinstance(settings, ReportingSettings) else ReportingSettings.from_mapping(settings)
+    settings = (
+        settings
+        if isinstance(settings, ReportingSettings)
+        else ReportingSettings.from_mapping(settings)
+    )
     settings.validate()
     projection, rows, source_artifacts = _partial_failure_overview(
         prepared_image,
@@ -742,8 +804,7 @@ def render_failed_case_report(
             domain="pipeline",
             code=public_text(failure_code, maximum=80),
             reason=(
-                "Scientific processing incomplete at "
-                f"{public_text(failure_stage, maximum=60)}."
+                f"Scientific processing incomplete at {public_text(failure_stage, maximum=60)}."
             ),
             automatic_action="No complete scientific result was produced.",
         )
@@ -811,7 +872,11 @@ def collate_reports(
     """Collate explicit manifest order with a conditional first summary page."""
 
     validate_case_id(export_id)
-    settings = settings if isinstance(settings, ReportingSettings) else ReportingSettings.from_mapping(settings)
+    settings = (
+        settings
+        if isinstance(settings, ReportingSettings)
+        else ReportingSettings.from_mapping(settings)
+    )
     settings.validate()
     if not settings.combined_pdf:
         raise ValueError("Explicit report collation requires reporting.combined_pdf=true.")
@@ -867,7 +932,9 @@ def collate_reports(
                 rows=summary_rows,
             )
             _validate_pdf(temporary_summary, expected_pages=1)
-            writer.append(str(temporary_summary), pages=(0, 1), outline_item="Manual review summary")
+            writer.append(
+                str(temporary_summary), pages=(0, 1), outline_item="Manual review summary"
+            )
         for item in case_reports:
             writer.append(str(item.pdf_path), pages=(0, 1), outline_item=item.case_id)
         writer.add_metadata(
@@ -875,8 +942,8 @@ def collate_reports(
                 "/Title": f"BodyComposition export {export_id}",
                 "/Author": "BodyComposition",
                 "/Subject": "Automated research and QC reports",
-                "/Creator": "BodyComposition reporting stage",
-                "/Producer": "BodyComposition reporting stage",
+                "/Creator": "BodyComposition reporting",
+                "/Producer": "BodyComposition reporting",
             }
         )
         with temporary_pdf.open("wb") as handle:
@@ -896,9 +963,7 @@ def collate_reports(
             for index, item in enumerate(case_reports)
         ]
         counts = Counter(
-            (entry.domain, entry.code)
-            for item in flagged
-            for entry in item.review_entries
+            (entry.domain, entry.code) for item in flagged for entry in item.review_entries
         )
         manifest = {
             "schema_version": REPORT_SCHEMA_VERSION,

@@ -1,5 +1,21 @@
 # Third-party notices
 
+## SimpleITK and GDCM DICOM reader
+
+BodyComposition uses the upstream SimpleITK dependency and its GDCM ImageIO
+support for DICOM series discovery, assembly, and NIfTI writing. No SimpleITK,
+ITK, or GDCM source is copied or modified in this repository. The locked
+SimpleITK distribution is Apache-2.0 and carries its own LICENSE and NOTICE;
+those files remain part of the installed upstream distribution. Conversion
+preserves the reader geometry, and BodyComposition adds strict CT-series
+selection, privacy-safe provenance, atomic output, and pixel/physical-domain
+verification.
+
+Suggested scholarly acknowledgment:
+
+> Lowekamp BC, Chen DT, Ibanez L, Blezek D. The Design of SimpleITK. Frontiers
+> in Neuroinformatics. 2013;7:45. https://doi.org/10.3389/fninf.2013.00045
+
 ## CTDeepRot
 
 BodyComposition contains an adapted, narrow implementation of the 2D feature
@@ -65,6 +81,41 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+## Internal tissue and alternative vertebral-body models
+
+BodyComposition integrates nnU-Net v2 inference for the project-specific
+BodyCompositionCT and VertebralBodiesCT model families. nnU-Net source is
+Apache-2.0 and remains an upstream package dependency; no nnU-Net source is
+vendored. Analyses using these models should cite:
+
+> Isensee F, Jaeger PF, Kohl SAA, Petersen J, Maier-Hein KH. nnU-Net: a
+> self-configuring method for deep learning-based biomedical image
+> segmentation. Nature Methods. 2021;18:203–211.
+> https://doi.org/10.1038/s41592-020-01008-z
+
+The VertebralBodiesCT ResEncL and ResEncM weights are published under
+CC-BY-SA-4.0 at immutable Hugging Face revisions recorded by the model manager.
+The BodyCompositionCT ResEncL and ResEncM weights are also declared
+CC-BY-SA-4.0 locally, but their intended original repositories are not yet
+public at immutable revisions. This is an explicit release blocker: the model
+manager may verify an exact local cache but refuses to synchronize these
+assets until the original repositories, license/model cards, and revisions are
+frozen.
+
+No BodyCompositionCT or VertebralBodiesCT weight is stored in this repository,
+wheel, source distribution, or container. Weight licenses remain with their
+authors and are not converted to Apache-2.0. Cite the model card and the
+associated validation publication when using these assets:
+
+> Hofmann FO, et al. Validation of body composition parameters extracted via
+> deep learning-based segmentation from routine computed tomographies.
+> Scientific Reports. 2025;15:11909.
+> https://doi.org/10.1038/s41598-025-96238-6
+
+The exact asset IDs, files, SHA-256 digests, revisions, and compatibility are
+returned by `bodycomposition models list --json` and recorded in run
+provenance.
+
 ## SPINEPS, VERIDAH, TPTBox, and VIBESegmentator
 
 The default vertebral backend calls the upstream `SPINEPS==2.0.0` Python API
@@ -120,7 +171,7 @@ BodyComposition by those projects.
 
 ## ReportLab, pypdf, and Bitstream Vera
 
-Optional reporting stage PDF reports are rendered with ReportLab and collated/validated
+Optional PDF case reports are rendered with ReportLab and collated/validated
 with pypdf. Both projects are distributed under BSD-3-Clause terms; their
 installed distributions include the complete license texts. BodyComposition
 does not modify either library.
@@ -188,7 +239,7 @@ License 2.0. TotalSegmentator's official task documentation lists `total` and
 `body` as openly available for any usage under Apache-2.0. These are distinct
 from TotalSegmentator subtasks such as `tissue_types` and `vertebrae_body`,
 which the upstream project places under separate licensed/non-commercial
-terms and which are not used for measurement stage's body surface or landmark inference.
+terms and which are not used for body-surface or landmark inference.
 
 BodyComposition does not vendor TotalSegmentator source or models and does not
 place model weights in its repository, wheel, source distribution, or public

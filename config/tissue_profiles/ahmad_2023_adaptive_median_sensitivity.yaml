@@ -3,6 +3,5 @@ tissue:
   hu_denoise:
     method: adaptive_median
     apply_to: [imat, sm, vat, sat]
-    filter_median: false
     adaptive_median_min_kernel: [1, 3, 3]
     adaptive_median_max_kernel: [1, 7, 7]

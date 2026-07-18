@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+import argparse
+import importlib.metadata
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
+
+import BodyComposition.cli as cli
+from BodyComposition.config import ConfigError, PipelineConfig
+from BodyComposition.model_manager import ModelAssetError, ModelStatus
+from BodyComposition.results import ExecutionStatus
+from BodyComposition.service import DirtySourceError
+
+
+def _status(tmp_path: Path, *, ready: bool = True) -> ModelStatus:
+    return ModelStatus(
+        model_id="ctdeeprot_2d_v1",
+        ready=ready,
+        model_root=tmp_path / "models",
+        errors=() if ready else ("missing:net2d.pt",),
+        checked_files={"net2d.pt": "a" * 64} if ready else {},
+        asset={"asset_id": "ctdeeprot_2d_v1"},
+    )
+
+
+def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_path):
+    calls = {}
+    result = SimpleNamespace(
+        execution_status=ExecutionStatus.SUCCEEDED,
+        manifest_path=tmp_path / "run_manifest.json",
+        as_dict=lambda: {"execution_status": "succeeded", "cases": ["a", "b"]},
+    )
+
+    class Service:
+        def __init__(self, config):
+            calls["config"] = config
+
+        def analyze_batch(self, cases, output, *, run_id):
+            calls.update(cases=cases, output=output, run_id=run_id)
+            return result
+
+    monkeypatch.setattr(cli, "load_batch_manifest", lambda path: ("a", "b"))
+    monkeypatch.setattr(cli, "PipelineService", Service)
+
+    code = cli.main(
+        [
+            "batch",
+            str(tmp_path / "cases.json"),
+            "--output",
+            str(tmp_path / "output"),
+            "--run-id",
+            "run-1",
+            "--device",
+            "cpu",
+            "--json",
+        ]
+    )
+    assert code == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["cases"] == ["a", "b"]
+    assert calls["cases"] == ("a", "b")
+    assert calls["output"] == tmp_path / "output"
+    assert calls["run_id"] == "run-1"
+    assert isinstance(calls["config"], PipelineConfig)
+    assert calls["config"].device == "cpu"
+
+    result.execution_status = ExecutionStatus.FAILED
+    assert cli.main(["batch", "cases.json", "--json"]) == cli.EXIT_EXECUTION
+    capsys.readouterr()
+
+
+def test_model_cli_lists_verifies_and_synchronizes_selected_assets(
+    monkeypatch,
+    capsys,
+    tmp_path,
+):
+    ready = _status(tmp_path)
+    failed = _status(tmp_path, ready=False)
+    selections = []
+    monkeypatch.setattr(
+        cli,
+        "list_models",
+        lambda: ({"model_id": "ctdeeprot_2d_v1", "name": "CTDeepRot"},),
+    )
+
+    assert cli.main(["models", "list", "--json"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)[0]["name"] == "CTDeepRot"
+
+    def verify(_config, selected):
+        selections.append(selected)
+        return (ready,)
+
+    monkeypatch.setattr(cli, "verify_models", verify)
+    monkeypatch.setattr(cli, "release_model_issues", lambda *_args, **_kwargs: ())
+    assert (
+        cli.main(
+            [
+                "models",
+                "verify",
+                "--model",
+                "ctdeeprot_2d_v1",
+                "--json",
+            ]
+        )
+        == cli.EXIT_OK
+    )
+    assert json.loads(capsys.readouterr().out)["release_ready"]
+    assert selections == [("ctdeeprot_2d_v1",)]
+
+    monkeypatch.setattr(cli, "verify_models", lambda *_args: (failed,))
+    assert cli.main(["models", "verify", "--json"]) == cli.EXIT_ENVIRONMENT
+    assert not json.loads(capsys.readouterr().out)["ready"]
+
+    monkeypatch.setattr(cli, "sync_models", lambda *_args: (ready,))
+    assert cli.main(["models", "sync", "--json"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["ready"]
+
+
+def test_config_cli_roundtrips_default_yaml(capsys, tmp_path):
+    output = tmp_path / "nested" / "bodycomposition.yaml"
+    assert (
+        cli.main(["config", "show-default", "--output", str(output), "--json"])
+        == cli.EXIT_OK
+    )
+    assert json.loads(capsys.readouterr().out)["output"] == str(output)
+    assert output.is_file()
+
+    assert cli.main(["config", "validate", str(output), "--json"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["valid"]
+    assert len(payload["configuration_sha256"]) == 64
+
+    assert cli.main(["config", "show-default", "--json"]) == cli.EXIT_OK
+    assert "runtime" in json.loads(capsys.readouterr().out)
+
+    assert cli.main(["config", "show-default"]) == cli.EXIT_OK
+    assert "runtime:" in capsys.readouterr().out
+
+
+def test_result_cli_inspects_aggregates_and_builds_review_queue(
+    monkeypatch,
+    capsys,
+    tmp_path,
+):
+    manifest = tmp_path / "case_manifest.json"
+    inspected = SimpleNamespace(
+        manifest_path=manifest,
+        as_dict=lambda: {"case_id": "case-1", "manifest_path": manifest},
+    )
+    monkeypatch.setattr(cli, "inspect_result", lambda path: inspected)
+    assert cli.main(["results", "inspect", str(manifest), "--json"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["case_id"] == "case-1"
+
+    run = tmp_path / "run"
+    aggregate = run / "aggregate"
+    aggregate.mkdir(parents=True)
+    cases = aggregate / "cases.parquet"
+    review = aggregate / "review_queue.parquet"
+    pd.DataFrame([{"case_id": "case-1", "reason": "orientation"}]).to_parquet(review)
+    monkeypatch.setattr(
+        cli,
+        "aggregate_results",
+        lambda path: {"cases": cases, "review_queue": review},
+    )
+
+    assert cli.main(["results", "aggregate", str(run), "--json"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["review_queue"] == str(review)
+
+    assert cli.main(["results", "review-queue", str(run), "--json"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 1
+    assert payload["records"][0]["reason"] == "orientation"
+
+    review.unlink()
+    aggregate_calls = []
+
+    def rebuild_review(path):
+        aggregate_calls.append(Path(path))
+        pd.DataFrame([{"case_id": "case-2"}]).to_parquet(review)
+        return {"cases": cases, "review_queue": review}
+
+    monkeypatch.setattr(cli, "aggregate_results", rebuild_review)
+    assert cli.main(["results", "review-queue", str(run), "--json"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["records"][0]["case_id"] == "case-2"
+    assert aggregate_calls == [run]
+
+
+def test_report_cli_covers_render_collate_and_inspection(monkeypatch, capsys, tmp_path):
+    report = SimpleNamespace(
+        case_id="case-1",
+        report_id="r" * 64,
+        layout="spine_overview_v1",
+        status="succeeded",
+        pdf_path=tmp_path / "case.pdf",
+        manifest_path=tmp_path / "report.json",
+        pdf_sha256="a" * 64,
+        manual_review_required=False,
+        warnings=(),
+    )
+    monkeypatch.setattr(cli, "render_report", lambda *_args, **_kwargs: report)
+    assert (
+        cli.main(
+            [
+                "reports",
+                "render",
+                "case-input.json",
+                "--output",
+                str(tmp_path),
+                "--layout",
+                "spine_overview_v1",
+                "--json",
+            ]
+        )
+        == cli.EXIT_OK
+    )
+    assert json.loads(capsys.readouterr().out)["report_id"] == "r" * 64
+
+    collated = {
+        "pdf_path": tmp_path / "export.pdf",
+        "manifest_path": tmp_path / "export.json",
+        "manifest": {"case_count": 1},
+    }
+    monkeypatch.setattr(cli, "collate_report_export", lambda *_args, **_kwargs: collated)
+    assert (
+        cli.main(
+            [
+                "reports",
+                "collate",
+                "export-input.json",
+                "--output",
+                str(tmp_path),
+                "--json",
+            ]
+        )
+        == cli.EXIT_OK
+    )
+    assert json.loads(capsys.readouterr().out)["manifest"]["case_count"] == 1
+
+    monkeypatch.setattr(cli, "inspect_report", lambda *_args, **_kwargs: {"valid": True})
+    assert (
+        cli.main(
+            [
+                "reports",
+                "inspect",
+                "report.json",
+                "--pdf",
+                "report.pdf",
+                "--json",
+            ]
+        )
+        == cli.EXIT_OK
+    )
+    assert json.loads(capsys.readouterr().out) == {"valid": True}
+
+
+def test_version_and_human_emit_paths(capsys):
+    assert cli.main(["version", "--json"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["config_schema_version"] == "1.0.0"
+
+    assert cli.main(["version"]) == cli.EXIT_OK
+    assert capsys.readouterr().out.strip()
+
+
+def test_output_check_preserves_the_original_filesystem_error(tmp_path):
+    assert cli._output_check(None) == (True, None)
+    assert cli._output_check(str(tmp_path / "output")) == (True, None)
+
+    existing_file = tmp_path / "not-a-directory"
+    existing_file.write_text("blocked", encoding="utf-8")
+    assert cli._output_check(str(existing_file)) == (False, "FileExistsError")
+
+
+def test_distribution_notice_detection_handles_installed_and_source_trees(monkeypatch):
+    monkeypatch.setattr(
+        importlib.metadata,
+        "files",
+        lambda _name: ["BodyComposition/__init__.py", "LICENSE", "THIRD_PARTY_NOTICES.md"],
+    )
+    assert cli._distribution_has_notices()
+
+    monkeypatch.setattr(importlib.metadata, "files", lambda _name: None)
+    assert not cli._distribution_has_notices()
+
+    def missing(_name):
+        raise importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(importlib.metadata, "files", missing)
+    assert not cli._distribution_has_notices()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ConfigError("bad config"), cli.EXIT_USAGE),
+        (FileNotFoundError("missing"), cli.EXIT_USAGE),
+        (DirtySourceError("dirty"), cli.EXIT_ENVIRONMENT),
+        (ModelAssetError("model"), cli.EXIT_ENVIRONMENT),
+        (RuntimeError("failed"), cli.EXIT_EXECUTION),
+    ],
+)
+def test_main_maps_public_errors_to_stable_json_exit_codes(
+    monkeypatch,
+    capsys,
+    error,
+    expected,
+):
+    def fail(_args):
+        raise error
+
+    parser = SimpleNamespace(
+        parse_args=lambda _argv: argparse.Namespace(handler=fail, json=True)
+    )
+    monkeypatch.setattr(cli, "build_parser", lambda: parser)
+
+    assert cli.main([]) == expected
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "error"
+    assert payload["message"] == str(error)

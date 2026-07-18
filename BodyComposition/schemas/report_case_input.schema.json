@@ -7,6 +7,7 @@
     "schema_version",
     "case_id",
     "prepared_ct",
+    "tissue_label_mask",
     "vertebral_body_mask",
     "vertebral_result_json",
     "measurement_directory",
@@ -20,11 +21,26 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
     },
     "prepared_ct": {"type": "string", "minLength": 1},
+    "tissue_label_mask": {"type": "string", "minLength": 1},
     "vertebral_body_mask": {"type": "string", "minLength": 1},
     "vertebral_result_json": {"type": "string", "minLength": 1},
     "measurement_directory": {"type": "string", "minLength": 1},
     "orientation_report_json": {"type": "string", "minLength": 1},
-    "measurement_qc_json": {"type": "string", "minLength": 1}
+    "measurement_qc_json": {"type": "string", "minLength": 1},
+    "technical_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "analysis_started_at": {"type": ["string", "null"], "maxLength": 160},
+        "data_attribution": {"type": ["string", "null"], "maxLength": 160},
+        "input_format": {"enum": ["dicom", "nifti", "unknown", null]},
+        "pipeline_version": {"type": ["string", "null"], "maxLength": 160},
+        "runtime_backend": {"type": ["string", "null"], "maxLength": 160},
+        "runtime_hardware": {"type": ["string", "null"], "maxLength": 160},
+        "scanner_manufacturer": {"type": ["string", "null"], "maxLength": 160},
+        "scanner_model": {"type": ["string", "null"], "maxLength": 160}
+      }
+    }
   },
   "additionalProperties": false
 }

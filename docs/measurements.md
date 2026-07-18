@@ -1,21 +1,21 @@
 # Canonical physical measurements
 
-`BodyComposition` and `BodyCompositionFast` write one outcome-blind
-measurement bundle per case. The bundle preserves the acquired longitudinal
+The canonical pipeline writes one outcome-blind measurement bundle per case.
+The bundle preserves the acquired longitudinal
 profile and compact anatomical summaries. It does not create a learned or
 template-normalized signature, impute missing coverage, or use clinical
 outcomes.
 
 ## Authoritative files
 
-- `tables/{caseid}/slices.parquet`: one row for every prepared CT slice;
-- `tables/{caseid}/vertebrae.parquet`: three physical bins for every detected
+- `tables/slices.parquet`: one row for every prepared CT slice;
+- `tables/vertebrae.parquet`: three physical bins for every detected
   native vertebral territory, including sacrum;
-- `tables/{caseid}/summaries.parquet`: one row of deterministic case-level
+- `tables/summaries.parquet`: one row of deterministic case-level
   summaries; and
-- `qc/{caseid}_measurement-qc.json`: provenance, QC, and review status.
+- `qc/qc.json`: provenance, QC, and review status.
 
-`qc/{caseid}_measurement-review.png` is an optional visual derivative. The
+`qc/measurement_review.png` is an optional visual derivative. The
 three Parquet tables remain authoritative. There is deliberately no
 `signatures.parquet`: cohort-specific longitudinal representations are derived
 later from the native-mm tables after a coverage audit.
@@ -138,7 +138,7 @@ strict summaries.
 
 ## Native vertebral territories
 
-Only the canonical vertebral-body/corpus labels from vertebral stage define vertebral
+Only the canonical vertebral-body/corpus labels from the vertebral stage define vertebral
 anatomy. Whole-vertebra masks and posterior elements are never used.
 
 For every detected cervical, thoracic, lumbar, or sacral label:
@@ -212,29 +212,12 @@ not hip, until separately validated.
 
 ## Range and L3 views
 
-The read-only API/CLI provides:
-
-- `territory_mean`: a whole-L3 physical-range view reconstructed from
-  `slices.parquet` and the L3 territory bounds;
-- `slice`: the acquired plane closest to the L3 vertebral-body centroid; and
-- strict or explicitly partial named physical ranges.
-
-Strict range mode requires complete acquisition and metric-specific validity.
-Partial mode returns observed length and coverage and never labels a partial
-result complete.
-
-```bash
-bodycomposition_measurements \
-  --tables /workspace/tables/case-001 \
-  --view l3 \
-  --aggregation territory_mean
-
-bodycomposition_measurements \
-  --tables /workspace/tables/case-001 \
-  --view range \
-  --start-level T12 \
-  --end-level L5
-```
+The persisted tables contain the exact ingredients for a whole-L3 territory,
+the acquired plane closest to the L3 corpus centroid, strict named physical
+ranges, and explicitly partial ranges. The 1.x product surface deliberately
+does not persist additional overlapping view files. Downstream analysis must
+use validity and coverage columns and must never label a partial range
+complete.
 
 ## Longitudinal analyses
 

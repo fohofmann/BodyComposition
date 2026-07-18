@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import SimpleITK as sitk
@@ -30,7 +31,6 @@ from BodyComposition.vertebral.spineps_qc import (
     construct_vertebral_body_labels,
     evaluate_spineps_qc,
 )
-
 
 SUCCESS_CODES = {"OK", "ALL_DONE"}
 

@@ -1,11 +1,26 @@
 # Ignore the .git directory
 .git
 
-# Ignore specific directories
+# Ignore data, local notes, generated output, and all possible model caches.
 data/
 docs/
 logs/
 models/
+**/*.dcm
+**/*.DCM
+**/*.ima
+**/*.IMA
+**/*.nii
+**/*.nii.gz
+**/*.nrrd
+**/*.mha
+**/*.mhd
+**/*.parquet
+**/models/
+**/*.pth
+**/*.pt
+**/*.ckpt
+**/*.onnx
 
 # Ignore temporary files
 *.log
@@ -38,8 +53,12 @@ dist/
 *.egg-info/
 .attempts/
 outputs/
+output/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Local automation state

@@ -3,7 +3,6 @@ tissue:
   hu_denoise:
     method: none
     apply_to: [imat, sm, vat, sat]
-    filter_median: false
   imat:
     filter_hu_range: [-190, -30]
     filter_size: false

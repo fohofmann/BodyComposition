@@ -1,27 +1,29 @@
-from dataclasses import replace
-from copy import deepcopy
 import hashlib
 import json
+import warnings
+from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-import warnings
 
+import jsonschema
 import numpy as np
 import pandas as pd
 import pdfplumber
-import jsonschema
-from pypdf import PdfReader
 import pytest
 import SimpleITK as sitk
+from pypdf import PdfReader
 
 import BodyComposition.reporting.service as reporting_service
-from BodyComposition.measurement.body_surface import body_surface_from_totalsegmentator
 from BodyComposition.actions.measurement import ExportMeasurementBundle
 from BodyComposition.actions.reporting import (
     CASE_REPORT_MANIFEST,
     CASE_REPORT_PDF,
+    TISSUE_LABEL_MASK,
     RenderCaseReport,
 )
+from BodyComposition.cli import build_parser
+from BodyComposition.measurement.body_surface import body_surface_from_totalsegmentator
 from BodyComposition.measurement.builder import build_measurement_bundle
 from BodyComposition.measurement.contracts import MeasurementIdentity
 from BodyComposition.reporting.contracts import (
@@ -31,14 +33,20 @@ from BodyComposition.reporting.contracts import (
     ReportingSettings,
     ReviewEntry,
 )
-from BodyComposition.reporting.metrics import aggregate_vertebral_measurements
-from BodyComposition.reporting.projection import vertebral_color
-from BodyComposition.reporting.projection import build_sagittal_projection
 from BodyComposition.reporting.io import load_case_report_input
-from BodyComposition.bin.reporting import build_parser
+from BodyComposition.reporting.metrics import aggregate_vertebral_measurements
+from BodyComposition.reporting.projection import (
+    SAGITTAL_AP_CROP_MARGIN_MM,
+    SAGITTAL_SI_CROP_MARGIN_MM,
+    build_axial_segmentation_view,
+    build_sagittal_projection,
+    vertebral_color,
+)
+from BodyComposition.reporting.render import _separate_label_y_positions
 from BodyComposition.reporting.service import (
     ReportValidationError,
     collate_reports,
+    load_case_report_result,
     render_case_report,
     render_failed_case_report,
     validate_report_manifest,
@@ -89,17 +97,24 @@ def _report_case(config, case_id="case-001", *, orientation=None):
         whole_vertebra_labels=None,
         vertebral_body_labels=vertebral,
         label_schema=config["LBL_VERTEBRALBODIES"],
-        provenance={"model": "synthetic", "local_path": "/Users/localuser/private/model"},
+        provenance={
+            "model": "synthetic",
+            "local_path": str(Path("/") / "Users" / "localuser" / "private" / "model"),
+        },
     )
     identity = MeasurementIdentity(case_id, "run-001", f"analysis-{case_id}")
-    orientation = dict(orientation or {
-        "state": "PASS_METADATA_MATCH",
-        "execution_status": "succeeded",
-        "qc_status": "pass",
-        "manual_review_required": False,
-        "orientation_changed": False,
-        "review_flags": [],
-    })
+    orientation = dict(
+        orientation
+        or {
+            "state": "PASS_METADATA_MATCH",
+            "execution_status": "succeeded",
+            "qc_status": "pass",
+            "manual_review_required": False,
+            "orientation_changed": False,
+            "review_flags": [],
+        }
+    )
+    orientation.setdefault("model", {"asset_id": "ctdeeprot_2d_v1"})
     pixel_digest = hashlib.sha256()
     pixel_digest.update(str(image.dtype).encode("ascii"))
     pixel_digest.update(np.asarray(image.shape, dtype=np.int64).tobytes())
@@ -134,7 +149,18 @@ def _report_case(config, case_id="case-001", *, orientation=None):
         prepared_image=prepared,
         vertebral_result=result,
         measurement_bundle=bundle,
+        tissue_labels_zyx=tissues,
         orientation=orientation,
+        technical_metadata={
+            "analysis_started_at": "2026-07-18T12:30:00+02:00",
+            "data_attribution": "Synthetic test data; no patient information.",
+            "input_format": "dicom",
+            "pipeline_version": "1.0.0rc1",
+            "runtime_backend": "cuda",
+            "runtime_hardware": "NVIDIA A100-SXM4-80GB",
+            "scanner_manufacturer": "Research Test Imaging",
+            "scanner_model": "Synthetic CT 1.0",
+        },
     )
 
 
@@ -149,10 +175,18 @@ def test_reporting_settings_and_palette_are_frozen():
     assert vertebral_color("T13") == vertebral_color("T13")
     assert vertebral_color("T13") != vertebral_color("L6")
     assert vertebral_color("SACRUM") != vertebral_color("L5")
-    schema = json.loads(
-        Path("BodyComposition/schemas/reporting_config.schema.json").read_text()
-    )
+    schema = json.loads(Path("BodyComposition/schemas/reporting_config.schema.json").read_text())
     jsonschema.validate(settings.normalized(), schema)
+
+
+def test_projection_label_collision_handling_preserves_order_and_spacing():
+    desired = [48.0, 45.0, 44.0, 43.0]
+    placed = _separate_label_y_positions(desired, lower=10.0, upper=55.0)
+
+    assert placed == sorted(placed, reverse=True)
+    assert np.min(np.abs(np.diff(placed))) >= 11.0
+    assert min(placed) >= 10.0
+    assert max(placed) <= 55.0
     with pytest.raises(ValueError, match="one to six"):
         ReportingSettings.from_mapping(
             {"enabled": True, "measurement_columns": ["sm_mean_csa_cm2"] * 7}
@@ -170,7 +204,9 @@ def test_reporting_settings_and_palette_are_frozen():
         ((0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0), "x"),
     ],
 )
-def test_projection_preserves_label_centroids_under_oblique_and_permuted_geometry(direction, split_axis):
+def test_projection_preserves_label_centroids_under_oblique_and_permuted_geometry(
+    direction, split_axis
+):
     shape = (22, 20, 18)
     geometry = ImageGeometry(
         size_xyz=tuple(reversed(shape)),
@@ -224,6 +260,55 @@ def test_projection_preserves_label_centroids_under_oblique_and_permuted_geometr
         )
 
 
+def test_projection_crops_display_plane_to_vertebral_body_bounds(base_config):
+    case = _report_case(base_config)
+    rows = aggregate_vertebral_measurements(
+        case.measurement_bundle,
+        _settings().measurement_columns,
+    )
+    projection = build_sagittal_projection(
+        case.prepared_image,
+        case.vertebral_result,
+        _settings(),
+        centroids_lps_xyz=[row["centroid_lps_xyz"] for row in rows],
+    )
+
+    # SimpleITK metadata and indices are xyz; the stored label array is zyx.
+    geometry = case.vertebral_result.geometry
+    labels_zyx = case.vertebral_result.vertebral_body_labels
+    occupied_zyx = np.argwhere(labels_zyx != 0)
+    lower_zyx = occupied_zyx.min(axis=0).astype(float) - 0.5
+    upper_zyx = occupied_zyx.max(axis=0).astype(float) + 0.5
+    ct_anterior = geometry.origin_lps_xyz[1] - 0.5 * geometry.spacing_xyz[1]
+    ct_posterior = geometry.origin_lps_xyz[1] + (
+        geometry.size_xyz[1] - 0.5
+    ) * geometry.spacing_xyz[1]
+    ct_inferior = geometry.origin_lps_xyz[2] - 0.5 * geometry.spacing_xyz[2]
+    ct_superior = geometry.origin_lps_xyz[2] + (
+        geometry.size_xyz[2] - 0.5
+    ) * geometry.spacing_xyz[2]
+    mask_anterior = geometry.origin_lps_xyz[1] + lower_zyx[1] * geometry.spacing_xyz[1]
+    mask_posterior = geometry.origin_lps_xyz[1] + upper_zyx[1] * geometry.spacing_xyz[1]
+    mask_inferior = geometry.origin_lps_xyz[2] + lower_zyx[0] * geometry.spacing_xyz[2]
+    mask_superior = geometry.origin_lps_xyz[2] + upper_zyx[0] * geometry.spacing_xyz[2]
+
+    assert projection.anterior_mm == pytest.approx(
+        max(ct_anterior, mask_anterior - SAGITTAL_AP_CROP_MARGIN_MM)
+    )
+    assert projection.posterior_mm == pytest.approx(
+        min(ct_posterior, mask_posterior + SAGITTAL_AP_CROP_MARGIN_MM)
+    )
+    assert projection.inferior_mm == pytest.approx(
+        max(ct_inferior, mask_inferior - SAGITTAL_SI_CROP_MARGIN_MM)
+    )
+    assert projection.superior_mm == pytest.approx(
+        min(ct_superior, mask_superior + SAGITTAL_SI_CROP_MARGIN_MM)
+    )
+    assert projection.posterior_mm - projection.anterior_mm < ct_posterior - ct_anterior
+    assert projection.crop_basis == "vertebral_body_mask"
+    assert projection.method == "sagittal_thick_slab_vertebral_crop_v2"
+
+
 def test_whole_territory_report_values_reconstruct_canonical_bins(base_config):
     case = _report_case(base_config)
     rows = aggregate_vertebral_measurements(
@@ -240,6 +325,36 @@ def test_whole_territory_report_values_reconstruct_canonical_bins(base_config):
     assert l3["metrics"]["sm_mean_hu"]["value"] == pytest.approx(expected_hu)
 
 
+def test_axial_segmentation_view_uses_l3_and_explicit_xyz_zyx_boundary(base_config):
+    case = _report_case(base_config)
+    rows = aggregate_vertebral_measurements(
+        case.measurement_bundle,
+        _settings().measurement_columns,
+    )
+    view = build_axial_segmentation_view(
+        case.prepared_image,
+        case.tissue_labels_zyx,
+        case.vertebral_result,
+        rows,
+    )
+
+    assert view.vertebral_level == "L3"
+    assert view.native_label == 15
+    assert view.l3_available
+    assert view.rgb.ndim == 3 and view.rgb.shape[2] == 3
+    assert {"SM", "SAT", "aVAT", "tVAT", "IMAT"}.issubset(view.tissue_names)
+
+    without_l3 = [row for row in rows if row["vertebral_level"] != "L3"]
+    fallback = build_axial_segmentation_view(
+        case.prepared_image,
+        case.tissue_labels_zyx,
+        case.vertebral_result,
+        without_l3,
+    )
+    assert fallback.vertebral_level == "L2"
+    assert not fallback.l3_available
+
+
 def test_hu_aggregation_ignores_only_valid_zero_area_bins(base_config):
     case = _report_case(base_config)
     table = case.measurement_bundle.vertebrae.copy()
@@ -253,10 +368,9 @@ def test_hu_aggregation_ignores_only_valid_zero_area_bins(base_config):
     rows = aggregate_vertebral_measurements(bundle, ("sm_mean_hu",))
     l3 = next(row for row in rows if row["vertebral_level"] == "L3")
     source = table.query("vertebral_level == 'L3' and territory_bin != 1")
-    weights = (
-        source["sm_mean_csa_cm2"].to_numpy(dtype=float)
-        * source["bin_integration_length_mm"].to_numpy(dtype=float)
-    )
+    weights = source["sm_mean_csa_cm2"].to_numpy(dtype=float) * source[
+        "bin_integration_length_mm"
+    ].to_numpy(dtype=float)
     assert l3["metrics"]["sm_mean_hu"]["value"] == pytest.approx(
         np.average(source["sm_mean_hu"], weights=weights)
     )
@@ -301,8 +415,13 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
         _settings(layout),
     )
     manifest = validate_report_manifest(result.manifest_path, pdf_path=result.pdf_path)
+    loaded = load_case_report_result(result.manifest_path)
+    assert loaded.report_id == result.report_id
+    assert loaded.pdf_sha256 == result.pdf_sha256
     reader = PdfReader(result.pdf_path)
     assert len(reader.pages) == 1
+    assert reader.metadata.creator == "BodyComposition reporting"
+    assert reader.metadata.producer == "BodyComposition reporting"
     assert float(reader.pages[0].mediabox.width) > float(reader.pages[0].mediabox.height)
     fonts = reader.pages[0]["/Resources"]["/Font"].get_object()
     embedded = [
@@ -314,28 +433,60 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     assert any("BitstreamVeraSans-Roman" in str(name) for name in embedded)
     assert any("BitstreamVeraSans-Bold" in str(name) for name in embedded)
     with pdfplumber.open(result.pdf_path) as document:
-        text = document.pages[0].extract_text()
+        page = document.pages[0]
+        text = page.extract_text()
+        words = page.extract_words()
     assert "Sagittal thick-slab projection" in text
-    assert "Whole-territory means from three physical bins" in text
+    assert "Vertebral summary" in text
+    assert "Whole-territory mean | three physical bins" in text
+    expected_axial_title = (
+        "Axial tissue segmentation | L3" if layout == "spine_overview_v1" else "Axial overlay | L3"
+    )
+    assert expected_axial_title in text
+    assert "Technical metadata" in text
+    assert "Notes / QC" in text
+    assert "Data: Synthetic test data; no patient information." in text
+    assert "2026-07-18 10:30 UTC" in text
+    assert "Research Test Imaging Synthetic CT 1.0" in text
+    assert "NVIDIA A100-SXM4-80GB" in text
+    audit = manifest["display"]["audit"]
+    assert audit["layout_revision"] == "scientific_onepager_v5"
+    assert not {"PASS", "REVIEW"}.intersection(word["text"] for word in words)
+    assert audit["sagittal_projection"]["crop_basis"] == "vertebral_body_mask"
+    assert (
+        audit["sagittal_projection"]["method"]
+        == "sagittal_thick_slab_vertebral_crop_v2"
+    )
+    assert audit["table"]["row_layout"] == "uniform_categorical_grid"
+    assert manifest["display"]["audit"]["axial_view"]["vertebral_level"] == "L3"
+    assert "tissue_labels" in {artifact["name"] for artifact in manifest["source_artifacts"]}
+    heading_x = {
+        heading: next(float(word["x0"]) for word in words if word["text"] == heading)
+        for heading in ("Spine", "Vertebral", "Axial")
+    }
     if layout == "spine_profile_v2":
         assert "Stacked tissue-area profile" in text
-        profile = manifest["display"]["audit"]["profile"]
-        assert profile["layers"] == [
-            "sm", "imat", "sat", "avat", "tvat"
+        heading_x["Stacked"] = next(
+            float(word["x0"]) for word in words if word["text"] == "Stacked"
+        )
+        assert (
+            heading_x["Spine"] < heading_x["Stacked"] < heading_x["Vertebral"] < heading_x["Axial"]
+        )
+        assert manifest["display"]["audit"]["panel_order"] == [
+            "sagittal_spine",
+            "tissue_area_profile",
+            "vertebral_summary",
+            "axial_segmentation",
         ]
-        positions = case.measurement_bundle.slices[
-            "position_superior_mm"
-        ].to_numpy(dtype=float)
+        profile = manifest["display"]["audit"]["profile"]
+        assert profile["layers"] == ["sm", "imat", "sat", "avat", "tvat"]
+        positions = case.measurement_bundle.slices["position_superior_mm"].to_numpy(dtype=float)
         inferior_mm, superior_mm = profile["displayed_superior_range_mm"]
         displayed_valid = (
-            np.isfinite(positions)
-            & (positions >= inferior_mm)
-            & (positions <= superior_mm)
+            np.isfinite(positions) & (positions >= inferior_mm) & (positions <= superior_mm)
         )
         layer_values = {}
-        for layer, column in zip(
-            profile["layers"], profile["source_columns"], strict=True
-        ):
+        for layer, column in zip(profile["layers"], profile["source_columns"], strict=True):
             values = case.measurement_bundle.slices[column].to_numpy(dtype=float)
             validity_column = column.replace("_cm2", "_valid")
             displayed_valid &= (
@@ -344,22 +495,40 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
                 & case.measurement_bundle.slices[validity_column].to_numpy(dtype=bool)
             )
             layer_values[layer] = values
-        for layer, column in zip(
-            profile["layers"], profile["source_columns"], strict=True
-        ):
+        for layer, _column in zip(profile["layers"], profile["source_columns"], strict=True):
             values = layer_values[layer]
             expected_cm3 = float(
                 np.trapezoid(values[displayed_valid], positions[displayed_valid]) / 10.0
             )
-            assert profile["displayed_layer_integrals_cm3"][layer] == pytest.approx(
-                expected_cm3
-            )
+            assert profile["displayed_layer_integrals_cm3"][layer] == pytest.approx(expected_cm3)
+    else:
+        assert heading_x["Spine"] < heading_x["Vertebral"] < heading_x["Axial"]
+        assert manifest["display"]["audit"]["panel_order"] == [
+            "sagittal_spine",
+            "vertebral_summary",
+            "axial_segmentation",
+        ]
+    table_left = heading_x["Vertebral"]
+    table_right = heading_x["Axial"]
+    table_levels = set(audit["table"]["displayed_levels"])
+    level_words = [
+        word
+        for word in words
+        if word["text"] in table_levels
+        and table_left <= float(word["x0"]) < table_right
+    ]
+    assert len(level_words) == len(table_levels)
+    level_tops = sorted(float(word["top"]) for word in level_words)
+    assert np.ptp(np.diff(level_tops)) < 0.2
+    assert np.diff(level_tops).mean() == pytest.approx(
+        audit["table"]["row_height_pt"], abs=0.2
+    )
     raw = result.pdf_path.read_bytes() + result.manifest_path.read_bytes()
-    assert b"/Users/localuser" not in raw
+    assert str(Path("/") / "Users" / "localuser").encode() not in raw
     assert b"localuser" not in raw
     assert all("/private/" not in str(value) for value in reader.metadata.values())
     unsafe = dict(manifest)
-    unsafe["debug"] = "/data/clinical/patient-001/input.nii.gz"
+    unsafe["debug"] = str(Path("/") / "data" / "clinical" / "patient-001" / "input.nii.gz")
     with pytest.raises(ReportValidationError, match="forbidden local/source path"):
         validate_report_manifest(unsafe)
 
@@ -374,7 +543,9 @@ def test_report_id_and_pdf_are_deterministic(base_config, tmp_path):
     assert changed.report_id != first.report_id
 
 
-def test_report_rejects_mixed_preparation_vertebral_measurement_sources(base_config, tmp_path):
+def test_report_rejects_mixed_orientation_vertebral_measurement_sources(
+    base_config, tmp_path
+):
     case = _report_case(base_config, "case-mixed")
 
     wrong_orientation = dict(case.orientation)
@@ -403,6 +574,15 @@ def test_report_rejects_mixed_preparation_vertebral_measurement_sources(base_con
         render_case_report(
             replace(case, measurement_bundle=label_mismatch),
             tmp_path / "labels",
+            _settings(),
+        )
+
+    changed_tissue = case.tissue_labels_zyx.copy()
+    changed_tissue[0, 0, 0] = 1
+    with pytest.raises(ReportValidationError, match="tissue labels disagree"):
+        render_case_report(
+            replace(case, tissue_labels_zyx=changed_tissue),
+            tmp_path / "tissue-labels",
             _settings(),
         )
 
@@ -467,7 +647,9 @@ def test_orientation_repair_is_annotated_and_summary_is_conditional(base_config,
     reader = PdfReader(reviewed_export["pdf_path"])
     assert len(reader.pages) == 3
     assert [str(item.title) for item in reader.outline] == [
-        "Manual review summary", "case-ordinary", "case-repaired"
+        "Manual review summary",
+        "case-ordinary",
+        "case-repaired",
     ]
     manifest = json.loads(reviewed_export["manifest_path"].read_text())
     assert manifest["manual_review_summary"]["included"]
@@ -495,9 +677,7 @@ def test_collation_rejects_result_manifest_or_configuration_mismatch(
             output_directory=tmp_path / "forged",
             settings=_settings(),
         )
-    changed_settings = ReportingSettings.from_mapping(
-        {"enabled": True, "numeric_precision": 2}
-    )
+    changed_settings = ReportingSettings.from_mapping({"enabled": True, "numeric_precision": 2})
     with pytest.raises(ReportValidationError, match="configuration"):
         collate_reports(
             [source],
@@ -568,9 +748,7 @@ def test_downstream_copies_of_orientation_qc_are_not_duplicated(
 
 
 def test_summary_capacity_overflow_fails_before_output(base_config, tmp_path):
-    source = render_case_report(
-        _report_case(base_config), tmp_path / "source", _settings()
-    )
+    source = render_case_report(_report_case(base_config), tmp_path / "source", _settings())
     reports = []
     for index in range(MAX_REVIEW_SUMMARY_ROWS + 1):
         case_id = f"case-{index:02d}"
@@ -640,8 +818,7 @@ def test_failure_page_preserves_available_vertebral_body_overview(
                 anatomical_label=case.vertebral_result.label_schema[native_label],
                 index_zyx=tuple(float(value) for value in center_zyx),
                 physical_lps_xyz=tuple(
-                    float(value)
-                    for value in geometry.physical_point(center_zyx[::-1])
+                    float(value) for value in geometry.physical_point(center_zyx[::-1])
                 ),
             )
         )
@@ -670,7 +847,7 @@ def test_failure_page_preserves_available_vertebral_body_overview(
     assert "SM (cm2): NA*" in text
     if layout == "spine_profile_v2":
         assert "Stacked tissue-area profile" in text
-        assert "measurement stage output incomplete" in text
+        assert "Measurement output incomplete" in text
 
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["partial_spine_overview"] == "rendered"
@@ -703,9 +880,7 @@ def test_failure_page_preserves_available_vertebral_body_overview(
 def test_posthoc_manifest_loader_and_cli_surface_use_canonical_bundle(base_config, tmp_path):
     case = _report_case(base_config, "case-posthoc")
     workspace = tmp_path / "analysis"
-    action = ExportMeasurementBundle(
-        SimpleNamespace(config=base_config, timestamp=1, device="cpu")
-    )
+    action = ExportMeasurementBundle(SimpleNamespace(config=base_config, timestamp=1, device="cpu"))
     action(
         {
             "id": case.case_id,
@@ -714,8 +889,12 @@ def test_posthoc_manifest_loader_and_cli_surface_use_canonical_bundle(base_confi
         }
     )
     prepared_path = workspace / "prepared.nii.gz"
+    tissue_path = workspace / "tissue_labels.nii.gz"
     body_path = workspace / "vertebral_bodies.nii.gz"
     sitk.WriteImage(case.prepared_image, str(prepared_path))
+    tissue_image = sitk.GetImageFromArray(case.tissue_labels_zyx)
+    tissue_image.CopyInformation(case.prepared_image)
+    sitk.WriteImage(tissue_image, str(tissue_path))
     body_image = sitk.GetImageFromArray(case.vertebral_result.vertebral_body_labels)
     body_image.CopyInformation(case.prepared_image)
     sitk.WriteImage(body_image, str(body_path))
@@ -732,29 +911,36 @@ def test_posthoc_manifest_loader_and_cli_surface_use_canonical_bundle(base_confi
                 "schema_version": "1.0.0",
                 "case_id": case.case_id,
                 "prepared_ct": prepared_path.name,
+                "tissue_label_mask": tissue_path.name,
                 "vertebral_body_mask": body_path.name,
                 "vertebral_result_json": vertebral_path.name,
-                "measurement_directory": f"tables/{case.case_id}",
+                "measurement_directory": "tables",
                 "orientation_report_json": orientation_path.name,
-                "measurement_qc_json": f"qc/{case.case_id}_measurement-qc.json",
+                "measurement_qc_json": "qc/qc.json",
+                "technical_metadata": dict(case.technical_metadata),
             }
         ),
         encoding="utf-8",
     )
     loaded = load_case_report_input(manifest_path)
     assert loaded.case_id == case.case_id
-    assert loaded.measurement_bundle.identity.analysis_id == case.measurement_bundle.identity.analysis_id
+    assert (
+        loaded.measurement_bundle.identity.analysis_id
+        == case.measurement_bundle.identity.analysis_id
+    )
     result = render_case_report(loaded, tmp_path / "posthoc-report", _settings())
     assert len(PdfReader(result.pdf_path).pages) == 1
-    assert build_parser().parse_args(["validate", "--manifest", str(result.manifest_path)]).command == "validate"
+    args = build_parser().parse_args(["reports", "inspect", str(result.manifest_path)])
+    assert args.command == "reports"
+    assert args.reports_command == "inspect"
 
 
-def test_pipeline_reporting_action_uses_same_service_and_declares_completion_markers(base_config, tmp_path):
+def test_pipeline_reporting_action_uses_same_service_and_declares_completion_markers(
+    base_config, tmp_path
+):
     config = deepcopy(base_config)
     config["reporting"]["enabled"] = True
-    action = RenderCaseReport(
-        SimpleNamespace(config=config, timestamp=1, device="cpu")
-    )
+    action = RenderCaseReport(SimpleNamespace(config=config, timestamp=1, device="cpu"))
     case = _report_case(config, "case-action")
     memory = {
         "id": case.case_id,
@@ -763,6 +949,8 @@ def test_pipeline_reporting_action_uses_same_service_and_declares_completion_mar
         "tmp/orientation_result": case.orientation,
         "tmp/vertebral_result": case.vertebral_result,
         "tmp/measurement_bundle": case.measurement_bundle,
+        TISSUE_LABEL_MASK: SimpleNamespace(data=case.tissue_labels_zyx),
+        "tmp/report_metadata": dict(case.technical_metadata),
     }
     action(memory)
     action.validate_outputs(memory)

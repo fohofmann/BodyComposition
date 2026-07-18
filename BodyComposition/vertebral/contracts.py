@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 
 from BodyComposition.utils.geometry import ImageGeometry
 
 
-class ExecutionStatus(str, Enum):
+class ExecutionStatus(StrEnum):
     """Execution status shared by vertebral backends."""
 
     PENDING = "pending"
@@ -23,7 +24,7 @@ class ExecutionStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class QCStatus(str, Enum):
+class QCStatus(StrEnum):
     """Independent scientific-review status."""
 
     PASS = "pass"
@@ -32,7 +33,7 @@ class QCStatus(str, Enum):
     NOT_ASSESSED = "not_assessed"
 
 
-class QCSeverity(str, Enum):
+class QCSeverity(StrEnum):
     """Severity attached to a structured QC flag."""
 
     INFO = "info"

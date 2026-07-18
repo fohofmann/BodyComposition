@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from BodyComposition.vertebral.spineps_assets import verify_installed_asset
 from BodyComposition.vertebral.spineps_manifest import (
@@ -79,6 +80,12 @@ class SpinepsModelSession:
                 labeling=self._loader(installed["labeling"], self.use_cpu),
             )
         return self._models
+
+    def unload(self) -> None:
+        """Drop the process-local upstream bundle without touching model files."""
+
+        with self._lock:
+            self._models = None
 
     @property
     def provenance(self) -> dict[str, object]:

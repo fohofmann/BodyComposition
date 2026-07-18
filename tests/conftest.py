@@ -5,21 +5,28 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
-from BodyComposition.utils.config import update_config, validate_config
+from BodyComposition.config import PipelineConfig
 from BodyComposition.utils.nifti import NiftiDataContainer
 
 
 @pytest.fixture
 def base_config():
-    config = update_config({}, Path("config/config.yaml"))
-    config = update_config(config, Path("config/labels.yaml"))
-    validate_config(config)
-    return config
+    return PipelineConfig.model_validate(
+        {"runtime": {"allow_dirty": True}}
+    ).to_runtime_dict()
 
 
 @pytest.fixture
 def pipeline_stub(base_config):
-    return SimpleNamespace(config=base_config, timestamp=1234567890, device="cpu")
+    public_config = PipelineConfig.model_validate(
+        {"runtime": {"allow_dirty": True}}
+    )
+    return SimpleNamespace(
+        config=base_config,
+        public_config=public_config,
+        timestamp=1234567890,
+        device="cpu",
+    )
 
 
 @pytest.fixture

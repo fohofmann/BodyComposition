@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 import SimpleITK as sitk
 
@@ -30,6 +33,27 @@ from BodyComposition.vertebral.spineps_manifest import (
     VIBESEG_CROP_RELEASE,
 )
 from BodyComposition.vertebral.spineps_session import SpinepsModelSession
+
+_CITATION_REMINDER_CONFIGURED = False
+
+
+def _configure_upstream_citation_reminder() -> None:
+    """Keep machine stdout clean while retaining explicit project attribution."""
+
+    global _CITATION_REMINDER_CONFIGURED
+    if _CITATION_REMINDER_CONFIGURED:
+        return
+    os.environ["SPINEPS_TURN_OF_CITATION_REMINDER"] = "TRUE"
+    from spineps.utils import citation_reminder
+
+    # SPINEPS 2.0.0 registers an unconditional rich stdout banner at import.
+    # BodyComposition provides the same citation requirement in its notices,
+    # model records, documentation, and stderr log instead.
+    atexit.unregister(citation_reminder.print_citation_reminder)
+    logging.info(
+        "SPINEPS/VERIDAH inference requires citation; see THIRD_PARTY_NOTICES.md."
+    )
+    _CITATION_REMINDER_CONFIGURED = True
 
 
 def _make_bids_file(input_path: Path) -> Any:
@@ -55,6 +79,8 @@ def _run_explicit_vibeseg(
     input_nii: Any,
     output_path: Path,
     device: str,
+    *,
+    cache_model: bool = True,
 ) -> None:
     from TPTBox.segmentation.VibeSeg.inference_nnunet import run_inference_on_file
 
@@ -70,7 +96,7 @@ def _run_explicit_vibeseg(
         memory_base=5500,
         memory_factor=25,
         auto_download=False,
-        cache_model=True,
+        cache_model=cache_model,
     )
 
 
@@ -203,6 +229,7 @@ class SpinepsRuntime:
         run_vibeseg: Callable[[Path, Any, Path, str], None] = _run_explicit_vibeseg,
         run_spineps: Callable[[Any, Any, str], Any] = _run_spineps,
         vibeseg_bundle_provenance: Mapping[str, Any] | None = None,
+        cache_vibeseg_model: bool = True,
     ) -> None:
         self.model_session = model_session
         self.vibeseg_trained_model = Path(vibeseg_trained_model)
@@ -212,6 +239,7 @@ class SpinepsRuntime:
         self._run_vibeseg = run_vibeseg
         self._run_spineps = run_spineps
         self._vibeseg_bundle_provenance = dict(vibeseg_bundle_provenance or {})
+        self.cache_vibeseg_model = bool(cache_vibeseg_model)
         self._lock = threading.Lock()
 
     @classmethod
@@ -221,7 +249,8 @@ class SpinepsRuntime:
         *,
         use_cpu: bool = False,
         derivative_name: str = "derivatives_spineps",
-    ) -> "SpinepsRuntime":
+        cache_vibeseg_model: bool = True,
+    ) -> SpinepsRuntime:
         model_root = Path(model_root)
         trained_model = verify_installed_vibeseg(
             model_root,
@@ -232,11 +261,20 @@ class SpinepsRuntime:
             SpinepsModelSession(model_root, use_cpu=use_cpu),
             trained_model,
             derivative_name=derivative_name,
+            cache_vibeseg_model=cache_vibeseg_model,
             vibeseg_bundle_provenance=_vibeseg_inventory_provenance(
                 model_root,
                 trained_model,
             ),
         )
+
+    def set_low_memory_mode(self, enabled: bool = True) -> None:
+        self.cache_vibeseg_model = not bool(enabled)
+        if enabled:
+            self.release_models()
+
+    def release_models(self) -> None:
+        self.model_session.unload()
 
     def _existing_native_outputs(self, output_paths: Mapping[str, Path]) -> dict[str, Path]:
         return {
@@ -249,12 +287,21 @@ class SpinepsRuntime:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if not output_path.is_file():
             device = "cpu" if self.model_session.use_cpu else "cuda"
-            self._run_vibeseg(
+            arguments = (
                 self.vibeseg_trained_model,
                 img_ref.open_nii(),
                 output_path,
                 device,
             )
+            if self._run_vibeseg is _run_explicit_vibeseg:
+                self._run_vibeseg(
+                    *arguments,
+                    cache_model=self.cache_vibeseg_model,
+                )
+            else:
+                # Keep the narrow four-argument injection contract used by tests
+                # and downstream controlled adapters.
+                self._run_vibeseg(*arguments)
         if not output_path.is_file():
             raise RuntimeError("VibeSeg did not create the required SPINEPS crop segmentation.")
         crop_geometry = _geometry_from_sitk(sitk.ReadImage(str(output_path)))
@@ -273,7 +320,8 @@ class SpinepsRuntime:
         case_id: str,
     ) -> VertebralResult:
         if not isinstance(prepared, OrientationOutcome):
-            raise TypeError("SPINEPS run requires the preparation stage OrientationOutcome object.")
+            raise TypeError("SPINEPS run requires the orientation-stage outcome object.")
+        _configure_upstream_citation_reminder()
         reference_geometry = _geometry_from_sitk(prepared.prepared_image)
         staged_input = _stage_prepared_ct(
             prepared.prepared_image,

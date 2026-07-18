@@ -57,7 +57,9 @@ class _SegmInternal(PipelineAction):
                 tile_step_size=0.5,
                 use_gaussian=True,
                 use_mirroring=False,
-                perform_everything_on_device=True,
+                perform_everything_on_device=(
+                    getattr(self.device, "type", self.device) == "cuda"
+                ),
                 device=self.device,
                 verbose=True,
                 verbose_preprocessing=True,
@@ -70,6 +72,9 @@ class _SegmInternal(PipelineAction):
             )
         self.predictor = predictor
         return predictor
+
+    def release_model(self) -> None:
+        self.predictor = None
 
     def _predict(self, predictor, input_image, spacing_zyx):
         arguments = (
@@ -110,7 +115,7 @@ class _SegmInternal(PipelineAction):
         output_label = memory[self.output_label_name] = NiftiDataContainer(output_path)
 
         if output_label.exists() and self.config["run"]["skip"]:
-            logging.info(" output: %s available, skipping", output_label)
+            logging.info(" internal segmentation already available, skipping")
             return
 
         input_image = memory[self.input_image_name]
@@ -135,17 +140,15 @@ class _SegmInternal(PipelineAction):
         logging.info(" finished segmentation (%.2fs)", time() - time_start)
         if self.config["segmentation"]["save_label"]:
             output_label.save_to_file()
-            logging.info(" saved file: %s", output_label.path)
+            logging.info(" saved internal segmentation")
 
 
 class SegmIntVertebrae(_SegmInternal):
     """Segment thoracic and lumbar vertebral bodies with an internal nnU-Net model."""
 
-    output_label_name = "labels/{caseid}_int-vertebrae.nii.gz"
+    output_label_name = "masks/vertebral_bodies.nii.gz"
     weight_key = "int-vertebrae"
     model_title = "VertebralBodiesCT"
-    licenses = ["nnunet", "nnunet_resenc", "intvertebrae", "verse", "boa", "totalsegmentator"]
-
     def __init__(self, pipeline, image: str, model: str = "ResEncM"):
         super().__init__(pipeline, image=image, model=model)
         self.io_outputs.append("tmp/vertebral_result")
@@ -154,7 +157,7 @@ class SegmIntVertebrae(_SegmInternal):
         super().__call__(memory)
         from dataclasses import replace
 
-        from BodyComposition.vertebral.legacy_adapter import adapt_internal_vertebral_bodies
+        from BodyComposition.vertebral.internal_adapter import adapt_internal_vertebral_bodies
         from BodyComposition.vertebral.spineps_backend import orientation_qc_flags
 
         output = memory[self.output_label_name]
@@ -186,7 +189,6 @@ class SegmIntVertebrae(_SegmInternal):
 class SegmIntBodyComposition(_SegmInternal):
     """Segment tissue compartments with an internal nnU-Net model."""
 
-    output_label_name = "labels/{caseid}_int-bodycomposition.nii.gz"
+    output_label_name = "masks/tissue_compartments.nii.gz"
     weight_key = "int-bodycomposition"
     model_title = "BodyCompositionCT"
-    licenses = ["nnunet", "nnunet_resenc", "intbodycomposition", "boa", "totalsegmentator"]

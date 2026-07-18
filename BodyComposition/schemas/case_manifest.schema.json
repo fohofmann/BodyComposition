@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fohofmann/BodyComposition/schemas/case_manifest.schema.json",
+  "title": "BodyComposition case result manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "manifest_type", "case_id", "run_id", "analysis_id",
+    "attempt_id", "execution_status", "qc_status", "manual_review_required",
+    "started_at", "ended_at", "duration_seconds", "input", "scientific",
+    "qc_flags", "provenance", "artifacts", "failure"
+  ],
+  "$defs": {
+    "safe_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "qc_flag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code", "stage", "severity", "reason", "observed", "thresholds",
+        "suggested_review_action", "reviewer", "reviewed_at", "adjudication",
+        "review_comment"
+      ],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "stage": {"type": "string", "minLength": 1},
+        "severity": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "observed": {"type": "object"},
+        "thresholds": {"type": "object"},
+        "suggested_review_action": {"type": "string", "minLength": 1},
+        "reviewer": {"type": ["string", "null"]},
+        "reviewed_at": {"type": ["string", "null"]},
+        "adjudication": {"type": ["string", "null"]},
+        "review_comment": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "manifest_type": {"const": "case"},
+    "case_id": {"$ref": "#/$defs/safe_id"},
+    "run_id": {"$ref": "#/$defs/safe_id"},
+    "analysis_id": {"$ref": "#/$defs/sha256"},
+    "attempt_id": {"$ref": "#/$defs/safe_id"},
+    "execution_status": {
+      "enum": ["succeeded", "failed", "skipped_identical", "cancelled"]
+    },
+    "qc_status": {"enum": ["pass", "review", "fail", "not_assessed"]},
+    "manual_review_required": {"type": "boolean"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "ended_at": {"type": "string", "format": "date-time"},
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_reference", "source_content_sha256", "source_byte_size",
+        "input_pixel_sha256", "input_format", "geometry"
+      ],
+      "properties": {
+        "source_reference": {"const": "content-addressed-local-input"},
+        "source_content_sha256": {"type": ["string", "null"]},
+        "source_byte_size": {"type": ["integer", "null"], "minimum": 0},
+        "input_pixel_sha256": {"$ref": "#/$defs/sha256"},
+        "input_format": {"enum": ["nifti", "dicom", "unreadable_or_missing"]},
+        "geometry": {"type": "object"},
+        "dicom": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "series_instance_uid_sha256", "instance_count", "modality",
+            "scanner_manufacturer", "scanner_model",
+            "image_orientation_patient_complete", "image_position_patient_complete",
+            "conversion_backend", "conversion_backend_version"
+          ],
+          "properties": {
+            "series_instance_uid_sha256": {"$ref": "#/$defs/sha256"},
+            "instance_count": {"type": "integer", "minimum": 1},
+            "modality": {"const": "CT"},
+            "scanner_manufacturer": {"type": ["string", "null"], "maxLength": 80},
+            "scanner_model": {"type": ["string", "null"], "maxLength": 80},
+            "image_orientation_patient_complete": {"type": "boolean"},
+            "image_position_patient_complete": {"type": "boolean"},
+            "conversion_backend": {"type": "string", "minLength": 1},
+            "conversion_backend_version": {"type": "string", "minLength": 1}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"input_format": {"const": "dicom"}}},
+          "then": {"required": ["dicom"]}
+        }
+      ]
+    },
+    "scientific": {"type": "object"},
+    "qc_flags": {"type": "array", "items": {"$ref": "#/$defs/qc_flag"}},
+    "provenance": {"type": "object"},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["relative_path", "byte_size", "sha256"],
+        "properties": {
+          "relative_path": {"type": "string", "minLength": 1},
+          "byte_size": {"type": "integer", "minimum": 0},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "failure": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stage", "code", "summary"],
+          "properties": {
+            "stage": {"type": "string", "minLength": 1},
+            "code": {"type": "string", "minLength": 1},
+            "summary": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  }
+}

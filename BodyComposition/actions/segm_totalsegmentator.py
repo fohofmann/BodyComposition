@@ -1,28 +1,34 @@
 # general libraries
-from BodyComposition.pipeline import PipelineAction
-from BodyComposition.utils.geometry import assert_same_physical_domain
-from BodyComposition.utils.nifti import NiftiDataContainer
-from time import time
+import contextlib
 import logging
+import os
+import threading
+from pathlib import Path
+from time import time
+
+from totalsegmentator.config import setup_nnunet, setup_totalseg
 
 # specific libraries
 from totalsegmentator.python_api import totalsegmentator
-from totalsegmentator.config import setup_nnunet, setup_totalseg
-from BodyComposition.utils.logging import LoggingWriter, log_gpu_usage
-import contextlib
-import os
-import threading
 
+from BodyComposition.pipeline import PipelineAction
+from BodyComposition.utils.geometry import assert_same_physical_domain
+from BodyComposition.utils.logging import LoggingWriter, log_gpu_usage
+from BodyComposition.utils.nifti import NiftiDataContainer
 
 MEASUREMENT_TASK_IDS = {
     "bodytrunk": 299,
     "body_landmarks": 297,
 }
+MEASUREMENT_OUTPUTS = {
+    "bodytrunk": "masks/totalsegmentator_body.nii.gz",
+    "body_landmarks": "masks/totalsegmentator_landmarks.nii.gz",
+}
 _MEASUREMENT_INFERENCE_LOCK = threading.RLock()
 
 
 def _require_measurement_model(task: str) -> None:
-    """Prevent inference-time downloads for measurement stage's TotalSegmentator assets."""
+    """Prevent inference-time downloads for measurement-support model assets."""
 
     if task not in {"bodytrunk", "body_landmarks"}:
         return
@@ -35,7 +41,7 @@ def _require_measurement_model(task: str) -> None:
 
 @contextlib.contextmanager
 def _measurement_model_download_guard(task: str):
-    """Make measurement stage TotalSegmentator inference cache-only and task-pinned."""
+    """Make measurement-support inference cache-only and task-pinned."""
 
     if task not in MEASUREMENT_TASK_IDS:
         with _MEASUREMENT_INFERENCE_LOCK:
@@ -70,7 +76,7 @@ def _measurement_model_download_guard(task: str):
 
 # class
 class SegmTotalSegmentatorConfig(PipelineAction):
-    """Must run before other nnUNet actions to set up TotalSegmentator."""
+    """Configure TotalSegmentator when execution starts, not during planning."""
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
@@ -78,16 +84,22 @@ class SegmTotalSegmentatorConfig(PipelineAction):
         # set tseg paths if defined in config
         path_tseg_config = str(self.config['paths']['totalsegmentator_config'])
         path_tseg_weights = str(self.config['paths']['weights']['totalsegmentator'])
-        if path_tseg_config not in ('None', ''):
-            os.environ["TOTALSEG_HOME_DIR"] = path_tseg_config
-        if path_tseg_weights not in ('None', ''):
-            os.environ["TOTALSEG_WEIGHTS_PATH"] = path_tseg_weights
-        setup_nnunet()
-        setup_totalseg()
+        self.path_tseg_config = path_tseg_config
+        self.path_tseg_weights = path_tseg_weights
 
     def __call__(self, memory):
-        # nothing to do
-        pass
+        # Pipeline construction and dry planning must remain side-effect free.
+        # TotalSegmentator creates its local configuration directory here, only
+        # after the service has verified every required model asset.
+        for value in (self.path_tseg_config, self.path_tseg_weights):
+            if value not in ("None", ""):
+                Path(value).mkdir(parents=True, exist_ok=True)
+        if self.path_tseg_config not in ("None", ""):
+            os.environ["TOTALSEG_HOME_DIR"] = self.path_tseg_config
+        if self.path_tseg_weights not in ("None", ""):
+            os.environ["TOTALSEG_WEIGHTS_PATH"] = self.path_tseg_weights
+        setup_nnunet()
+        setup_totalseg()
 
 
 # class
@@ -98,39 +110,28 @@ class SegmTotalSegmentator(PipelineAction):
         super().__init__(pipeline, task)
         pipeline_device = getattr(pipeline.device, "type", str(pipeline.device))
         self.device = "gpu" if pipeline_device == "cuda" else pipeline_device
+        self.cpu_threads = max(1, int(getattr(pipeline, "cpu_threads", 1)))
 
         # define io
         self.input_image_name = image
-        self.output_label_name = 'labels/{{caseid}}_tseg-{task}.nii.gz'.format(task=task)
+        try:
+            self.output_label_name = MEASUREMENT_OUTPUTS[task]
+        except KeyError as error:
+            raise ValueError(
+                f"Unsupported release TotalSegmentator task: {task!r}."
+            ) from error
         self.io_inputs = [image]
         self.io_outputs = [self.output_label_name]
         self.io_reset_outputs = [self.output_label_name]
         if self.config['segmentation']['save_label']:
             self.io_persisted_outputs = [self.output_label_name]
-        self.licenses = ['totalsegmentator', 'nnunet']
 
         # dictionary for task settings
         tasks = {
-            'iliopsoas': {
-                'task': 'total',
-                'fast': fast,
-                'roi_subset': ["iliopsoas_left", "iliopsoas_right"],
-                'license_nc': False,
-            },
-            'spine': {
-                'task': 'total',
-                'fast': fast,
-                'roi_subset': ["sacrum", "vertebrae_S1", "vertebrae_L5", "vertebrae_L4", "vertebrae_L3", "vertebrae_L2", "vertebrae_L1",
-                               "vertebrae_T12", "vertebrae_T11", "vertebrae_T10", "vertebrae_T9", "vertebrae_T8", "vertebrae_T7", "vertebrae_T6",
-                               "vertebrae_T5", "vertebrae_T4", "vertebrae_T3", "vertebrae_T2", "vertebrae_T1",
-                               "vertebrae_C7", "vertebrae_C6", "vertebrae_C5", "vertebrae_C4", "vertebrae_C3", "vertebrae_C2", "vertebrae_C1"],
-                'license_nc': False,
-            },
             'bodytrunk': {
                 'task': 'body',
                 'fast': fast,
                 'roi_subset': None,
-                'license_nc': False,
             },
             'body_landmarks': {
                 'task': 'total',
@@ -139,31 +140,14 @@ class SegmTotalSegmentator(PipelineAction):
                 # an additional rough task-298 model. Run the pinned fast total
                 # task once; the landmark adapter consumes only hips and ribs.
                 'roi_subset': None,
-                'license_nc': False,
-            },
-            'tissue': {
-                'task': 'tissue_types',
-                'fast': False, # not available
-                'roi_subset': None,
-                'license_nc': True,
-            },
-            'vertebralbodies': {
-                'task': 'vertebrae_body',
-                'fast': False, # not available
-                'roi_subset': None,
-                'license_nc': True,
             },
         }
 
         if task not in tasks:
-            raise AssertionError(f'Unknown task: {task}')
+            raise ValueError(f'Unknown release TotalSegmentator task: {task}')
         
         self.task = task
         self.task_config = tasks[task]
-        if self.task_config['license_nc']:
-            self.licenses.append('totalsegmentator_nc')
-
-
     def __call__(self, memory):
         """Segment case."""
         super().__call__(memory, task=self.task)
@@ -175,15 +159,15 @@ class SegmTotalSegmentator(PipelineAction):
 
         # check if segmentation already available
         if output_label.exists() and self.config['run']['skip']:
-            logging.info(f' output: {output_label} available, skipping')
+            logging.info(" TotalSegmentator output already available, skipping")
         else:
             # load input container, log
             input_image = memory[self.input_image_name]
             input_image.validate()
-            logging.info(f' input: {input_image}')
+            logging.info(" input image validated")
 
             # do segmentation, redirect stdout and stderr to logging
-            logging.info(f' running segmentation using totalsegmentator')
+            logging.info(' running segmentation using totalsegmentator')
             sl = LoggingWriter(logging.DEBUG)
             with (
                 _measurement_model_download_guard(self.task),
@@ -193,8 +177,8 @@ class SegmTotalSegmentator(PipelineAction):
                 output_label.img = totalsegmentator(input=input_image.imgNifti1,
                                                     output=None,
                                                     ml=True,
-                                                    nr_thr_resamp=1,
-                                                    nr_thr_saving=6,
+                                                    nr_thr_resamp=self.cpu_threads,
+                                                    nr_thr_saving=self.cpu_threads,
                                                     fast=self.task_config['fast'],
                                                     nora_tag="None",
                                                     preview=False,
@@ -226,9 +210,9 @@ class SegmTotalSegmentator(PipelineAction):
 
             # logging
             logging.info(f' finished segmentation ({time() - time_start:.2f}s)')
-            logging.info(f' output: memory:{output_label.path}')
+            logging.info(" TotalSegmentator output validated")
 
             # saving
             if self.config['segmentation']['save_label']:
                 output_label.save_to_file()
-                logging.info(f' saved file')
+                logging.info(' saved file')

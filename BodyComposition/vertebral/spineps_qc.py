@@ -13,7 +13,6 @@ from BodyComposition.vertebral.spineps_manifest import (
     VERTEBRA_CORPUS_SEMANTIC_LABEL,
 )
 
-
 DEFAULT_MIN_BODY_VOLUME_MM3 = 500.0
 DEFAULT_MAX_NEIGHBOR_VOLUME_RATIO = 2.5
 
@@ -206,7 +205,10 @@ def evaluate_spineps_qc(
     rank = {label: index for index, label in enumerate(active_order)}
     ranked_labels = [centroid.native_label for centroid in cranial_to_caudal if centroid.native_label in rank]
     ranked_positions = [rank[label] for label in ranked_labels]
-    if any(right <= left for left, right in zip(ranked_positions, ranked_positions[1:])):
+    if any(
+        right <= left
+        for left, right in zip(ranked_positions, ranked_positions[1:], strict=False)
+    ):
         flags.append(
             _flag(
                 "non_monotonic_vertebral_order",

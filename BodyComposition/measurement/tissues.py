@@ -8,7 +8,6 @@ from typing import Any
 
 import numpy as np
 
-
 TISSUE_NAME_ALIASES = {
     "sm": "sm",
     "skeletalmuscle": "sm",

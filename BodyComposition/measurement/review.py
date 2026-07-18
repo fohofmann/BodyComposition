@@ -15,7 +15,6 @@ from BodyComposition.measurement.aggregation import select_l3_view
 from BodyComposition.measurement.contracts import MeasurementBundle
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 
-
 PANEL_SIZE = 320
 
 
@@ -264,7 +263,7 @@ def write_measurement_review(
     assert_same_physical_domain(
         geometry,
         bundle.body_surface.geometry,
-        reference_name="prepared CT",
+        reference_name="orientation-prepared CT",
         candidate_name="measurement review body surface",
     )
     image_zyx = sitk.GetArrayFromImage(prepared_image)

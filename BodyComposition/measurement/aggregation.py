@@ -25,7 +25,6 @@ from BodyComposition.measurement.physical import (
 from BodyComposition.measurement.tissues import DERIVED_RATIO_DEFINITIONS
 from BodyComposition.vertebral.contracts import VertebralResult
 
-
 DEFAULT_FULL_COVERAGE_TOLERANCE = 0.999
 AREA_SUFFIX = "_area_cm2"
 HU_SUFFIX = "_mean_hu"
@@ -86,7 +85,7 @@ def derive_vertebral_extents(
     minimum_component_voxels: int = 20,
     maximum_removed_fraction: float = 0.05,
 ) -> dict[str, VertebralExtent]:
-    """Derive robust physical extents from vertebral-body instances."""
+    """Derive robust physical extents from canonical vertebral-body instances."""
 
     if result.geometry is None or result.vertebral_body_labels is None:
         raise ValueError("A successful VertebralResult with body labels is required.")
@@ -150,16 +149,18 @@ def derive_vertebral_extents(
 def _sequence_gap(cranial_label: str, caudal_label: str) -> bool:
     cranial = cranial_label.upper().replace(" ", "")
     caudal = caudal_label.upper().replace(" ", "")
-    if cranial[0:1] == caudal[0:1] and cranial[0:1] in {"C", "T", "L"}:
-        if cranial[1:].isdigit() and caudal[1:].isdigit():
-            return int(caudal[1:]) - int(cranial[1:]) != 1
+    if (
+        cranial[0:1] == caudal[0:1]
+        and cranial[0:1] in {"C", "T", "L"}
+        and cranial[1:].isdigit()
+        and caudal[1:].isdigit()
+    ):
+        return int(caudal[1:]) - int(cranial[1:]) != 1
     if (cranial, caudal) == ("C7", "T1"):
         return False
     if cranial in {"T12", "T13"} and caudal == "L1":
         return False
-    if cranial in {"L5", "L6"} and caudal == "SACRUM":
-        return False
-    return True
+    return not (cranial in {"L5", "L6"} and caudal == "SACRUM")
 
 
 def derive_vertebral_territories(

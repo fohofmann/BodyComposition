@@ -6,8 +6,7 @@ import SimpleITK as sitk
 
 from BodyComposition.orientation.core import OrientationOutcome
 from BodyComposition.utils.geometry import ImageGeometry
-from BodyComposition.vertebral import ExecutionStatus, SpinepsRuntime
-from BodyComposition.vertebral import spineps_runtime
+from BodyComposition.vertebral import ExecutionStatus, SpinepsRuntime, spineps_runtime
 
 
 def _geometry(shape_zyx=(4, 5, 6)):

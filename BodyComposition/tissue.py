@@ -109,7 +109,7 @@ def prepare_classification_image(
         output = np.clip(output, min(hu_range), max(hu_range))
         logging.debug("  clipped classification HU values, range=%s", hu_range)
 
-    method = str(settings.get("method", "median" if settings.get("filter_median") else "none"))
+    method = str(settings.get("method", "none"))
     if method == "none":
         return output
     if method == "median":

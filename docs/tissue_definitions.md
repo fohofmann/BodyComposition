@@ -1,10 +1,8 @@
 # CT body compartments, tissue classes, and executable defaults
 
 This document is the implementation contract for measurement schema `2.1.0`.
-It translates the [source-backed literature review](research/body_composition_definitions_review.md),
-[paper matrix](research/body_composition_paper_matrix.csv), and
-[feature dictionary](research/body_composition_default_features.csv) into
-pipeline defaults and named sensitivity profiles.
+It translates the cited validation and methods literature into pipeline
+defaults and named sensitivity profiles.
 
 ## Technical summary
 
@@ -26,8 +24,8 @@ objects:
 3. an outcome-derived phenotype or cutpoint.
 
 The pipeline keeps them separate. The untouched model output in
-`labels/{caseid}_int-bodycomposition.nii.gz` is the anatomical source. The
-postprocessed compatibility mask in `masks/{caseid}_int-bodycomposition.nii.gz`
+`masks/tissue_compartments.nii.gz` is the anatomical source. The postprocessed
+compatibility mask in `masks/tissue_labels.nii.gz`
 contains the selected HU classes. Canonical derived measurements use the raw
 compartment labels and the untouched prepared CT, not a denoised intensity
 image and not a thresholded mask from which excluded voxels cannot be
@@ -72,20 +70,10 @@ Range ratios are calculated from integrated component volumes. Slice ratios
 are never averaged to make a multilevel ratio. A zero or invalid denominator
 returns null with a reason.
 
-SMI is not calculated from an inferred CT height. Supply a measured height to
-the read-only view:
-
-```bash
-bodycomposition_measurements \
-  --tables ./tables/case-001 \
-  --view l3 \
-  --aggregation slice \
-  --height-m 1.78
-```
-
-This adds `smi_skeletal_muscle_tissue_hu_m29_150_cm2_m2` with explicit height
-provenance. Named-range views similarly add volume/height² indices. Raw values
-remain the authoritative persisted measurements.
+SMI is not calculated from an inferred CT height. A downstream analysis may
+divide a prespecified area by a governed measured height squared, but it must
+retain the height source and chosen anatomical view as explicit provenance.
+Raw persisted values remain authoritative.
 
 ## Why these defaults
 
@@ -151,13 +139,14 @@ return to the untouched prepared CT.
 
 ## Executable literature profiles
 
-Pass one profile as the ordinary final configuration override:
+Pass one profile as the ordinary configuration override:
 
 ```bash
-bodycomposition \
-  -i ./data/images \
-  -m BodyCompositionFast \
-  -c config/tissue_profiles/derstine_2022_vat_m205_m51.yaml
+bodycomposition analyze \
+  ./input/case-001.nii.gz \
+  -o ./output \
+  --case-id case-001 \
+  --config config/tissue_profiles/derstine_2022_vat_m205_m51.yaml
 ```
 
 | Profile | What it changes | Reproducibility interpretation |

@@ -1,21 +1,20 @@
-"""Stable contracts for the optional reporting stage."""
+"""Stable contracts for the optional case-reporting stage."""
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-import re
-from typing import Any, Mapping
+from typing import Any
 
-import SimpleITK as sitk
-
+import numpy as np
 import pandas as pd
+import SimpleITK as sitk
 
 from BodyComposition.measurement.contracts import MeasurementBundle, MeasurementIdentity
 from BodyComposition.orientation.core import OrientationOutcome, OrientationResult
-from BodyComposition.vertebral.contracts import VertebralResult
-from BodyComposition.vertebral.contracts import QCFlag
-
+from BodyComposition.vertebral.contracts import QCFlag, VertebralResult
 
 REPORT_SCHEMA_VERSION = "1.0.0"
 CASE_REPORT_NAME = "case_report.pdf"
@@ -25,6 +24,18 @@ SUPPORTED_LAYOUTS = ("spine_overview_v1", "spine_profile_v2")
 PAGE_SIZE = "A4_landscape"
 SPINE_VIEW = "sagittal_thick_slab_v1"
 MAX_REVIEW_SUMMARY_ROWS = 24
+TECHNICAL_METADATA_FIELDS = frozenset(
+    {
+        "analysis_started_at",
+        "data_attribution",
+        "input_format",
+        "pipeline_version",
+        "runtime_backend",
+        "runtime_hardware",
+        "scanner_manufacturer",
+        "scanner_model",
+    }
+)
 
 MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
     "sm_mean_csa_cm2": {
@@ -111,7 +122,7 @@ class ReportingSettings:
     projection_spacing_mm: float = 1.5
 
     @classmethod
-    def from_mapping(cls, config: Mapping[str, Any] | None) -> "ReportingSettings":
+    def from_mapping(cls, config: Mapping[str, Any] | None) -> ReportingSettings:
         if config is None:
             settings = cls()
         else:
@@ -120,13 +131,29 @@ class ReportingSettings:
             section = config.get("reporting", config)
             if not isinstance(section, Mapping):
                 raise ValueError("reporting must be a mapping.")
-            unknown = sorted(set(section) - {
-                "enabled", "layout", "individual_pdf", "combined_pdf", "page_size",
-                "spine_view", "measure_aggregation", "measurement_columns",
-                "vertebral_range", "include_qc_flags", "manual_review_summary",
-                "numeric_precision", "locale", "missing_value_symbol", "ct_window",
-                "overlay_opacity", "sagittal_slab_margin_mm", "projection_spacing_mm",
-            })
+            unknown = sorted(
+                set(section)
+                - {
+                    "enabled",
+                    "layout",
+                    "individual_pdf",
+                    "combined_pdf",
+                    "page_size",
+                    "spine_view",
+                    "measure_aggregation",
+                    "measurement_columns",
+                    "vertebral_range",
+                    "include_qc_flags",
+                    "manual_review_summary",
+                    "numeric_precision",
+                    "locale",
+                    "missing_value_symbol",
+                    "ct_window",
+                    "overlay_opacity",
+                    "sagittal_slab_margin_mm",
+                    "projection_spacing_mm",
+                }
+            )
             if unknown:
                 raise ValueError(f"Unknown reporting configuration values: {unknown}.")
             values = dict(section)
@@ -183,11 +210,18 @@ class ReportingSettings:
         if unsupported:
             raise ValueError(f"Unsupported report measurement columns: {unsupported}.")
         lower, upper = self.ct_window
-        if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (lower, upper)):
+        if not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in (lower, upper)
+        ):
             raise ValueError("reporting.ct_window values must be numeric.")
         if not -2048 <= float(lower) < float(upper) <= 4096:
             raise ValueError("reporting.ct_window must be ordered within [-2048, 4096] HU.")
-        if not isinstance(self.overlay_opacity, (int, float)) or isinstance(self.overlay_opacity, bool) or not 0 <= self.overlay_opacity <= 1:
+        if (
+            not isinstance(self.overlay_opacity, (int, float))
+            or isinstance(self.overlay_opacity, bool)
+            or not 0 <= self.overlay_opacity <= 1
+        ):
             raise ValueError("reporting.overlay_opacity must be between zero and one.")
         for name in ("sagittal_slab_margin_mm", "projection_spacing_mm"):
             value = getattr(self, name)
@@ -250,7 +284,7 @@ class ReviewEntry:
 
 @dataclass(frozen=True)
 class ReportMeasurementData:
-    """Validated read-only measurement stage table view used by post-hoc reporting."""
+    """Validated read-only measurement-table view used by post-hoc reporting."""
 
     identity: MeasurementIdentity
     slices: pd.DataFrame
@@ -282,17 +316,46 @@ class CaseReportInput:
     prepared_image: sitk.Image
     vertebral_result: VertebralResult
     measurement_bundle: MeasurementBundle | ReportMeasurementData
+    tissue_labels_zyx: np.ndarray
     orientation: OrientationResult | OrientationOutcome | Mapping[str, Any]
+    technical_metadata: Mapping[str, str | None] = field(default_factory=dict)
     extra_review_entries: tuple[ReviewEntry, ...] = ()
 
     def __post_init__(self) -> None:
         validate_case_id(self.case_id)
-        if not isinstance(self.prepared_image, sitk.Image) or self.prepared_image.GetDimension() != 3:
-            raise TypeError("Case reporting requires one three-dimensional prepared SimpleITK image.")
+        if (
+            not isinstance(self.prepared_image, sitk.Image)
+            or self.prepared_image.GetDimension() != 3
+        ):
+            raise TypeError(
+                "Case reporting requires one three-dimensional prepared SimpleITK image."
+            )
         if self.measurement_bundle.identity.case_id != self.case_id:
             raise ValueError("Report case_id differs from the measurement bundle case_id.")
         if self.vertebral_result.vertebral_body_labels is None:
             raise ValueError("Case reporting requires canonical vertebral-body labels.")
+        labels = np.asarray(self.tissue_labels_zyx)
+        expected_shape = tuple(reversed(self.prepared_image.GetSize()))
+        if labels.ndim != 3 or labels.shape != expected_shape:
+            raise ValueError(
+                "Case reporting tissue-label array_zyx shape does not match the prepared CT."
+            )
+        if not np.issubdtype(labels.dtype, np.integer) or np.any(labels < 0):
+            raise TypeError("Case reporting tissue labels must be non-negative integers.")
+        metadata = dict(self.technical_metadata)
+        unknown = sorted(set(metadata) - TECHNICAL_METADATA_FIELDS)
+        if unknown:
+            raise ValueError(f"Unsupported report technical metadata fields: {unknown}.")
+        for name, value in metadata.items():
+            if value is not None and (
+                not isinstance(value, str) or not value.strip() or len(value) > 160
+            ):
+                raise ValueError(
+                    f"Report technical metadata {name} must be a non-empty string or null."
+                )
+        if metadata.get("input_format") not in {None, "dicom", "nifti", "unknown"}:
+            raise ValueError("Report technical metadata input_format is unsupported.")
+        object.__setattr__(self, "technical_metadata", metadata)
 
     @property
     def orientation_result(self) -> OrientationResult | Mapping[str, Any]:

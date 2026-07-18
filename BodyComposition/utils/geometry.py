@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 import numpy as np
-
 
 GEOMETRY_ATOL = 1e-5
 ORTHONORMALITY_ATOL = 1e-4
@@ -38,7 +37,7 @@ class ImageGeometry:
         self.validate()
 
     @classmethod
-    def from_container(cls, container) -> "ImageGeometry":
+    def from_container(cls, container) -> ImageGeometry:
         shape_zyx = container.shape
         if shape_zyx is None or len(shape_zyx) != 3:
             raise GeometryError("A three-dimensional image array is required.")
@@ -50,7 +49,7 @@ class ImageGeometry:
         )
 
     @classmethod
-    def from_sitk(cls, image) -> "ImageGeometry":
+    def from_sitk(cls, image) -> ImageGeometry:
         """Construct geometry from a three-dimensional SimpleITK image."""
 
         if image.GetDimension() != 3:
@@ -117,7 +116,7 @@ class ImageGeometry:
                 f"(maximum residual {residual:.3g}, tolerance {ORTHONORMALITY_ATOL})."
             )
 
-    def equivalent_to(self, other: "ImageGeometry", atol: float = GEOMETRY_ATOL) -> bool:
+    def equivalent_to(self, other: ImageGeometry, atol: float = GEOMETRY_ATOL) -> bool:
         return (
             self.size_xyz == other.size_xyz
             and np.allclose(self.spacing_xyz, other.spacing_xyz, atol=atol, rtol=0)

@@ -166,7 +166,21 @@ cython_debug/
 data
 logs
 models
+/output/
+
+# Medical images and generated analysis tables
+*.dcm
+*.DCM
+*.ima
+*.IMA
+*.nii
+*.nii.gz
+*.nrrd
+*.mha
+*.mhd
+*.parquet
 
 # Local planning and research notes
 
 # Local automation state
+/tmp/

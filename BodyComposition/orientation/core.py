@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from enum import Enum
 import hashlib
 import json
 import math
-from pathlib import Path
+import textwrap
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from itertools import permutations
 from numbers import Real
-import textwrap
-from typing import Any, Mapping, Protocol
+from pathlib import Path
+from typing import Any, Protocol
 
 import cv2
 import numpy as np
@@ -35,7 +36,6 @@ from BodyComposition.orientation.rotations import (
 )
 from BodyComposition.utils.geometry import ImageGeometry
 
-
 ORIENTATION_SCHEMA_VERSION = "1.1.0"
 PHYSICAL_ROUNDTRIP_TOLERANCE_MM = 1e-4
 
@@ -44,7 +44,7 @@ class OrientationIntegrityError(RuntimeError):
     """Raised when orientation processing cannot produce a physical image."""
 
 
-class OrientationState(str, Enum):
+class OrientationState(StrEnum):
     PASS_METADATA_MATCH = "PASS_METADATA_MATCH"
     PASS_METADATA_UNCERTAIN = "PASS_METADATA_UNCERTAIN"
     MISMATCH_REPAIRED = "MISMATCH_REPAIRED"
@@ -73,7 +73,7 @@ class OrientationSettings:
     force_review_reasons: tuple[str, ...] = ()
 
     @classmethod
-    def from_mapping(cls, config: Mapping[str, Any] | None) -> "OrientationSettings":
+    def from_mapping(cls, config: Mapping[str, Any] | None) -> OrientationSettings:
         if config is None:
             return cls()
         if not isinstance(config, Mapping):

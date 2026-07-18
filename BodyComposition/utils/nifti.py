@@ -1,37 +1,22 @@
-from typing import Union
 from pathlib import Path
+
+import numpy as np
 import SimpleITK as sitk
 from nibabel import Nifti1Image
-import numpy as np
 
 from BodyComposition.utils.geometry import GeometryError, ImageGeometry
-
 
 LPS_TO_RAS = np.diag([-1.0, -1.0, 1.0, 1.0])
 
 
-def resample_label_to_reference(label: sitk.Image, reference: sitk.Image) -> sitk.Image:
-    """Return a discrete label image on the reference image's physical grid."""
-    if label.GetDimension() != 3 or reference.GetDimension() != 3:
-        raise GeometryError("Label resampling requires three-dimensional images.")
-    return sitk.Resample(
-        label,
-        reference,
-        sitk.Transform(3, sitk.sitkIdentity),
-        sitk.sitkNearestNeighbor,
-        0,
-        label.GetPixelID(),
-    )
-
-class NiftiDataContainer():
+class NiftiDataContainer:
     """
     Class for loading and handling Nifti data using SimpleITK.
     The origin, direction, and spacing properties of the image are stored and used for file handling.
-    If a bounding box (bbox) is set, the image data is cropped, and the origin is adjusted accordingly.
     directions: np: z, y, x, sitk: x, y, z, nifti: x, y, z
     """
     
-    def __init__(self, path: Union[str, Path]):
+    def __init__(self, path: str | Path):
 
         # save path, can not be changed
         self._path = Path(path)
@@ -41,10 +26,6 @@ class NiftiDataContainer():
         self._origin = None
         self._direction = None
         self._spacing = None
-        self._bbox = None
-
-        # status canonical
-        self._canonical = False
 
         # set datatype
         if any(keyword in self._path.parent.name for keyword in ['label', 'mask']):
@@ -54,7 +35,7 @@ class NiftiDataContainer():
 
 
     def __repr__(self):
-        return f'NiftiDataContainer(path={self.path})'
+        return f"NiftiDataContainer(loaded={self._data is not None}, dtype={self.dtype})"
 
     @property
     def path(self):
@@ -77,21 +58,7 @@ class NiftiDataContainer():
     def origin(self):
         if self._origin is None and self.path.exists():
             self.load_from_file()
-
-        if self._bbox is None:
-            return self._origin
-        else:
-            # Compute the new origin: the start of the bounding box in physical space
-            bbox = self._bbox
-            # Bounding box is in the order (z, y, x) for numpy arrays, convert to (x, y, z) for physical space
-            index_xyz = np.array([bbox[4], bbox[2], bbox[0]], dtype=float)
-            new_origin_offset = index_xyz * np.asarray(self._spacing)
-            # Convert self._direction (which is a tuple) into a numpy array and reshape to 3x3
-            direction_matrix = np.array(self._direction).reshape(3, 3)
-            # Apply the direction matrix to the new offset in physical space
-            new_origin = np.array(self._origin) + np.dot(direction_matrix, new_origin_offset)
-
-            return tuple(new_origin)
+        return self._origin
 
     @property
     def direction(self):
@@ -110,34 +77,22 @@ class NiftiDataContainer():
 
     @property
     def img(self):
-        """Get SimpleITK image: if bbox is set, export only region within bbox and adjust origin accordingly."""
+        """Return a SimpleITK image from the explicit zyx array and xyz metadata."""
         if self.data is None:
             return None   
         elif self._origin is None or self._direction is None or self._spacing is None:
-            raise ValueError(f'metadata missing, can not create SimpleITK object.')
+            raise ValueError('metadata missing, can not create SimpleITK object.')
 
-        if self._bbox is None:
-            # No bbox, return the full image
-            img_tmp = sitk.GetImageFromArray(self.data)
-            img_tmp.SetDirection(self._direction)
-            img_tmp.SetOrigin(self._origin)
-            img_tmp.SetSpacing(self._spacing)
-        else:
-            # If bbox is set, extract the subregion
-            bbox = self._bbox
-            cropped_np = self._data[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] # np: z, y, x
-
-            # Create sitk image from cropped data
-            img_tmp = sitk.GetImageFromArray(cropped_np)
-            img_tmp.SetDirection(self._direction)
-            img_tmp.SetOrigin(self.origin) # origin is adjusted to bbox
-            img_tmp.SetSpacing(self._spacing)
+        img_tmp = sitk.GetImageFromArray(self.data)
+        img_tmp.SetDirection(self._direction)
+        img_tmp.SetOrigin(self._origin)
+        img_tmp.SetSpacing(self._spacing)
 
         return img_tmp
     
 
     @img.setter
-    def img(self, value: Union[sitk.Image, Nifti1Image]):
+    def img(self, value: sitk.Image | Nifti1Image):
         """Load Image, either SimpleITK or Nifti1Image: check and adjust origin, direction, and shape if needed."""
 
         # load data and metadata
@@ -160,8 +115,6 @@ class NiftiDataContainer():
             raise ValueError(f'Unknown type for image: {type(value)}')
         
         # checks
-        if self._bbox is not None and (self._origin is None or self._spacing is None or self._direction is None):
-            raise ValueError(f'Bounding box can only be used, if metadata are available.')
         tmp_direction = tuple(float(item) for item in tmp_direction)
         tmp_origin = tuple(float(item) for item in tmp_origin)
         tmp_spacing = tuple(float(item) for item in tmp_spacing)
@@ -174,26 +127,19 @@ class NiftiDataContainer():
             raise ValueError(f'Spacings do not match: {self._spacing} != {tmp_spacing}')
 
 
-        if self._bbox is None:
-            # save data & metadata
-            self._direction = tmp_direction
-            self._origin = tmp_origin
-            self._spacing = tmp_spacing
-            self.data = tmp_data
-            self._canonical = False
-        
-        else:
-            # save data numpy only, metadata are already available (requirement of bbox)
-            self.data = tmp_data
+        self._direction = tmp_direction
+        self._origin = tmp_origin
+        self._spacing = tmp_spacing
+        self.data = tmp_data
 
 
     @property
     def imgNifti1(self):
-        """Get Nifti1Image: if bbox is set, export only region within bbox and adjust origin accordingly."""
+        """Return a nibabel image while preserving the SimpleITK physical domain."""
         if self.data is None:
             return None   
         elif self._origin is None or self._direction is None or self._spacing is None:
-            raise ValueError(f'Metadata missing, cannot create Nifti1Image object.')
+            raise ValueError('Metadata missing, cannot create Nifti1Image object.')
         
         affine_lps = self.geometry.affine_lps
         affine_ras = LPS_TO_RAS @ affine_lps
@@ -206,7 +152,7 @@ class NiftiDataContainer():
 
     @property
     def data(self):
-        """Get numpy: if no bbox: all. if bbox: only inside."""
+        """Return the array in explicit SimpleITK zyx order."""
 
         if self._data is None:
             if self.path.exists():
@@ -214,43 +160,14 @@ class NiftiDataContainer():
             else:
                 return None
 
-        if self._bbox is None:
-            return self._data
-        else:
-            bbox = self._bbox
-            return self._data[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]]
+        return self._data
 
     @data.setter
     def data(self, value: np.ndarray):
-        """Set numpy: check shape. if no bbox: all. if bbox: only inside."""
-        bbox = self._bbox
-        if bbox is None:
-            if self._data is not None and self._data.shape != value.shape:
-                raise ValueError(f'Numpy shapes do not match: {self._data.shape} != {value.shape}')
-            self._data = value.astype(self.dtype)
-        else:
-            bbox_shape = (bbox[1]-bbox[0], bbox[3]-bbox[2], bbox[5]-bbox[4]) # np: z, y, x
-            if bbox_shape != value.shape:
-                raise ValueError(f'Numpy shapes do not match: {bbox_shape} != {value.shape}')
-            self._data[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] = value.astype(self.dtype)
-
-
-
-    @property
-    def bbox(self):
-        return self._bbox
-
-    @bbox.setter
-    def bbox(self, value: Union[np.ndarray, list]):
-        """Sets or resets bounding box: check (array (2,3), metadata must be av."""
-        if value is None:
-            self._bbox = None
-        elif not isinstance(value, (list, np.ndarray)) or len(value) != 6:
-            raise ValueError(f'Bounding box must be a list of 6 elements or None.')
-        elif self.origin is None or self.spacing is None or self.direction is None:
-            raise ValueError(f'Bounding box can only be set, if metadata of original image already available.')
-        else:
-            self._bbox = value
+        """Set an array in explicit SimpleITK zyx order without implicit cropping."""
+        if self._data is not None and self._data.shape != value.shape:
+            raise ValueError(f'Numpy shapes do not match: {self._data.shape} != {value.shape}')
+        self._data = value.astype(self.dtype)
 
 
 
@@ -288,7 +205,7 @@ class NiftiDataContainer():
         """Save data to nifti file: if NA, error. if AV, use sitk getter."""
         img_tmp = self.img
         if img_tmp is None:
-            raise ValueError(f'Nothing to save.')
+            raise ValueError('Nothing to save.')
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             sitk.WriteImage(img_tmp, str(self.path))
@@ -315,7 +232,7 @@ class NiftiDataContainer():
         """Remap labels: replace values in data numpy usimg mapping dictionary."""
         data_tmp = self.data # load np
         if data_tmp is None:
-            raise ValueError(f'No data available for remapping.')
+            raise ValueError('No data available for remapping.')
         else:
             # create mapping array for relabeling, not existing labels are replaced with 0, then fancy indexing
             labels_max = max(max(mapping.keys()), np.max(data_tmp))
@@ -323,37 +240,3 @@ class NiftiDataContainer():
             for key, value in mapping.items():
                 relabel_array[key] = value
             self.data = relabel_array[data_tmp]
-
-
-
-    def as_closest_canonical(self):
-        """Transform data within bbox to canonical orientation.
-        Currently one way function, all changes to data are permanently.
-        Multiple reorientations should be avoided to reduce affine inaccuracies that are caused by rounding."""
-
-        # load nib
-        if self._data is not None and self._origin is not None and self._direction is not None:
-            img_tmp = self.img
-        elif self.path.exists():
-            img_tmp = sitk.ReadImage(str(self.path))
-        else:
-            raise ValueError(f'Data not complete, can not reorientate')
-        
-        if not self._canonical:
-            self.validate()
-            # reorientate sitk
-            img_tmp_reoriented = sitk.DICOMOrient(img_tmp, 'RAS')
-            data_tmp_reoriented = sitk.GetArrayFromImage(img_tmp_reoriented).astype(self.dtype)
-
-            # reset existing bbox & metadata, set np
-            self.bbox = None
-            self._origin = img_tmp_reoriented.GetOrigin()
-            self._direction = img_tmp_reoriented.GetDirection()
-            self._spacing = img_tmp_reoriented.GetSpacing()
-            self._data = data_tmp_reoriented
-        
-            # set canonical status
-            self._canonical = True
-            self.validate()
-
-        return self

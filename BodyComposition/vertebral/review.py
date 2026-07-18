@@ -13,7 +13,6 @@ from BodyComposition.orientation.core import OrientationOutcome
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 from BodyComposition.vertebral.contracts import VertebralResult
 
-
 CANVAS_WIDTH = 1800
 CANVAS_HEIGHT = 1000
 
@@ -108,7 +107,7 @@ def write_spine_review(
     assert_same_physical_domain(
         _geometry(reference),
         result.geometry,
-        reference_name="prepared CT",
+        reference_name="orientation-prepared CT",
         candidate_name="vertebral result",
     )
     label_image = _label_image(result.vertebral_body_labels, reference)

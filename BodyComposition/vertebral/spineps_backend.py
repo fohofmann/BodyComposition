@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import inspect
 import logging
 import os
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
+from BodyComposition.execution import is_out_of_memory_error
 from BodyComposition.orientation.core import OrientationOutcome
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import (
@@ -21,8 +24,10 @@ from BodyComposition.vertebral.contracts import (
 from BodyComposition.vertebral.spineps_assets import (
     AssetVerificationError,
     ModelSyncReport,
-    sync_models as sync_pinned_models,
     verify_model_bundle,
+)
+from BodyComposition.vertebral.spineps_assets import (
+    sync_models as sync_pinned_models,
 )
 from BodyComposition.vertebral.spineps_manifest import (
     SPINEPS_BACKEND_ID,
@@ -31,8 +36,7 @@ from BodyComposition.vertebral.spineps_manifest import (
 )
 from BodyComposition.vertebral.spineps_runtime import SpinepsRuntime
 
-
-MODEL_SYNC_COMMAND = "bodycomposition_download_models --model SPINEPS-VERIDAH"
+MODEL_SYNC_COMMAND = "bodycomposition models sync --model spineps_veridah_ct_v1"
 
 
 @dataclass(frozen=True)
@@ -131,7 +135,7 @@ def orientation_qc_flags(prepared: OrientationOutcome) -> tuple[QCFlag, ...]:
                 code="orientation_changed",
                 stage="orientation",
                 severity=QCSeverity.WARNING,
-                reason="preparation stage changed the CT orientation before vertebral inference.",
+                reason="The orientation stage changed the CT before vertebral inference.",
                 observed={
                     "original_orientation_code": prepared.result.original_orientation_code,
                     "prepared_orientation_code": prepared.result.prepared_orientation_code,
@@ -145,7 +149,7 @@ def orientation_qc_flags(prepared: OrientationOutcome) -> tuple[QCFlag, ...]:
 def _prepared_geometry(prepared: OrientationOutcome) -> ImageGeometry:
     image = prepared.prepared_image
     if image.GetDimension() != 3:
-        raise TypeError("SPINEPS requires a three-dimensional prepared image.")
+        raise TypeError("SPINEPS requires a three-dimensional orientation-prepared image.")
     return ImageGeometry(
         size_xyz=tuple(int(value) for value in image.GetSize()),
         spacing_xyz=tuple(float(value) for value in image.GetSpacing()),
@@ -198,6 +202,21 @@ class SpinepsVeridahAdapter:
         self.requested_device = device
         self._runtime_factory = runtime_factory
         self._runtime: SpinepsRuntime | None = None
+        self._low_memory_mode = False
+
+    def set_low_memory_mode(self, enabled: bool = True) -> None:
+        self._low_memory_mode = bool(enabled)
+        if self._runtime is not None:
+            configure = getattr(self._runtime, "set_low_memory_mode", None)
+            if callable(configure):
+                configure(self._low_memory_mode)
+
+    def release_models(self) -> None:
+        if self._runtime is None:
+            return
+        release = getattr(self._runtime, "release_models", None)
+        if callable(release):
+            release()
 
     def _resolved_device(self) -> tuple[str, ReadinessCheck]:
         try:
@@ -305,10 +324,10 @@ class SpinepsVeridahAdapter:
         attempt_directory: Path,
         case_id: str,
     ) -> VertebralResult:
-        """Run on preparation stage's prepared image; never reorient or fall back."""
+        """Run on the orientation-prepared image; never reorient or fall back."""
 
         if not isinstance(prepared, OrientationOutcome):
-            raise TypeError("SPINEPS run requires the preparation stage OrientationOutcome object.")
+            raise TypeError("SPINEPS run requires the orientation-stage outcome object.")
         result: VertebralResult
         if self._runtime is None:
             report = self.check(output_root=Path(attempt_directory), full_models=False)
@@ -331,11 +350,22 @@ class SpinepsVeridahAdapter:
                 )
             else:
                 try:
-                    self._runtime = self._runtime_factory(
-                        self.model_root,
-                        use_cpu=report.device == "cpu",
-                    )
+                    runtime_kwargs: dict[str, Any] = {
+                        "use_cpu": report.device == "cpu",
+                    }
+                    try:
+                        parameters = inspect.signature(self._runtime_factory).parameters
+                    except (TypeError, ValueError):
+                        parameters = {}
+                    if "cache_vibeseg_model" in parameters:
+                        runtime_kwargs["cache_vibeseg_model"] = not self._low_memory_mode
+                    self._runtime = self._runtime_factory(self.model_root, **runtime_kwargs)
+                    configure = getattr(self._runtime, "set_low_memory_mode", None)
+                    if callable(configure):
+                        configure(self._low_memory_mode)
                 except Exception as error:
+                    if is_out_of_memory_error(error):
+                        raise
                     logging.exception(
                         "SPINEPS/VERIDAH runtime initialization failed for case %s.",
                         case_id,
@@ -380,6 +410,8 @@ class SpinepsVeridahAdapter:
                 case_id=case_id,
             )
         except Exception as error:
+            if is_out_of_memory_error(error):
+                raise
             logging.exception(
                 "SPINEPS/VERIDAH inference failed for case %s.",
                 case_id,

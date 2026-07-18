@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "dev/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python 3.11 / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
+        with:
+          version: 0.11.27
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.11.14
+      - name: Sync locked test environment
+        run: uv sync --frozen --extra test
+      - name: Lint
+        run: uv run --no-sync ruff check BodyComposition tests scripts
+      - name: Type-check public product surface
+        run: uv run --no-sync mypy
+      - name: Test with whole-package branch-aware coverage
+        run: uv run --no-sync pytest --cov --cov-report=term --cov-report=xml
+
+  distribution:
+    name: Distribution and supply-chain audit
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
+        with:
+          version: 0.11.27
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.11.14
+      - name: Sync locked release environment
+        run: uv sync --frozen --extra test --extra release
+      - name: Run the canonical release-artifact gate
+        run: uv run --no-sync python scripts/release_checks.py
+      - name: Upload reviewed build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bodycomposition-${{ github.sha }}
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/*.json
+            dist/runtime-requirements.txt
+          if-no-files-found: error
+          retention-days: 14

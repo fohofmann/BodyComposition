@@ -1,13 +1,12 @@
 # libraries
 import logging
 from time import time
-import numpy as np
 
 from BodyComposition.pipeline import PipelineAction
 from BodyComposition.tissue import cleanup_tissue_mask, prepare_classification_images
 from BodyComposition.utils.geometry import assert_same_physical_domain
-from BodyComposition.utils.nifti import NiftiDataContainer
 from BodyComposition.utils.masks import filter_hu
+from BodyComposition.utils.nifti import NiftiDataContainer
 
 
 def _apply_configured_cleanup(mask, settings, spacing_xyz, compartment):
@@ -26,8 +25,8 @@ class MasksInternalTissue(PipelineAction):
         super().__init__(pipeline)
 
         # io names & to pipeline
-        self.input_label_tissue_name = 'labels/{caseid}_int-bodycomposition.nii.gz'
-        self.output_mask_name = 'masks/{caseid}_int-bodycomposition.nii.gz'
+        self.input_label_tissue_name = 'masks/tissue_compartments.nii.gz'
+        self.output_mask_name = 'masks/tissue_labels.nii.gz'
         self.io_inputs = [image, self.input_label_tissue_name]
         self.io_outputs = [self.output_mask_name]
         self.io_reset_outputs = [self.output_mask_name]
@@ -67,7 +66,7 @@ class MasksInternalTissue(PipelineAction):
                 input_label_tissue.validate()
                 input_label_tissue.save_to_file()
                 logging.info(" persisted raw anatomical compartment labels")
-            logging.info(f' output: {output_mask.path} available, skipping')
+            logging.info(" tissue mask already available, skipping")
             return
 
         # load input: label, tissue segmentation
@@ -81,7 +80,7 @@ class MasksInternalTissue(PipelineAction):
             reference_name="input image",
             candidate_name="internal tissue label",
         )
-        logging.info(f' load {input_label_tissue}')
+        logging.info(" load tissue segmentation")
         logging.debug(f'  tissue: origin={input_label_tissue.origin}, shape={input_label_tissue.shape}')
         if (
             self.config_tissue['save_compartment_mask']
@@ -103,12 +102,12 @@ class MasksInternalTissue(PipelineAction):
                 input_image.spacing,
                 self.config_tissue['hu_denoise'],
             )
-            logging.debug(f'  HU filter(s) active, loaded image')
+            logging.debug('  HU filter(s) active, loaded image')
             logging.debug(f'   image: origin={input_image.origin}, shape={input_image.shape}')
 
         # filter: intermuscular adipose tissue IMAT; special case as introducing extra label
         if self.config_tissue['imat']['filter_hu']:
-            logging.info(f" HU filter muscle compartment")
+            logging.info(" HU filter muscle compartment")
             compartment = output_np == self.LBL_TISSUE_R['SM']
             mask_tmp = compartment & filter_hu(
                 image_by_tissue['imat'],
@@ -126,7 +125,7 @@ class MasksInternalTissue(PipelineAction):
 
         # filter: skeletal muscle SM
         if self.config_tissue['sm']['filter_hu']:
-            logging.info(f" HU filter muscle compartment(s)")
+            logging.info(" HU filter muscle compartment(s)")
             compartment = output_np == self.LBL_TISSUE_R['SM']
             mask_tmp = compartment & filter_hu(
                 image_by_tissue['sm'],
@@ -139,12 +138,12 @@ class MasksInternalTissue(PipelineAction):
                 compartment,
             )
             output_np[compartment & ~mask_tmp] = 0
-            logging.debug(f"  removed everything out of SM HU-range from label SM")
+            logging.debug("  removed everything out of SM HU-range from label SM")
 
 
         # filter: visceral adipose tissue VAT 
         if self.config_tissue['vat']['filter_hu']:
-            logging.info(f" HU filter visceral compartment(s)")
+            logging.info(" HU filter visceral compartment(s)")
             hu_mask = filter_hu(
                 image_by_tissue['vat'],
                 self.config_tissue['vat']['filter_hu_range'],
@@ -159,12 +158,12 @@ class MasksInternalTissue(PipelineAction):
                     compartment,
                 )
                 output_np[compartment & ~mask_tmp] = 0
-            logging.debug(f"  removed everything out of VAT HU-range from label aVAT, tVAT")
+            logging.debug("  removed everything out of VAT HU-range from label aVAT, tVAT")
 
 
         # filter: subcutaneous adipose tissue SAT
         if self.config_tissue['sat']['filter_hu']:
-            logging.info(f" HU filter subcutaneous compartment")
+            logging.info(" HU filter subcutaneous compartment")
             compartment = output_np == self.LBL_TISSUE_R['SAT']
             mask_tmp = compartment & filter_hu(
                 image_by_tissue['sat'],
@@ -177,13 +176,13 @@ class MasksInternalTissue(PipelineAction):
                 compartment,
             )
             output_np[compartment & ~mask_tmp] = 0
-            logging.debug(f"  removed everything out of SAT HU-range from label SAT")
+            logging.debug("  removed everything out of SAT HU-range from label SAT")
 
         # logging
         output_mask.data = output_np
-        logging.info(f' output: memory:{output_mask} ({time()-time_start:.2f}s)')
+        logging.info(" tissue mask complete (%.2fs)", time() - time_start)
 
         # save mask if active
         if self.config_tissue['save_mask']:
             output_mask.save_to_file()
-            logging.info(f'  file saved')
+            logging.info('  file saved')

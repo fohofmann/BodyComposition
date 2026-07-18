@@ -7,14 +7,14 @@ license and attribution are retained in ``THIRD_PARTY_NOTICES.md``.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from functools import lru_cache
 import hashlib
 import math
 import os
-from pathlib import Path
 import tempfile
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 import requests
@@ -29,7 +29,6 @@ from BodyComposition.orientation.rotations import (
     rotation_class,
 )
 
-
 UPSTREAM_PROJECT = "CTDeepRot"
 UPSTREAM_REPOSITORY = "https://github.com/JakubicekRoman/CTDeepRot"
 UPSTREAM_COMMIT = "492114b8f9f3a7f058d4e97c0dd3643fb8d39649"
@@ -43,8 +42,12 @@ CHECKPOINT_URL = (
     f"{UPSTREAM_COMMIT}/python/example_prediction/models/{CHECKPOINT_FILENAME}"
 )
 MODEL_ASSET_ID = f"ctdeeprot-2d-{UPSTREAM_COMMIT}"
-DEFAULT_CHECKPOINT_PATH = Path(
-    f"./models/CTDeepRot/{UPSTREAM_COMMIT}/{CHECKPOINT_FILENAME}"
+DEFAULT_CHECKPOINT_PATH = (
+    Path(os.environ.get("BODYCOMPOSITION_MODEL_ROOT", "~/.cache/bodycomposition/models"))
+    .expanduser()
+    / "CTDeepRot"
+    / UPSTREAM_COMMIT
+    / CHECKPOINT_FILENAME
 )
 WEIGHT_LICENSE_STATUS = (
     "published_in_bsd_3_clause_repository_without_separate_checkpoint_terms;"
@@ -104,8 +107,7 @@ def sha256_file(path: Path) -> str:
 
 
 def resolve_checkpoint_path(configured_path: str | Path) -> Path:
-    override = os.environ.get("BODYCOMPOSITION_CTDEEPROT_CHECKPOINT")
-    return Path(override or configured_path).expanduser()
+    return Path(configured_path).expanduser()
 
 
 def verify_checkpoint(
@@ -117,7 +119,7 @@ def verify_checkpoint(
     if not path.is_file():
         raise ModelAssetError(
             f"CTDeepRot checkpoint not found: {path}. Run "
-            "`bodycomposition_download_models --model CTDeepRot-2D` before inference."
+            "`bodycomposition models sync --model ctdeeprot_2d_v1` before inference."
         )
     if expected_bytes is not None and path.stat().st_size != expected_bytes:
         raise ModelAssetError(
@@ -306,6 +308,12 @@ def _load_model(checkpoint: str, expected_sha256: str, device_name: str):
     model.to(torch.device(device_name))
     model.eval()
     return model
+
+
+def release_cached_models() -> None:
+    """Drop process-local CTDeepRot model references for low-memory execution."""
+
+    _load_model.cache_clear()
 
 
 class CTDeepRotPredictor:

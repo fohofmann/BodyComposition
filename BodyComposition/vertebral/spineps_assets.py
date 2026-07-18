@@ -10,9 +10,10 @@ import stat
 import tempfile
 import urllib.request
 import zipfile
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Callable, Mapping, Sequence
+from typing import BinaryIO
 
 from BodyComposition.vertebral.spineps_manifest import (
     MODEL_BUNDLE_VERSION,
@@ -21,7 +22,6 @@ from BodyComposition.vertebral.spineps_manifest import (
     ModelAssetSpec,
     ReleaseAssetPin,
 )
-
 
 ASSET_MANIFEST_NAME = ".bodycomposition-asset.json"
 VIBESEG_INSTALL_DIR = "vibeseg_crop_dataset100"
@@ -465,25 +465,25 @@ def sync_models(
     for asset in SPINEPS_MODEL_ASSETS:
         try:
             installed[asset.model_id] = verify_installed_asset(root, asset, full=True)
-        except AssetVerificationError:
+        except AssetVerificationError as exc:
             destination = root / asset.install_dir
             if destination.exists():
                 raise AssetVerificationError(
                     f"Existing {asset.model_id} bundle is invalid: {destination}. "
                     "Move it aside before synchronizing again."
-                )
+                ) from exc
             installed[asset.model_id] = download_and_install(root, asset, opener=opener)
             downloaded.append(asset.asset_name)
 
     try:
         vibeseg = verify_installed_vibeseg(root, VIBESEG_CROP_ASSETS, full=True)
-    except AssetVerificationError:
+    except AssetVerificationError as exc:
         destination = root / VIBESEG_INSTALL_DIR
         if destination.exists():
             raise AssetVerificationError(
                 f"Existing VibeSeg bundle is invalid: {destination}. "
                 "Move it aside before synchronizing again."
-            )
+            ) from exc
         with tempfile.TemporaryDirectory(prefix=".vibeseg-download-", dir=root) as temporary:
             archive_paths: dict[str, Path] = {}
             for asset in VIBESEG_CROP_ASSETS:

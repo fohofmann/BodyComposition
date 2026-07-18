@@ -1,153 +1,67 @@
+"""Internal action executor used by the stable service facade.
+
+The mutable action-memory dictionary remains an implementation detail.  Public
+callers receive immutable :mod:`BodyComposition.results` objects instead.
+"""
+
+from __future__ import annotations
+
 import logging
-from time import time
-from typing import Dict, List, Tuple
-from pathlib import Path
-from BodyComposition.utils.nifti import NiftiDataContainer
-from BodyComposition.pipeline_registry import pipeline_registry
-import traceback
-import signal
-from tqdm import tqdm
-import sys
-import tempfile
 import multiprocessing
 import os
+from contextlib import suppress
+from datetime import UTC, datetime
+from pathlib import Path
+from time import monotonic, time
+
+from BodyComposition.config import PipelineConfig
+from BodyComposition.execution import release_accelerator_cache
+
+
+def _allocated_cpu_count() -> int:
+    """Respect scheduler/cgroup affinity before falling back to host CPU count."""
+
+    affinity = getattr(os, "sched_getaffinity", None)
+    if callable(affinity):
+        try:
+            count = len(affinity(0))
+            if count > 0:
+                return count
+        except OSError:
+            pass
+    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm_cpus:
+        try:
+            count = int(slurm_cpus)
+            if count > 0:
+                return count
+        except ValueError:
+            pass
+    return max(1, multiprocessing.cpu_count())
+
+
+def _resolve_device_name(torch_module, requested: str) -> str:
+    """Resolve only backend type; CUDA visibility/selection remains external."""
+
+    if requested == "cpu":
+        return "cpu"
+    if requested not in {"auto", "cuda"}:
+        raise ValueError("runtime.device must be auto, cpu, or cuda.")
+    cuda_available = bool(torch_module.cuda.is_available())
+    if requested == "cuda":
+        if not cuda_available:
+            raise RuntimeError("runtime.device=cuda was requested but CUDA is unavailable.")
+        return "cuda"
+    if cuda_available:
+        return "cuda"
+    return "cpu"
 
 
 class ActionContractError(RuntimeError):
     """Raised when a pipeline action does not satisfy its declared I/O contract."""
 
 
-class PipelineExecutionError(RuntimeError):
-    """Raised after one or more cases fail during pipeline execution."""
-
-# timeout handler
-def timeout_handler(signum, frame):
-    raise TimeoutError()
-signal.signal(signal.SIGALRM, timeout_handler)
-
-# underlying processor
-def _run_case(pipeline, memory):
-    try:
-        signal.alarm(pipeline.config['run']['timeout'])
-        output = pipeline(memory)
-        return True, output
-    except TimeoutError as error:
-        logging.warning(f"TIMEOUT CASE {memory['id']}\n")
-        _try_render_failure_page(pipeline, memory, error)
-        return False, error
-    except Exception as error:
-        logging.error(f"ERROR CASE {memory['id']}:\n {error}\n {traceback.format_exc()}\n")
-        _try_render_failure_page(pipeline, memory, error)
-        return False, error
-    finally:
-        signal.alarm(0)
-
-
-def _try_render_failure_page(pipeline, memory, error):
-    """Best-effort explicit status page; never mask the original failure."""
-
-    try:
-        from BodyComposition.reporting.contracts import ReportingSettings
-        from BodyComposition.reporting.service import render_failed_case_report
-
-        settings = ReportingSettings.from_mapping(pipeline.config)
-        if not settings.enabled:
-            return
-        stage = str(memory.get("tmp/current_action", "pipeline"))
-        prepared_outcome = memory.get("tmp/prepared_image")
-        prepared_image = getattr(prepared_outcome, "prepared_image", None)
-        vertebral_result = memory.get("tmp/vertebral_result")
-        result = render_failed_case_report(
-            case_id=str(memory["id"]),
-            analysis_id=str(memory.get("analysis_id", "analysis_unavailable")),
-            output_directory=Path(memory["workspace"]) / "reports" / str(memory["id"]),
-            settings=settings,
-            failure_stage=stage,
-            failure_code=f"{stage}_{error.__class__.__name__}",
-            prepared_image=prepared_image,
-            vertebral_result=vertebral_result,
-        )
-        memory["tmp/report_result"] = result
-    except Exception as report_error:
-        logging.error(
-            "Could not generate explicit report failure page for case %s: %s",
-            memory.get("id", "unknown"),
-            report_error.__class__.__name__,
-        )
-
-
-def _raise_case_failures(case_ids):
-    if case_ids:
-        raise PipelineExecutionError(
-            f"Pipeline failed for {len(case_ids)} case(s): {', '.join(case_ids)}. "
-            "See the pipeline log for the original exception(s)."
-        )
-
-# run pipeline on single file
-def run_file(pipeline, input_file, workspace=None):
-    logging.info(f"STARTING PIPELINE:\n")
-    with tempfile.TemporaryDirectory(prefix="tmp_") as path_tmp:
-        logging.info(f"created temporary directory: {path_tmp}")
-        memory = {'id': 'tmp',
-                  'workspace': workspace or Path(path_tmp),
-                  'tmp/index': NiftiDataContainer(Path(path_tmp)/'input/tmp.nii.gz'),}
-        memory['tmp/index'].img = input_file
-        success, output = _run_case(pipeline, memory)
-        _raise_case_failures([] if success else [memory['id']])
-    logging.info("FINISHED PIPELINE.")
-    return output
-
-# run pipeline on batch of files
-def run_batch(pipeline, input_datalist):
-    logging.info(f"STARTING PIPELINE:\n")
-    output = None
-    failed_case_ids = []
-    report_results = []
-    report_workspaces = []
-    for caseid, input_file, workspace in tqdm(input_datalist, total=len(input_datalist),
-                                               desc="Processing", unit="case", position=0, leave=True, file=sys.stdout, ncols=80):
-        memory = {'id': caseid,
-                  'workspace': workspace,
-                  'tmp/index': NiftiDataContainer(input_file),}
-        success, case_output = _run_case(pipeline, memory)
-        if success:
-            output = case_output
-        else:
-            failed_case_ids.append(caseid)
-        if "tmp/report_result" in memory:
-            report_results.append(memory["tmp/report_result"])
-            report_workspaces.append(Path(workspace))
-    reporting = pipeline.config.get("reporting", {})
-    if reporting.get("enabled") and reporting.get("combined_pdf") and report_results:
-        if len(report_results) != len(input_datalist):
-            failed_case_ids.append("report_export_incomplete")
-        elif len(set(report_workspaces)) != 1:
-            failed_case_ids.append("report_export_requires_common_workspace")
-        else:
-            try:
-                from BodyComposition.reporting.contracts import ReportingSettings
-                from BodyComposition.reporting.service import collate_reports
-
-                export_id = f"run-{pipeline.timestamp}"
-                memory_output = collate_reports(
-                    report_results,
-                    export_id=export_id,
-                    output_directory=(
-                        report_workspaces[0] / "aggregate" / "reports" / export_id
-                    ),
-                    settings=ReportingSettings.from_mapping(pipeline.config),
-                )
-                logging.info("combined report: %s", memory_output["pdf_path"])
-            except Exception as error:
-                logging.error("Combined report generation failed: %s", error)
-                failed_case_ids.append("combined_report")
-    logging.info("FINISHED PIPELINE.")
-    _raise_case_failures(failed_case_ids)
-    return output
-
-
-
-class PipelineAction():
+class PipelineAction:
     """Base class for pipeline actions."""
 
     def __init__(self, pipeline, task=None):
@@ -159,14 +73,13 @@ class PipelineAction():
         # Actions that persist files opt in explicitly.
         self.io_persisted_outputs = []
         self.io_reset_outputs = []
-        pass
 
-    def __call__(self, memory, task=None) -> Dict:
+    def __call__(self, memory, task=None) -> None:
         logging.info(f'{self.__class__.__name__}{f"/{task}" if task else ""}')
         self.validate_inputs(memory)
 
     @staticmethod
-    def _is_available(memory: Dict, key: str) -> bool:
+    def _is_available(memory: dict, key: str) -> bool:
         if key in memory:
             return True
         if key.startswith(('tmp/', 'res/')):
@@ -177,14 +90,14 @@ class PipelineAction():
             return False
         return (Path(workspace) / key.format(caseid=case_id)).exists()
 
-    def validate_inputs(self, memory: Dict) -> None:
+    def validate_inputs(self, memory: dict) -> None:
         missing = [key for key in self.io_inputs if not self._is_available(memory, key)]
         if missing:
             raise ActionContractError(
                 f'{self.__class__.__name__} missing declared input(s): {", ".join(missing)}.'
             )
 
-    def validate_outputs(self, memory: Dict) -> None:
+    def validate_outputs(self, memory: dict) -> None:
         missing = [key for key in self.io_outputs if not self._is_available(memory, key)]
         if missing:
             raise ActionContractError(
@@ -197,19 +110,16 @@ class PipelineAction():
 
 
 
-class PipelineBuilder():
-    """Pipeline class"""
+class InternalPipeline:
+    """Validated model executor reused across every case in a batch."""
 
-    def __init__(self, method: str, config: Dict, timestamp: int):
-        """Initialize pipeline."""
-        logging.info(f'BUILDING PIPELINE {method.upper()}:')
-        
-        # save main parameters as attributes
-        self.method = method
-        self.config = config
+    def __init__(self, config: PipelineConfig, *, timestamp: int):
+        self.public_config = PipelineConfig.model_validate(config)
+        self.config = self.public_config.to_runtime_dict()
         self.timestamp = timestamp
 
         from BodyComposition.utils.config import validate_config
+
         validate_config(self.config)
 
         try:
@@ -220,36 +130,45 @@ class PipelineBuilder():
                 'Pure measurement modules and CLI help can be used without it.'
             ) from exc
 
-        # set device
-        if torch.cuda.is_available():
-            torch.set_num_threads(1)
+        requested_device = self.public_config.device
+        device_name = _resolve_device_name(torch, requested_device)
+        configured_threads = int(self.public_config.model_dump()["runtime"]["cpu_threads"])
+        self.cpu_threads = configured_threads or _allocated_cpu_count()
+        torch.set_num_threads(self.cpu_threads)
+        with suppress(RuntimeError):
             torch.set_num_interop_threads(1)
-            self.device = torch.device('cuda')
-            os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID" 
-            logging.info(f'device set to cuda: using {torch.cuda.get_device_name()}.')
+        self.device = torch.device(device_name)
+        if device_name == "cuda":
+            logging.info(
+                "using externally visible CUDA device %s with %s allocated CPU threads",
+                torch.cuda.get_device_name(),
+                self.cpu_threads,
+            )
         else:
-            torch.set_num_threads(multiprocessing.cpu_count())
-            self.device = torch.device('cpu')
-            logging.info(f'CUDA not available, using cpu w/ {torch.get_num_threads()} threads')
+            logging.info(
+                "using %s with %s allocated CPU threads",
+                device_name,
+                self.cpu_threads,
+            )
+        try:
+            import SimpleITK as sitk
 
-        # check if method is valid
-        if method not in pipeline_registry:
-            raise ValueError(f'Undefined pipeline method: {method}')
+            sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(self.cpu_threads)
+        except (ImportError, AttributeError):
+            pass
+        if self.public_config.model_dump()["runtime"]["deterministic"]:
+            torch.use_deterministic_algorithms(True, warn_only=True)
 
         # function factory: load actions, use list of functions
-        logging.info(f'initalizing pipeline actions:')
-        self.actions = pipeline_registry[method](pipeline=self)
-        if self.config["orientation"]["enabled"]:
-            from BodyComposition.actions.orientation import AssessOrientation
+        from BodyComposition.actions.orientation import AssessOrientation
+        from BodyComposition.pipelines.bodycomposition import canonical_actions
 
-            self.actions.insert(0, AssessOrientation(self))
+        self.actions = [AssessOrientation(self), *canonical_actions(self)]
+        self.low_memory_mode = False
         if self.config["reporting"]["enabled"] and not any(
             action.__class__.__name__ == "RenderCaseReport" for action in self.actions
         ):
-            raise ValueError(
-                f"Reporting is not supported by pipeline {method!r}; use a canonical "
-                "BodyComposition pipeline or the explicit post-hoc reporting service."
-            )
+            raise ValueError("Reporting was enabled but no report action was composed.")
 
         # check if all actions are valid
         for action in self.actions:
@@ -257,43 +176,10 @@ class PipelineBuilder():
                 raise TypeError(f'Invalid PipelineAction: {action}')
 
         # log
-        logging.info(f'building completed.\n')
+        logging.info('canonical pipeline initialized with %s actions', len(self.actions))
         
 
-    def get_io(self) -> Tuple[List, List]:
-        """
-        get input and output files for built pipeline
-        returns: list of input files and list of output files, excluding all files generated by pipeline and tmp
-        """
-        io_inputs = []
-        io_outputs = []
-        produced_outputs = set()
-        for action in self.actions:
-            io_inputs.extend(
-                input_name
-                for input_name in action.io_inputs
-                if input_name not in produced_outputs and not input_name.startswith('tmp/')
-            )
-            produced_outputs.update(action.io_outputs)
-            io_outputs.extend(
-                output_name
-                for output_name in action.io_persisted_outputs
-                if not output_name.startswith('tmp/')
-            )
-        return io_inputs, io_outputs
-    
-    def get_licenses(self) -> List[str]:
-        """
-        get licenses for built pipeline
-        returns: list of licenses required by pipeline
-        """
-        licenses = []
-        for action in self.actions:
-            if hasattr(action, 'licenses'):
-                licenses.extend(action.licenses)
-        return list(set(licenses))
-
-    def get_reset_outputs(self) -> List[str]:
+    def get_reset_outputs(self) -> list[str]:
         """Return file outputs that a requested reset must remove."""
         return list(dict.fromkeys(
             output_name
@@ -301,17 +187,90 @@ class PipelineBuilder():
             for output_name in action.io_reset_outputs
         ))
 
+    @staticmethod
+    def _release_action_model(action) -> None:
+        release = getattr(action, "release_model", None)
+        if callable(release):
+            try:
+                release()
+            except Exception:
+                logging.exception("Could not release model state for %s.", action)
 
-    def __call__(self, memory):
-        logging.info(f"PROCESSING CASE {memory['id']}:")
-        logging.info(f"workspace: {memory['workspace']}")
-        timer = time()
+    def enable_low_memory_mode(self) -> None:
+        """Keep at most the currently executing segmentation bundle resident."""
+
+        if self.low_memory_mode:
+            return
+        self.low_memory_mode = True
+        logging.warning(
+            "low-memory execution enabled: segmentation bundles will be unloaded between stages"
+        )
         for action in self.actions:
+            configure = getattr(action, "set_low_memory_mode", None)
+            if callable(configure):
+                configure(True)
+            self._release_action_model(action)
+        release_accelerator_cache(self.device)
+
+    def release_models(self) -> None:
+        for action in self.actions:
+            self._release_action_model(action)
+        release_accelerator_cache(self.device)
+
+
+    def __call__(self, memory: dict):
+        logging.info(f"PROCESSING CASE {memory['id']}:")
+        timer = time()
+        started_monotonic = monotonic()
+        timeout_seconds = int(self.public_config.model_dump()["runtime"]["timeout_seconds"])
+        stage_events = memory.setdefault("tmp/stage_events", [])
+        lease = memory.get("tmp/case_lease")
+        for action in self.actions:
+            if lease is not None and lease.state.stop_requested():
+                raise KeyboardInterrupt
+            elapsed = monotonic() - started_monotonic
+            if elapsed >= timeout_seconds:
+                raise TimeoutError(
+                    f"Case time budget exceeded before {action.__class__.__name__}."
+                )
             memory["tmp/current_action"] = action.__class__.__name__
-            action(memory)
-            action.validate_outputs(memory)
+            if lease is not None:
+                lease.set_stage(action.__class__.__name__)
+            stage_started = datetime.now(UTC)
+            stage_timer = monotonic()
+            try:
+                action(memory)
+                action.validate_outputs(memory)
+            except BaseException as error:
+                stage_events.append(
+                    {
+                        "stage": action.__class__.__name__,
+                        "started_at": stage_started.isoformat(),
+                        "ended_at": datetime.now(UTC).isoformat(),
+                        "duration_seconds": monotonic() - stage_timer,
+                        "result_code": type(error).__name__,
+                    }
+                )
+                raise
+            finally:
+                if self.low_memory_mode:
+                    self._release_action_model(action)
+                    release_accelerator_cache(self.device)
+            stage_events.append(
+                {
+                    "stage": action.__class__.__name__,
+                    "started_at": stage_started.isoformat(),
+                    "ended_at": datetime.now(UTC).isoformat(),
+                    "duration_seconds": monotonic() - stage_timer,
+                    "result_code": "succeeded",
+                }
+            )
+            if monotonic() - started_monotonic >= timeout_seconds:
+                raise TimeoutError(
+                    f"Case time budget exceeded after {action.__class__.__name__}."
+                )
         logging.info(f"FINISHED CASE {memory['id']} ({time() - timer:.1f}s)\n")
-        return memory.get('tmp/return', None)
+        return memory.get('tmp/return')
 
 
 if __name__ == "__main__":

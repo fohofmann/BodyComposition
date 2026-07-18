@@ -1,57 +1,11 @@
 from __future__ import annotations
 
-import logging
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-
-class ConfigError(ValueError):
-    """Raised when configuration does not satisfy the runtime schema."""
-
-
-def update_dict_deep(original_dict: dict[str, Any], updates: Mapping[str, Any]) -> dict[str, Any]:
-    for key, value in updates.items():
-        if isinstance(value, Mapping):
-            existing = original_dict.get(key)
-            if not isinstance(existing, dict):
-                existing = {}
-            original_dict[key] = update_dict_deep(existing, value)
-        else:
-            original_dict[key] = value
-    return original_dict
-
-
-def update_config(
-    config: dict[str, Any] | None = None,
-    config_new: dict[str, Any] | Path | None = None,
-) -> dict[str, Any]:
-    config = {} if config is None else config
-    if isinstance(config_new, Path):
-        if config_new.exists():
-            with config_new.open() as handle:
-                loaded = yaml.safe_load(handle) or {}
-            if not isinstance(loaded, Mapping):
-                raise ConfigError(f"Configuration file must contain a mapping: {config_new}.")
-            config = update_dict_deep(config, loaded)
-    elif isinstance(config_new, Mapping):
-        config = update_dict_deep(config, config_new)
-    else:
-        raise TypeError("config_new must be a dict or a Path.")
-
-    for key, value in config.get("paths", {}).items():
-        if isinstance(value, str):
-            config["paths"][key] = None if value.strip() in {"", "None"} else Path(value)
-    for key, value in config.get("logging_level", {}).items():
-        if isinstance(value, str):
-            level = getattr(logging, value.upper(), None)
-            if not isinstance(level, int):
-                raise ConfigError(f"Unknown logging level at logging_level.{key}: {value!r}.")
-            config["logging_level"][key] = level
-    return config
+from BodyComposition.config import ConfigError
 
 
 def _require_mapping(config: Mapping[str, Any], path: str) -> Mapping[str, Any]:
@@ -92,8 +46,9 @@ def _require_range(config: Mapping[str, Any], path: str) -> None:
         not isinstance(value, list)
         or len(value) != 2
         or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value)
+        or value[0] > value[1]
     ):
-        raise ConfigError(f"Configuration value {path} must be a two-number list.")
+        raise ConfigError(f"Configuration value {path} must be an ordered two-number list.")
 
 
 def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -109,7 +64,9 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
 
     logging_levels = _require_mapping(config, "logging_level")
     for key in ("file", "console"):
-        if isinstance(logging_levels.get(key), bool) or not isinstance(logging_levels.get(key), int):
+        if isinstance(logging_levels.get(key), bool) or not isinstance(
+            logging_levels.get(key), int
+        ):
             raise ConfigError(f"Configuration value logging_level.{key} must be a logging level.")
 
     for path in (
@@ -125,7 +82,6 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         "tissue.save_mask",
         "tissue.save_compartment_mask",
         "tissue.hu_denoise.filter_outliers",
-        "tissue.hu_denoise.filter_median",
         "measurements.enabled",
         "measurements.body_surface.save_mask",
         "measurements.landmarks.enabled",
@@ -221,23 +177,23 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     tissue = _require_mapping(config, "tissue")
     profile_id = tissue.get("profile_id")
     if not isinstance(profile_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", profile_id):
-        raise ConfigError(
-            "tissue.profile_id must be a non-empty lowercase profile identifier."
-        )
+        raise ConfigError("tissue.profile_id must be a non-empty lowercase profile identifier.")
     _require_range(config, "tissue.hu_denoise.filter_outliers_range")
 
     def require_kernel(path: str) -> list[int]:
         kernel = _value(config, path)
-        if not isinstance(kernel, list) or len(kernel) != 3 or any(
-            isinstance(value, bool)
-            or not isinstance(value, int)
-            or value <= 0
-            or value % 2 == 0
-            for value in kernel
-        ):
-            raise ConfigError(
-                f"{path} must contain three positive odd integers."
+        if (
+            not isinstance(kernel, list)
+            or len(kernel) != 3
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value <= 0
+                or value % 2 == 0
+                for value in kernel
             )
+        ):
+            raise ConfigError(f"{path} must contain three positive odd integers.")
         return kernel
 
     require_kernel("tissue.hu_denoise.filter_median_kernel")
@@ -258,18 +214,14 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     apply_to = _value(config, "tissue.hu_denoise.apply_to")
     if (
         not isinstance(apply_to, list)
+        or any(
+            not isinstance(name, str) or name not in {"imat", "sm", "vat", "sat"}
+            for name in apply_to
+        )
         or len(set(apply_to)) != len(apply_to)
-        or any(name not in {"imat", "sm", "vat", "sat"} for name in apply_to)
     ):
         raise ConfigError(
-            "tissue.hu_denoise.apply_to must be a unique subset of "
-            "[imat, sm, vat, sat]."
-        )
-    legacy_median = _value(config, "tissue.hu_denoise.filter_median")
-    if legacy_median != (denoise_method == "median"):
-        raise ConfigError(
-            "tissue.hu_denoise.filter_median is a legacy alias and must be true "
-            "exactly when method is median."
+            "tissue.hu_denoise.apply_to must be a unique subset of [imat, sm, vat, sat]."
         )
     diffusion = _require_mapping(config, "tissue.hu_denoise.anisotropic_diffusion")
     if diffusion.get("dimensionality") not in {"2D", "3D"}:
@@ -284,9 +236,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     for key in ("time_step", "conductance"):
         value = diffusion.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise ConfigError(
-                f"tissue.hu_denoise.anisotropic_diffusion.{key} must be positive."
-            )
+            raise ConfigError(f"tissue.hu_denoise.anisotropic_diffusion.{key} must be positive.")
     stable_time_step = 0.125 if diffusion["dimensionality"] == "2D" else 0.0625
     if float(diffusion["time_step"]) > stable_time_step:
         raise ConfigError(
@@ -348,9 +298,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             r"[a-z][a-z0-9_]*",
             definition_name,
         ):
-            raise ConfigError(
-                "measurements.tissue_definitions keys must use lowercase snake_case."
-            )
+            raise ConfigError("measurements.tissue_definitions keys must use lowercase snake_case.")
         if not isinstance(definition, Mapping):
             raise ConfigError(
                 f"measurements.tissue_definitions.{definition_name} must be a mapping."
@@ -375,9 +323,9 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             not isinstance(hu_range, list)
             or len(hu_range) != 2
             or any(
-                isinstance(value, bool) or not isinstance(value, (int, float))
-                for value in hu_range
+                isinstance(value, bool) or not isinstance(value, (int, float)) for value in hu_range
             )
+            or hu_range[0] > hu_range[1]
         ):
             raise ConfigError(
                 f"measurements.tissue_definitions.{definition_name}.hu_range "
@@ -385,7 +333,9 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             )
     missing_definitions = sorted(required_definitions - definitions.keys())
     disabled_required = sorted(
-        name for name in required_definitions if name in definitions and not definitions[name]["enabled"]
+        name
+        for name in required_definitions
+        if name in definitions and not definitions[name]["enabled"]
     )
     if missing_definitions or disabled_required:
         raise ConfigError(
@@ -466,6 +416,11 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         raise ConfigError(str(error)) from error
     if reporting.enabled and not measurement["enabled"]:
         raise ConfigError("reporting.enabled requires canonical measurements.enabled=true.")
+    if reporting.enabled and not _value(config, "tissue.save_mask"):
+        raise ConfigError(
+            "reporting.enabled requires tissue.save_mask=true so the axial "
+            "segmentation view can be regenerated post hoc."
+        )
 
     for crop_name, crop in _require_mapping(config, "crop").items():
         if not isinstance(crop, Mapping):
@@ -480,11 +435,17 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         ):
             raise ConfigError(f"crop.{crop_name}.roi_anatomical must be a list of names.")
         axes = crop.get("axes")
-        if not isinstance(axes, list) or len(axes) != 6 or any(not isinstance(axis, bool) for axis in axes):
+        if (
+            not isinstance(axes, list)
+            or len(axes) != 6
+            or any(not isinstance(axis, bool) for axis in axes)
+        ):
             raise ConfigError(f"crop.{crop_name}.axes must contain six booleans.")
         margin = crop.get("margin")
-        if not isinstance(margin, list) or len(margin) != 6 or any(
-            isinstance(item, bool) or not isinstance(item, (int, float)) for item in margin
+        if (
+            not isinstance(margin, list)
+            or len(margin) != 6
+            or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in margin)
         ):
             raise ConfigError(f"crop.{crop_name}.margin must contain six numbers.")
 

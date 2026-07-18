@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fohofmann/BodyComposition/schemas/run_manifest.schema.json",
+  "title": "BodyComposition batch run manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "manifest_type", "run_id", "ordered_cases",
+    "configuration_sha256", "started_at", "ended_at", "duration_seconds",
+    "execution_status", "case_counts", "cases", "aggregate", "reporting"
+  ],
+  "$defs": {
+    "safe_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "plan_case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "analysis_id"],
+      "properties": {
+        "case_id": {"$ref": "#/$defs/safe_id"},
+        "analysis_id": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "manifest_type": {"const": "run"},
+    "run_id": {"$ref": "#/$defs/safe_id"},
+    "ordered_cases": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/plan_case"}},
+    "configuration_sha256": {
+      "$ref": "#/$defs/sha256",
+      "description": "Digest of the queue-compatible configuration projection."
+    },
+    "started_at": {"type": "string", "format": "date-time"},
+    "ended_at": {"type": "string", "format": "date-time"},
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "execution_status": {"enum": ["succeeded", "failed", "cancelled"]},
+    "case_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "succeeded": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "skipped_identical": {"type": "integer", "minimum": 0},
+        "cancelled": {"type": "integer", "minimum": 0}
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id", "analysis_id", "attempt_id", "execution_status",
+          "qc_status", "manifest"
+        ],
+        "properties": {
+          "case_id": {"$ref": "#/$defs/safe_id"},
+          "analysis_id": {"$ref": "#/$defs/sha256"},
+          "attempt_id": {"$ref": "#/$defs/safe_id"},
+          "execution_status": {"enum": ["succeeded", "failed", "skipped_identical", "cancelled"]},
+          "qc_status": {"enum": ["pass", "review", "fail", "not_assessed"]},
+          "manifest": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cases", "failures", "review_queue"],
+      "properties": {
+        "cases": {"type": "string", "minLength": 1},
+        "failures": {"type": "string", "minLength": 1},
+        "review_queue": {"type": "string", "minLength": 1}
+      }
+    },
+    "reporting": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled", "status", "layout", "combined_pdf",
+            "combined_manifest", "failure_code", "failure_summary"
+          ],
+          "properties": {
+            "enabled": {"const": true},
+            "status": {"enum": ["succeeded", "individual_only", "failed"]},
+            "layout": {"enum": ["spine_overview_v1", "spine_profile_v2"]},
+            "combined_pdf": {"type": ["string", "null"]},
+            "combined_manifest": {"type": ["string", "null"]},
+            "failure_code": {"type": ["string", "null"]},
+            "failure_summary": {"type": ["string", "null"]}
+          }
+        }
+      ]
+    }
+  }
+}

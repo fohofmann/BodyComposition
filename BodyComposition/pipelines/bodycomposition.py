@@ -1,34 +1,40 @@
-"""Canonical internal-model pipelines with measurement stage physical measurements."""
+"""Single canonical action composition used by the release service."""
 
 from __future__ import annotations
 
 
-def _canonical_bodycomposition_pipeline(pipeline, *, tissue_model: str):
+def canonical_actions(pipeline):
+    from BodyComposition.actions.masks_int import MasksInternalTissue
     from BodyComposition.actions.measurement import (
         ExportMeasurementBundle,
         MeasureCanonicalBodyComposition,
         WriteMeasurementReview,
         measurement_support_actions,
     )
-    from BodyComposition.actions.masks_int import MasksInternalTissue
     from BodyComposition.actions.segm_int import SegmIntBodyComposition
     from BodyComposition.actions.vertebral import vertebral_backend_actions
 
-    if not pipeline.config["measurements"]["enabled"]:
-        raise ValueError("The canonical BodyComposition pipelines require measurements.enabled=true.")
     if not pipeline.config["orientation"]["enabled"]:
         raise ValueError(
-            "The canonical BodyComposition pipelines require orientation.enabled=true "
-            "so every downstream stage consumes the prepared-image object."
+            "The canonical pipeline requires orientation.enabled=true "
+            "so every downstream stage consumes the orientation-prepared image object."
         )
+    tissue_backend = pipeline.public_config.tissue_backend
+    tissue_models = {
+        "bodycomposition_resenc_l_v1": "ResEncL",
+        "bodycomposition_resenc_m_v1": "ResEncM",
+    }
+    try:
+        tissue_model = tissue_models[tissue_backend]
+    except KeyError as error:
+        raise ValueError(f"Unknown tissue backend {tissue_backend!r}.") from error
     vertebral_actions, vertebral_body_source = vertebral_backend_actions(pipeline)
-    tissue_mask = "masks/{caseid}_int-bodycomposition.nii.gz"
-    compartment_mask = "labels/{caseid}_int-bodycomposition.nii.gz"
+    tissue_mask = "masks/tissue_labels.nii.gz"
+    compartment_mask = "masks/tissue_compartments.nii.gz"
     measurement_actions = measurement_support_actions(
         pipeline,
         tissue_mask=tissue_mask,
     )
-    tissue_backend_id = f"bodycomposition_resenc_{tissue_model[-1].lower()}_v1"
     actions = [
         *vertebral_actions,
         SegmIntBodyComposition(pipeline, image="tmp/index", model=tissue_model),
@@ -37,7 +43,7 @@ def _canonical_bodycomposition_pipeline(pipeline, *, tissue_model: str):
         MeasureCanonicalBodyComposition(
             pipeline,
             tissue_mask=tissue_mask,
-            tissue_backend_id=tissue_backend_id,
+            tissue_backend_id=tissue_backend,
             vertebral_body_source=vertebral_body_source,
             compartment_mask=compartment_mask,
         ),
@@ -50,15 +56,3 @@ def _canonical_bodycomposition_pipeline(pipeline, *, tissue_model: str):
 
         actions.append(RenderCaseReport(pipeline))
     return actions
-
-
-def BodyComposition(pipeline):
-    """Full-resolution internal tissue model with canonical measurement stage outputs."""
-
-    return _canonical_bodycomposition_pipeline(pipeline, tissue_model="ResEncL")
-
-
-def BodyCompositionFast(pipeline):
-    """Faster internal tissue model on the full prepared CT physical domain."""
-
-    return _canonical_bodycomposition_pipeline(pipeline, tissue_model="ResEncM")

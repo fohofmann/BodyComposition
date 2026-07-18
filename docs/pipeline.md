@@ -1,142 +1,85 @@
-# Pipeline
+# Pipeline architecture and geometry
 
-The BodyComposition package provides several registered pipelines.
-Pipelines are registered in [pipeline_registry.py](../BodyComposition/pipeline_registry.py), with their ordered action definitions in the [pipelines directory](../BodyComposition/pipelines/).
+BodyComposition 1.x has one orchestration service and one canonical action
+sequence. The Python API and CLI are adapters over `PipelineService`; they do
+not implement separate pipelines.
 
-Each pipeline is a sequence of stages that are executed in order as defined in the respective pipeline file.
-Each stage is defined as `action`, which are classes that are derived from the `PipelineAction` class.
+## Stage sequence
 
-At the start of the pipeline, each action class is initialized.
-The pipeline selects all cases, where all required inputs (defined by the individual actions) are available.
-Then, for each case, all actions are executed in order.
-Outputs of actions are available to subsequent actions through a shared memory dictionary. Each action declares its inputs and outputs. Missing inputs and outputs fail at the responsible action rather than surfacing later as an unrelated key error.
+1. Validate one explicit three-dimensional NIfTI CT or one selected DICOM CT
+   series and calculate content, pixel, and physical-geometry identities.
+2. Assess orientation with pinned CTDeepRot. Preserve trustworthy metadata;
+   apply only a supported lossless proper-rotation repair when anatomy and
+   metadata disagree; retain uncertainty and review provenance.
+3. Segment and label vertebral bodies. The default adapter uses upstream
+   SPINEPS 2.0.0, its pinned VERIDAH CT-labeling model, and TPTBox 0.7.5
+   VibeSeg crop inference.
+4. Segment anatomical tissue compartments with the selected internal nnU-Net
+   v2 model.
+5. Derive the body/trunk measurement support, optional TotalSegmentator
+   landmarks, per-slice measurements, three-bin native vertebral summaries,
+   established case summaries, and QC.
+6. Optionally create a one-page report from the already computed scientific
+   artifacts.
+7. Validate schemas, inventory every artifact, write the case manifest, and
+   atomically promote the complete bundle.
 
-Action outputs, persisted completion markers, and reset targets are separate contracts. An output may exist only in memory when saving is disabled; only files that an action actually writes are used to decide whether a batch case is complete. Reset targets also include shared append exports so a requested clean run does not retain earlier rows. A pipeline with no persisted completion markers is processed normally instead of being skipped vacuously.
+There is no automatic backend fallback. A selected model failure is an
+observable failed result. Reporting never reruns scientific inference.
 
-A case failure is logged with its original traceback. Batch execution continues with the remaining cases and then raises `PipelineExecutionError`, so CLI processes return a non-zero exit status instead of reporting success for a partial run.
+## Prepared-image boundary
 
-Internal nnU-Net inference normally uses cuDNN on CUDA devices. If cuDNN reports its specific `FIND` or `GET` engine-selection failure, the action logs a warning, disables cuDNN for the remainder of that process, and retries once through PyTorch's CUDA fallback. Other runtime errors are not retried.
+For DICOM input, the service first uses SimpleITK/GDCM to assemble the selected
+series and writes a pixel/geometry-verified temporary NIfTI in the attempt
+workspace. Conversion neither canonicalizes nor repairs orientation. The
+temporary file is not promoted into the result bundle; standalone conversion
+is available through `bodycomposition convert` and `convert_dicom`.
 
-Images use explicit geometry conventions: SimpleITK size, spacing, origin, and indices are in x-y-z order; arrays returned by SimpleITK are in z-y-x order. Images and masks must have the same size and physical domain before measurements are combined.
+The orientation stage owns orientation. It produces one immutable prepared-image object with
+the image, transform, pixel digest, physical-domain provenance, orientation
+state, and review flags. Downstream stages consume that object and must not
+independently canonicalize, transpose, or relabel the input.
 
-Unless `orientation.enabled` is false, `PipelineBuilder` prepends the same
-orientation action to every registered pipeline. This makes orientation
-assessment part of both the Python API and CLI execution path rather than a
-DICOM conversion option.
+The explicit convention is:
 
-## Pipelines
+- SimpleITK size, spacing, origin, indices, and physical points: `x-y-z`;
+- arrays returned by `SimpleITK.GetArrayFromImage`: `z-y-x`;
+- physical coordinates: DICOM LPS millimetres; and
+- longitudinal ordering: the physical superior axis, not storage index.
 
-While pipelines can be customized by the user, the following methods are readily implemented:
+Every segmentation output is checked against the prepared CT's full physical
+domain. Label resampling uses nearest-neighbour interpolation. Geometry is not
+accepted merely because array shapes match.
 
-- **[BodyCompositionFast](../BodyComposition/pipelines/bodycomposition.py) (default)**: Runs the complete prepared CT without an L2–L4 crop, uses the selected body-only vertebral backend (SPINEPS/VERIDAH by default), the internal ResEncM tissue model, a tissue-derived trunk envelope, and optional TotalSegmentator landmarks. It writes the canonical per-slice, three-bin native-territory, and case-summary Parquet bundle plus QC.
-- **[BodyComposition](../BodyComposition/pipelines/bodycomposition.py)**: Uses the same full-volume physical measurement pipeline with the internal ResEncL tissue model.
-- **[SarcopeniaTotalSegmentatorFast](../BodyComposition/pipelines/totalsegmentator.py)**: Segments the spine using [TotalSegmentator](models.md), crops the image in cranio-caudal axis to L2-L4, segments tissue using [TotalSegmentator](models.md), and exports slice-wise measures for each case as well as mean L3 measures for all cases.
-- **[SarcopeniaTotalSegmentator](../BodyComposition/pipelines/totalsegmentator.py)**: Segments spine, vertebral bodies, body trunk, tissue and psoas muscle using [TotalSegmentator](models.md), reduces the labels to the vertebral bodies, and exports slice-wise measures for each case.
-- **[SarcopeniaStanfordFast](../BodyComposition/pipelines/stanford.py)**: Uses the Comp2Comp spine and tissue models in a cropped L2-L4 workflow.
-- **[BodyAndOrganAnalysis](../BodyComposition/pipelines/boa.py)**: Combines TotalSegmentator spine localization with the BOA tissue model and exports per-slice measurements.
+## Vertebral contract
 
-## Actions
+The downstream anatomical input is `masks/vertebral_bodies.nii.gz`: the
+vertebral corpora only. SPINEPS semantic or full-vertebra instance outputs may
+be retained for provenance/QC, but posterior elements do not define
+territories, measurements, or PDF overlays.
 
-### Orientation
+Native labels are preserved. T13 and L6 are variants, not errors, and sacrum
+is an ordinary supported territory. Sequence gaps, non-monotonic order,
+fragments, edge truncation, and low-confidence enumeration remain explicit QC
+conditions. They never cause relabeling by silent heuristic fallback.
 
-- **AssessOrientation**: Validates the original pixels and physical geometry,
-  converts the SimpleITK z-y-x array explicitly to CTDeepRot y-x-z convention,
-  obtains equivariance votes across all 24 proper rotations, and compares the
-  anatomy result with the metadata interpretation. Matching inputs are not
-  canonicalized. A mismatch is repaired only when all configured confidence,
-  coverage, obliquity, artefact, and class-specific safety gates pass. The
-  SI-preserving 180-degree in-plane class is advisory-only by default because
-  it produced a confident false-positive candidate in the public discrepancy
-  audit. Repair uses only
-  `SimpleITK.PermuteAxes` and `SimpleITK.Flip`, with no interpolation, and must
-  pass an exact inverse-array and physical-point round trip. LPS is only the
-  internal comparison frame; the final derivative is losslessly re-expressed
-  in the input's original discrete orientation convention. Readable uncertain
-  cases continue unchanged with QC `review`; a changed case always requires
-  manual review. The action writes a structured JSON report and an
-  identifier-free scout image. The scout's top row shows the metadata
-  interpretation; the lower row shows the actual prepared image, or a clearly
-  labeled, unapplied model candidate when a mismatch is gated to review. The
-  action preserves the original container as `tmp/original_index`.
+## Execution and atomicity
 
-### Segmentation
-- **SegmSpinepsVeridah**: Receives the immutable preparation stage
-  `OrientationOutcome`, stages that exact image without independent
-  reorientation, precomputes VibeSeg Dataset100 with auto-download disabled,
-  and calls the pinned upstream SPINEPS `process_img_nii` saved-output path.
-  SimpleITK defines the output array boundary as z-y-x. Semantic and native
-  vertebral outputs must match the prepared CT size, spacing, origin, and
-  direction before the canonical body intersection `(seg-spine == 49) *
-  seg-vert` is accepted. It returns the common result, native variants,
-  provenance, structured QC, and a review image. The canonical labeled
-  vertebral-body intersection is the only mask passed to physical extents,
-  territories, and other downstream measurements; the full native vertebra segmentation is
-  retained only for QC, review, and provenance. It never falls back.
-- **SegmIntVertebrae**: Segments the vertebral body using nnU-Net with models described [here](models.md). Requires `image` being a [NIfTI data container](../BodyComposition/utils/nifti.py) and `model` being a string defining either the `ResEncM` or `ResEncL` model. Returns (and optionally saves) the segmentation as a [NIfTI data container](../BodyComposition/utils/nifti.py).
-- **SegmStanfordSpine**: Segments the vertebral body using the [Comp2Comp Spine Segmentation model](models.md). Requires `image` being a [NIfTI data container](../BodyComposition/utils/nifti.py). Returns (and optionally saves) the segmentation as a [NIfTI data container](../BodyComposition/utils/nifti.py).
-- **SegmTotalSegmentator**: Segments any structures using the [TotalSegmentator](models.md). Requires `image` being a [NIfTI data container](../BodyComposition/utils/nifti.py), `task` being a string defining the [task to be performed](../BodyComposition/actions/segm_totalsegmentator.py) (e.g., spine, bodytrunk, tissue, vertebralbodies, iliospoas), and `fast` being a boolean defining whether TotalSegmentator's *fast* function should be used. Before running this action, TotalSegmentator must be initialized using the **SegmTotalSegmentatorConfig** action. Returns (and optionally saves) the segmentation as a [NIfTI data container](../BodyComposition/utils/nifti.py).
+One process keeps model objects resident across cases. Multiple identical
+processes can join a filesystem-backed whole-case queue. Claims have
+heartbeats, bounded stale takeover, fencing tokens, and a maximum attempt
+count. A stale process cannot overwrite a reclaimed case.
 
-The canonical default derives body/trunk envelopes from the already available
-tissue segmentation. Fast task 297 (`total`) is used only when anatomical
-mid-waist landmarks are enabled; the adapter consumes bilateral hip and rib
-labels. This deliberately avoids the upstream `roi_subset` path, which would
-request an additional rough task-298 model. Task 299 (`body`) remains an
-explicit body-surface alternative. The model manager synchronizes only the
-selected assets from TotalSegmentator's upstream source, and a cache-only
-inference guard rejects missing or unexpected models instead of downloading
-them.
+Case work occurs in an attempt directory on the same filesystem. A successful
+bundle is renamed atomically to its content-addressed destination only after
+the manifest and artifact inventory are complete. Failed or cancelled bundles
+are retained under `failed/`; partial work is never presented as success.
 
-### Masks Spine
-- **MasksTotalSegmentatorSpine**: Maps the TotalSegmentator labels to the [standard labels](labels.md) used in the pipeline. If `reduce_to_vb` is set to `True`, the labels are reduced to the vertebral bodies using TotalSegmentator's `vertebral_body` segmentation. Returns the remapped masks as a [NIfTI data container](../BodyComposition/utils/nifti.py).
-- **MasksStanfordSpine**: Maps the Comp2Comp Spine labels to the [standard labels](labels.md) used in the pipeline and returns the remapped mask as a [NIfTI data container](../BodyComposition/utils/nifti.py).
+A recognized accelerator OOM records the failure and enables a simple
+low-memory strategy on the next compatible invocation using equivalent
+hardware. It unloads model bundles between segmentation stages. A worker
+timeout remains eligible for bounded takeover by another compatible worker.
+Neither path silently changes the scientific plan.
 
-### Masks Tissue
-*During the processing of tissue masks, filters based on Hounsfield units and 2D or 3D size properties are applied to subsegment `labels` and generate `masks` as explained [here](labels.md) and defined in the pipeline's [configuration](config.md).*
-
-- **MasksTotalSegmentatorTissue**: Maps the TotalSegmentator labels to the [standard labels](labels.md) used in the pipeline. If `iliopsoas` is set to `True`, the a separate label of the iliopsoas muscle is returned using TotalSegmentator's `iliopsoas` segmentation. If `bodytrunk` is set to `True`, the labels are reduced to the body trunk using TotalSegmentator's `bodytrunk` segmentation. Returns the remapped masks as a [NIfTI data container](../BodyComposition/utils/nifti.py).
-
-### Bounding Boxes
-- **CreateBoundingBox**: Creates bounding boxes around specific labels. The segmentation `label` must be provided as a [NIfTI data container](../BodyComposition/utils/nifti.py). The bounding box is defined in the pipeline's [configuration](config.md), and the specific `task` must be defined as argument. The function then creates a bounding box around the specific label and saves it (`bbox`) to the memory dictionary.
-- **ApplyBoundingBox**: Applies a bounding box to a image, label or mask. The segmentation `label` must be provided as [NIfTI data containers](../BodyComposition/utils/nifti.py), and the bounding box `bbox` must be available within the memory dictionary. If the NIfTI data container should not be changed, but saved separately, define its name using the `output` argument. The function then applies the bounding box to the input NIfTI. If the changed NIfTI data container is used later on, only values within the bounding box are returned, changed or saved.
-
-### Postprocessing
-
-- **CreateBodySurface**: Adapts the explicitly selected body backend to aligned
-  full-body and trunk masks. The default constructs physical, smoothed
-  per-slice envelopes from the existing tissue labels; TotalSegmentator
-  task 299 and the deterministic threshold/component method are explicit
-  alternatives and are never selected after a failure.
-- **CreateMeasurementLandmarks**: Adapts task-297 rib and hip labels into the
-  paired lowest-rib inferior and bilateral superior iliac-crest landmarks,
-  including side disagreement and ordering QC.
-- **MeasureCanonicalBodyComposition**: Validates every input against the preparation stage
-  prepared CT, uses only the common contract's vertebral-body labels, and
-  calculates the three canonical tables with exact physical overlap.
-- **WriteMeasurementReview**: Writes representative axial body/trunk contours,
-  circumference and tissue-area curves, and QC markers without printing the
-  case identifier.
-- **ExportMeasurementBundle**: Atomically writes the three Parquet tables and
-  structured measurement-QC JSON. See the
-  [measurement data dictionary](measurements.md).
-- **RenderCaseReport**: Optional final derived stage. It consumes the immutable
-  prepared image, vertebral-body labels, and exported measurement stage contract;
-  it does not run inference or recalculate scientific measurements. It writes
-  exactly one A4 landscape case page and a report manifest. Batch collation
-  follows the selected case order and conditionally inserts the canonical
-  manual-review summary. See [reporting.md](reporting.md).
-
-The following actions remain available to legacy/noncanonical registered
-pipelines:
-
-- **CalcVertebralLevel**: Canonicalizes and validates a vertebral mask, then produces a DataFrame with one row per prepared CT slice and the dominating level, center, centroid, tag, and status. It uses the selected backend's native label schema and an anatomical sequence rank, so T13/L6 variants are preserved rather than numerically “corrected.” An empty vertebral mask returns the same schema with `VertebraStatus=empty_mask` instead of omitting the output.
-- **CalcMeasures**: Canonicalizes and validates the tissue mask and any optional CT/contour mask. It returns named per-slice voxel counts and CSA in cm² for every native label. Optional HU columns include an explicit empty-tissue status. Optional contour perimeter and area are calculated after transforming contour points through the physical affine.
-
-### Data Handling
-- **LoadMetadata**: Trys to load metadata. The path is given as an argument, with the placeholder `{caseid}` being replaced by the current cases id. Can be both, a *csv (containing DICOM metadata) or a *dcm file. The metadata is saved to the memory dictionary as `tmp/metadata`.
-- **DataCombine**: Combines tissue measurements and vertebral levels only after size, spacing, origin, direction, and row count agree. It returns `tmp/bodycomposition` in ascending prepared-slice order.
-- **L3MeanCSA**: Produces a one-row mean-L3 CSA table. If L3 is absent, it still produces the declared schema with `status=not_available` and `reason=missing_L3`.
-- **DataSubset**: Can be used to create a subset of `tmp/bodycomposition` (or an other df as defined as `input_df` argument) for later aggregation. The subset is defined by a reference (Center, Level, Centroid, Tag) corresponding to the vertebral levels created by **CalcVertebralLevel** and a specific vertebral level (`ALL` for all vertebrae, `L` for all lumbar vertebrae, or a string or list defining specific vertebrae). The subset is saved to the memory dictionary as `tmp/bodycomposition` or a specific name defined by the `output_df` argument.
-- **DataAggregate**: Aggregates the data in `tmp/bodycomposition` (or an other df as defined as `input_df` argument). Groups are defined by a reference `ref` (Center, Level, Centroid, Tag) corresponding to the vertebral levels created by **CalcVertebralLevel**. If individual groups are required, individual groups can be defined using the `tag_mapping` dictionary that should map the values from `ref` to new, individual groups "tags". The method of aggregation is defined by `method`, currently mean, median and sum are supported. The aggregated data is saved to the memory dictionary as `tmp/bodycomposition` or a specific name defined by the `output_df` argument.
-- **DataExport**: Saves a legacy DataFrame to the selected CSV path. It is not
-  used as the canonical measurement source by `BodyComposition` or
-  `BodyCompositionFast`.
+See [execution.md](execution.md), [output-schema.md](output-schema.md), and
+[reproducibility.md](reproducibility.md).

@@ -1,8 +1,10 @@
 # libraries
-import numpy as np
-from skimage import measure
 import logging
-from scipy.ndimage import label as ndi_label, sum as ndi_sum
+
+import numpy as np
+from scipy.ndimage import label as ndi_label
+from scipy.ndimage import sum as ndi_sum
+from skimage import measure
 
 
 def _connectivity_rank(ndim: int, connectivity: int) -> int:

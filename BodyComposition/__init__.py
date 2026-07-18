@@ -1,4 +1,98 @@
+"""BodyComposition research pipeline public package."""
 
-# This line will be programatically read/write by setup.py.
-# Leave them at the bottom of this file and don't touch them.
-__version__ = "0.3.0"
+__version__ = "1.0.0rc1"
+
+from BodyComposition.config import (  # noqa: E402
+    CONFIG_SCHEMA_VERSION,
+    ConfigError,
+    PipelineConfig,
+    configuration_schema,
+    default_config,
+)
+from BodyComposition.dicom import (  # noqa: E402
+    DicomConversionResult,
+    DicomInputError,
+    DicomSeriesInfo,
+    DicomSeriesSelectionError,
+    convert_dicom,
+    discover_dicom_series,
+)
+from BodyComposition.model_manager import (  # noqa: E402
+    MODEL_IDS,
+    ModelAssetError,
+    ModelStatus,
+    list_models,
+    release_model_issues,
+    required_model_ids,
+    sync_model,
+    sync_models,
+    verify_model,
+    verify_models,
+)
+from BodyComposition.results import (  # noqa: E402
+    RESULT_SCHEMA_VERSION,
+    RUN_SCHEMA_VERSION,
+    BatchResult,
+    CaseResult,
+    ExecutionStatus,
+    QCStatus,
+)
+from BodyComposition.service import (  # noqa: E402
+    DEFAULT_OUTPUT_ROOT,
+    CaseInput,
+    DirtySourceError,
+    ExistingRunError,
+    PipelineService,
+    aggregate_results,
+    analyze_batch,
+    analyze_case,
+    collate_report_export,
+    inspect_report,
+    inspect_result,
+    load_batch_manifest,
+    render_report,
+)
+
+__all__ = [
+    "CONFIG_SCHEMA_VERSION",
+    "DEFAULT_OUTPUT_ROOT",
+    "MODEL_IDS",
+    "RESULT_SCHEMA_VERSION",
+    "RUN_SCHEMA_VERSION",
+    "BatchResult",
+    "CaseInput",
+    "CaseResult",
+    "ConfigError",
+    "DicomConversionResult",
+    "DicomInputError",
+    "DicomSeriesInfo",
+    "DicomSeriesSelectionError",
+    "DirtySourceError",
+    "ExecutionStatus",
+    "ExistingRunError",
+    "ModelAssetError",
+    "ModelStatus",
+    "PipelineConfig",
+    "PipelineService",
+    "QCStatus",
+    "__version__",
+    "aggregate_results",
+    "analyze_batch",
+    "analyze_case",
+    "collate_report_export",
+    "configuration_schema",
+    "convert_dicom",
+    "default_config",
+    "discover_dicom_series",
+    "inspect_report",
+    "inspect_result",
+    "list_models",
+    "load_batch_manifest",
+    "release_model_issues",
+    "render_report",
+    "required_model_ids",
+    "sync_model",
+    "sync_models",
+    "verify_model",
+    "verify_models",
+]

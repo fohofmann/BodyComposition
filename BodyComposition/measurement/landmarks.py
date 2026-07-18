@@ -17,7 +17,6 @@ from BodyComposition.measurement.physical import (
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCSeverity
 
-
 TOTALSEGMENTATOR_LANDMARK_BACKEND = "totalsegmentator_total_task297_landmarks_v1"
 
 

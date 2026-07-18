@@ -1,4 +1,4 @@
-"""Pinned, checksum-verified TotalSegmentator assets used by measurement stage."""
+"""Pinned, checksum-verified TotalSegmentator measurement-support assets."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import stat
 import tempfile
 import urllib.request
 import zipfile
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Callable, Mapping
-
+from typing import BinaryIO
 
 UPSTREAM_PROJECT = "TotalSegmentator"
 UPSTREAM_REPOSITORY = "https://github.com/wasserth/TotalSegmentator"
@@ -27,7 +27,7 @@ WEIGHT_LICENSE_STATUS = (
     "upstream_lists_total_and_body_as_open_for_any_usage_under_Apache-2.0"
 )
 REDISTRIBUTION_MODE = "user_model_sync"
-VALIDATION_SET_VERSION = "measurement-technical-contour-validation-pending"
+VALIDATION_SET_VERSION = "technical-contour-validation-pending-v1"
 ASSET_MANIFEST_NAME = ".bodycomposition-asset.json"
 COPY_CHUNK_BYTES = 1024 * 1024
 MAX_UNCOMPRESSED_ARCHIVE_BYTES = 4 * 1024**3
@@ -181,7 +181,7 @@ def model_asset_record(task: str) -> dict:
     """Return the complete, path-free asset and distribution contract."""
 
     if task not in MEASUREMENT_MODEL_MANIFEST:
-        raise ValueError(f"No measurement stage TotalSegmentator manifest exists for task {task!r}.")
+        raise ValueError(f"No measurement-support TotalSegmentator manifest exists for task {task!r}.")
     manifest = MEASUREMENT_MODEL_MANIFEST[task]
     expected_files = []
     for relative, expected in manifest["files"].items():
@@ -293,7 +293,7 @@ def check_measurement_model(
     weights_root: str | Path | None = None,
 ) -> TotalSegmentatorAssetReport:
     if task not in MEASUREMENT_MODEL_MANIFEST:
-        raise ValueError(f"No measurement stage TotalSegmentator manifest exists for task {task!r}.")
+        raise ValueError(f"No measurement-support TotalSegmentator manifest exists for task {task!r}.")
     if weights_root is None:
         from totalsegmentator.config import get_weights_dir
 
@@ -322,7 +322,12 @@ def require_measurement_model(
     report = check_measurement_model(task, weights_root)
     if report.ready:
         return report
-    command = f"bodycomposition_download_models --model {report.model_title}"
+    model_id = (
+        "totalsegmentator_body_task299_v1"
+        if task == "bodytrunk"
+        else "totalsegmentator_total_task297_landmarks_v1"
+    )
+    command = f"bodycomposition models sync --model {model_id}"
     details = ", ".join(report.errors)
     raise FileNotFoundError(
         f"Pinned TotalSegmentator task {report.task_id} is not ready in the mounted model "
@@ -440,7 +445,7 @@ def sync_measurement_model(
     """Synchronize one exact upstream archive and promote it after verification."""
 
     if task not in MEASUREMENT_MODEL_MANIFEST:
-        raise ValueError(f"No measurement stage TotalSegmentator manifest exists for task {task!r}.")
+        raise ValueError(f"No measurement-support TotalSegmentator manifest exists for task {task!r}.")
     existing = check_measurement_model(task, weights_root)
     if existing.ready:
         return existing

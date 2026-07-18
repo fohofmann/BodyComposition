@@ -1,10 +1,11 @@
-"""Stable data contracts for measurement outputs."""
+"""Stable data contracts for canonical measurement outputs."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,7 +13,6 @@ import pyarrow as pa
 
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCStatus
-
 
 MEASUREMENT_SCHEMA_VERSION = "2.1.0"
 VERTEBRAL_TERRITORY_SCHEMA_VERSION = "native-physical-territories-v1-bins3"

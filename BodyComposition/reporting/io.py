@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import jsonschema
 import SimpleITK as sitk
@@ -24,7 +25,6 @@ from BodyComposition.vertebral.contracts import (
     VertebralCentroid,
     VertebralResult,
 )
-
 
 CASE_INPUT_SCHEMA_VERSION = "1.0.0"
 
@@ -88,6 +88,7 @@ def load_case_report_input(manifest_path: str | Path) -> CaseReportInput:
     case_id = validate_case_id(payload.get("case_id"))
     root = path.parent
     prepared_path = _resolve(root, payload.get("prepared_ct"), "prepared_ct")
+    tissue_path = _resolve(root, payload.get("tissue_label_mask"), "tissue_label_mask")
     body_path = _resolve(root, payload.get("vertebral_body_mask"), "vertebral_body_mask")
     vertebral_json_path = _resolve(
         root, payload.get("vertebral_result_json"), "vertebral_result_json"
@@ -98,13 +99,19 @@ def load_case_report_input(manifest_path: str | Path) -> CaseReportInput:
     orientation_path = _resolve(
         root, payload.get("orientation_report_json"), "orientation_report_json"
     )
-    measurement_qc_path = _resolve(
-        root, payload.get("measurement_qc_json"), "measurement_qc_json"
-    )
+    measurement_qc_path = _resolve(root, payload.get("measurement_qc_json"), "measurement_qc_json")
     prepared = sitk.ReadImage(str(prepared_path))
+    tissue_image = sitk.ReadImage(str(tissue_path))
     body_image = sitk.ReadImage(str(body_path))
     prepared_geometry = ImageGeometry.from_sitk(prepared)
+    tissue_geometry = ImageGeometry.from_sitk(tissue_image)
     body_geometry = ImageGeometry.from_sitk(body_image)
+    assert_same_physical_domain(
+        prepared_geometry,
+        tissue_geometry,
+        reference_name="post-hoc prepared CT",
+        candidate_name="post-hoc tissue-label mask",
+    )
     assert_same_physical_domain(
         prepared_geometry,
         body_geometry,
@@ -112,10 +119,10 @@ def load_case_report_input(manifest_path: str | Path) -> CaseReportInput:
         candidate_name="post-hoc vertebral-body mask",
     )
     body_labels = sitk.GetArrayFromImage(body_image)
+    tissue_labels = sitk.GetArrayFromImage(tissue_image)
     vertebral_json = _load_json(vertebral_json_path)
     schema = {
-        int(label): str(name)
-        for label, name in vertebral_json.get("label_schema", {}).items()
+        int(label): str(name) for label, name in vertebral_json.get("label_schema", {}).items()
     }
     centroids = tuple(
         VertebralCentroid(
@@ -124,16 +131,12 @@ def load_case_report_input(manifest_path: str | Path) -> CaseReportInput:
             index_zyx=tuple(float(item) for item in value["index_zyx"]),
             physical_lps_xyz=tuple(float(item) for item in value["physical_lps_xyz"]),
             confidence=(
-                float(value["confidence"])
-                if value.get("confidence") is not None
-                else None
+                float(value["confidence"]) if value.get("confidence") is not None else None
             ),
         )
         for value in vertebral_json.get("centroids", [])
     )
-    execution_status = ExecutionStatus(
-        str(vertebral_json.get("execution_status", "succeeded"))
-    )
+    execution_status = ExecutionStatus(str(vertebral_json.get("execution_status", "succeeded")))
     vertebral_result = VertebralResult(
         backend_id=str(vertebral_json["backend_id"]),
         execution_status=execution_status,
@@ -157,7 +160,7 @@ def load_case_report_input(manifest_path: str | Path) -> CaseReportInput:
         analysis_id=str(first["analysis_id"]),
     )
     if identity.case_id != case_id:
-        raise ValueError("Case manifest ID differs from canonical measurement stage table identity.")
+        raise ValueError("Case manifest ID differs from canonical measurement-table identity.")
     measurement_qc = _load_json(measurement_qc_path)
     if str(measurement_qc.get("analysis_id")) != identity.analysis_id:
         raise ValueError("Measurement QC analysis_id differs from canonical measurement tables.")
@@ -178,7 +181,9 @@ def load_case_report_input(manifest_path: str | Path) -> CaseReportInput:
         prepared_image=prepared,
         vertebral_result=vertebral_result,
         measurement_bundle=report_bundle,
+        tissue_labels_zyx=tissue_labels,
         orientation=orientation,
+        technical_metadata=dict(payload.get("technical_metadata", {})),
     )
 
 

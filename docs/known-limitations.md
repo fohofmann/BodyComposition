@@ -1,0 +1,77 @@
+# Model/data cards and known limitations
+
+## Intended use
+
+BodyComposition produces research measurements and technical QC from
+deidentified CT. Intended users are imaging researchers who can validate
+segmentation, physical geometry, cohort coverage, and clinical definitions.
+The outputs are not diagnostic labels, treatment recommendations, or a
+validated clinical report.
+
+## Input domain
+
+The release expects calibrated three-dimensional CT with meaningful physical
+metadata. It accepts NIfTI or one explicitly selected DICOM CT series.
+SimpleITK/GDCM conversion preserves and validates the reader geometry, but it
+does not classify contrast phase or reconstruction, calibrate scanners,
+de-identify DICOM, or remove burned-in pixel annotations. When multiple CT
+series are present, the caller must supply the intended Series Instance UID.
+
+CTDeepRot estimates proper rotations from anatomy, not arbitrary affine
+corruption. Oblique, truncated, metal-affected, unusual-anatomy, pediatric,
+postoperative, and non-human scans may be uncertain or out of domain. Every
+automatic repair is flagged for manual review.
+
+## Segmentation models
+
+SPINEPS/VERIDAH and the internal vertebral/tissue models inherit their training
+data, labeling conventions, scanner/protocol, population, and pathology
+limitations. Variant enumeration (including T13/L6), transitional anatomy,
+rib remnants, fractures, implants, resections, deformity, and limited coverage
+require review. BodyComposition validates geometry and QC contracts but does
+not make an upstream model clinically generalizable.
+
+The default tissue model's frozen public source/model-card gate is still open;
+therefore `1.0.0rc1` is not a publishable final release.
+
+The container removes torchmetrics' bundled optional DISTS image-metric
+checkpoint to enforce a strict no-model-weights image. BodyComposition does
+not use or expose that metric.
+
+## Body surface and circumference
+
+The default body/trunk envelope is derived from predicted tissue compartments,
+not a validated skin model. Connected arms, sparse predictions, devices,
+table/padding, and field-of-view truncation can affect contour and
+circumference. The sacral maximum is called a pelvic circumference, not a
+validated hip circumference. Waist/pelvic extrema require complete eligible
+coverage and remain research phenotypes.
+
+## Longitudinal measurements
+
+The package preserves physical superior position and native vertebral
+territories. It does not normalize patient height, stretch anatomy, impute
+unscanned regions, or ship a learned longitudinal signature. Comparisons must
+model scan coverage and anatomical missingness explicitly.
+
+## Tissue interpretation
+
+HU windows are named compatibility definitions, not universal biological
+boundaries. Contrast, scanner, reconstruction, and calibration affect
+attenuation. LAMA/NAMA, CT-visible IMAT, SAT, and VAT are continuous research
+measurements. Whole-bone area/HU is not BMD or a validated trabecular ROI.
+Sarcopenia, myosteatosis, and outcome cutpoints are deliberately absent.
+
+## Fairness and validation
+
+No claim is made that model performance or derived associations are uniform by
+sex, age, body size, ancestry, site, scanner, protocol, contrast phase,
+diagnosis, or disease severity. A deployment study must prespecify subgroup
+performance, missingness, review burden, and error impact before using results.
+
+## Privacy and security
+
+File names and source paths are excluded from manifests, but CT pixels and
+generated images remain sensitive medical data. Use pseudonymous IDs, access
+controls, encrypted transport/storage, and governed linkage outside the
+repository. See [SECURITY.md](../SECURITY.md).

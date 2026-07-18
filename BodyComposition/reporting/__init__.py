@@ -3,8 +3,8 @@
 from BodyComposition.reporting.contracts import (
     CaseReportInput,
     CaseReportResult,
-    ReportMeasurementData,
     ReportingSettings,
+    ReportMeasurementData,
 )
 from BodyComposition.reporting.service import (
     collate_reports,

@@ -1,4 +1,4 @@
-"""measurement stage body-surface, landmark, measurement, and canonical export actions."""
+"""Body-surface, landmark, measurement, and canonical export actions."""
 
 from __future__ import annotations
 
@@ -42,15 +42,14 @@ from BodyComposition.pipeline import PipelineAction
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 from BodyComposition.utils.nifti import NiftiDataContainer
 
-
-BODY_SURFACE_MASK = "masks/{caseid}_body-surface.nii.gz"
-MEASUREMENT_REVIEW = "qc/{caseid}_measurement-review.png"
-MEASUREMENT_QC = "qc/{caseid}_measurement-qc.json"
-SLICE_TABLE = "tables/{caseid}/slices.parquet"
-VERTEBRA_TABLE = "tables/{caseid}/vertebrae.parquet"
-SUMMARY_TABLE = "tables/{caseid}/summaries.parquet"
-TOTALSEG_BODY_LABEL = "labels/{caseid}_tseg-bodytrunk.nii.gz"
-TOTALSEG_LANDMARK_LABEL = "labels/{caseid}_tseg-body_landmarks.nii.gz"
+BODY_SURFACE_MASK = "masks/body_surface.nii.gz"
+MEASUREMENT_REVIEW = "qc/measurement_review.png"
+MEASUREMENT_QC = "qc/qc.json"
+SLICE_TABLE = "tables/slices.parquet"
+VERTEBRA_TABLE = "tables/vertebrae.parquet"
+SUMMARY_TABLE = "tables/summaries.parquet"
+TOTALSEG_BODY_LABEL = "masks/totalsegmentator_body.nii.gz"
+TOTALSEG_LANDMARK_LABEL = "masks/totalsegmentator_landmarks.nii.gz"
 
 
 def _path(memory: dict, template: str) -> Path:
@@ -154,8 +153,6 @@ class CreateBodySurface(PipelineAction):
         self.io_reset_outputs = [BODY_SURFACE_MASK]
         if self.settings["save_mask"]:
             self.io_persisted_outputs = [BODY_SURFACE_MASK]
-        if self.backend == TOTALSEGMENTATOR_BODY_BACKEND:
-            self.licenses = ["totalsegmentator", "nnunet"]
 
     def __call__(self, memory):
         super().__call__(memory)
@@ -173,7 +170,7 @@ class CreateBodySurface(PipelineAction):
             assert_same_physical_domain(
                 geometry,
                 label.geometry,
-                reference_name="prepared CT",
+                reference_name="orientation-prepared CT",
                 candidate_name="TotalSegmentator body label",
             )
             result = body_surface_from_totalsegmentator(
@@ -200,7 +197,7 @@ class CreateBodySurface(PipelineAction):
             assert_same_physical_domain(
                 geometry,
                 tissue.geometry,
-                reference_name="prepared CT",
+                reference_name="orientation-prepared CT",
                 candidate_name="tissue segmentation used for body envelope",
             )
             result = tissue_segmentation_envelope(
@@ -241,11 +238,11 @@ class CreateMeasurementLandmarks(PipelineAction):
             raise ValueError(f"Unknown measurement-landmark backend {self.backend!r}.")
         self.io_inputs = [TOTALSEG_LANDMARK_LABEL, "tmp/prepared_image"]
         self.io_outputs = ["tmp/measurement_landmarks"]
-        self.licenses = ["totalsegmentator", "nnunet"]
 
     def __call__(self, memory):
         super().__call__(memory)
         from totalsegmentator.map_to_binary import class_map
+
         from BodyComposition.measurement.totalsegmentator_assets import (
             require_measurement_model,
         )
@@ -257,7 +254,7 @@ class CreateMeasurementLandmarks(PipelineAction):
         assert_same_physical_domain(
             geometry,
             label.geometry,
-            reference_name="prepared CT",
+            reference_name="orientation-prepared CT",
             candidate_name="TotalSegmentator landmark label",
         )
         memory["tmp/measurement_landmarks"] = landmarks_from_totalsegmentator(
@@ -326,7 +323,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         assert_same_physical_domain(
             geometry,
             tissue.geometry,
-            reference_name="prepared CT",
+            reference_name="orientation-prepared CT",
             candidate_name="tissue mask",
         )
         compartment = (
@@ -338,7 +335,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         assert_same_physical_domain(
             geometry,
             compartment.geometry,
-            reference_name="prepared CT",
+            reference_name="orientation-prepared CT",
             candidate_name="raw tissue-compartment labels",
         )
         body_surface = memory["tmp/body_surface_result"]
@@ -397,7 +394,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
 
 
 class WriteMeasurementReview(PipelineAction):
-    """Render the identifier-minimized measurement stage contour/curve review artifact."""
+    """Render the identifier-minimized contour and curve review artifact."""
 
     def __init__(self, pipeline):
         super().__init__(pipeline)

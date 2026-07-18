@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 SPINEPS_BACKEND_ID = "spineps_veridah_ct_v1"
 SPINEPS_VERSION = "2.0.0"
 SPINEPS_SOURCE_COMMIT = "ad622b87d9e4b81fb6a88df2a8050bd40f7046d5"

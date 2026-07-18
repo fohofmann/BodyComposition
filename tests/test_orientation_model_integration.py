@@ -11,11 +11,10 @@ import SimpleITK as sitk
 from BodyComposition.orientation import OrientationState, assess_orientation
 from BodyComposition.orientation.core import apply_model_rotation_to_sitk
 from BodyComposition.orientation.ctdeeprot import (
-    CTDeepRotPredictor,
     LPS_YXZ_REFERENCE_CLASS_INDEX,
+    CTDeepRotPredictor,
 )
 from BodyComposition.orientation.rotations import identity_class_index
-
 
 RUN_VARIABLE = "BODYCOMPOSITION_RUN_CTDEEPROT_TEST"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -31,9 +30,15 @@ def test_ctdeeprot_execution_regression_on_ct_org():
         pytest.skip(f"set {RUN_VARIABLE}=1 to run the CTDeepRot public-CT test")
 
     ct_path = os.environ.get("BODYCOMPOSITION_PUBLIC_CT_PATH")
-    checkpoint_path = os.environ.get("BODYCOMPOSITION_CTDEEPROT_CHECKPOINT")
+    model_root = os.environ.get("BODYCOMPOSITION_MODEL_ROOT")
     assert ct_path, "BODYCOMPOSITION_PUBLIC_CT_PATH must select the pinned public CT"
-    assert checkpoint_path, "BODYCOMPOSITION_CTDEEPROT_CHECKPOINT must select net2d.pt"
+    assert model_root, "BODYCOMPOSITION_MODEL_ROOT must select the verified model cache"
+    checkpoint_path = (
+        Path(model_root)
+        / "CTDeepRot"
+        / "492114b8f9f3a7f058d4e97c0dd3643fb8d39649"
+        / "net2d.pt"
+    )
 
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     assert Path(ct_path).stat().st_size == manifest["integrity"]["bytes"]

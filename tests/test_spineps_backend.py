@@ -10,10 +10,10 @@ from BodyComposition.vertebral import (
     QCStatus,
     adapt_spineps_outputs,
     adapt_spineps_sitk_outputs,
+    spineps_session,
 )
 from BodyComposition.vertebral.contracts import VertebralResult
 from BodyComposition.vertebral.spineps_qc import construct_vertebral_body_labels
-from BodyComposition.vertebral import spineps_session
 
 
 def _geometry(shape_zyx=(12, 8, 6), direction=None):

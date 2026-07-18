@@ -1,6 +1,5 @@
 import hashlib
 import json
-import sys
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -28,28 +27,26 @@ from BodyComposition.actions.segm_totalsegmentator import (
     _require_measurement_model,
 )
 from BodyComposition.actions.vertebral import SPINEPS_BODY_MASK
-from BodyComposition.bin import measurement_view
-from BodyComposition.bin.pre_download_models import (
-    configured_pipeline_models,
-    definition_pipelines,
-)
+from BodyComposition.config import PipelineConfig
+from BodyComposition.measurement import totalsegmentator_assets
 from BodyComposition.measurement.api import (
     TABLE_NAMES,
     l3_measurements,
     load_measurement_tables,
     range_measurements,
 )
-from BodyComposition.measurement.body_surface import body_surface_from_totalsegmentator
-from BodyComposition.measurement.body_surface import TISSUE_ENVELOPE_BACKEND
+from BodyComposition.measurement.body_surface import (
+    TISSUE_ENVELOPE_BACKEND,
+    body_surface_from_totalsegmentator,
+)
 from BodyComposition.measurement.builder import (
     build_measurement_bundle,
     measurement_analysis_id,
 )
 from BodyComposition.measurement.contracts import Landmark, LandmarkSet, MeasurementIdentity
-from BodyComposition.measurement import totalsegmentator_assets
 from BodyComposition.measurement.review import write_measurement_review
-from BodyComposition.pipelines.bodycomposition import BodyCompositionFast
-from BodyComposition.utils.config import ConfigError, validate_config
+from BodyComposition.model_manager import required_model_ids
+from BodyComposition.pipelines.bodycomposition import canonical_actions
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import (
     ExecutionStatus,
@@ -249,7 +246,7 @@ def test_ambiguous_sequence_variant_stays_continuous_and_is_flagged(
     assert any(flag.code == "vertebral_territory_sequence_gap" for flag in bundle.qc_flags)
 
 
-def test_parquet_export_round_trip_api_and_cli_views(base_config, tmp_path, monkeypatch, capsys):
+def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
     bundle, _, _, _, _ = make_bundle(base_config)
     action = ExportMeasurementBundle(
         SimpleNamespace(config=base_config, timestamp=123, device="cpu")
@@ -263,7 +260,7 @@ def test_parquet_export_round_trip_api_and_cli_views(base_config, tmp_path, monk
     action(memory)
     action.validate_outputs(memory)
 
-    table_directory = tmp_path / "tables" / "case-001"
+    table_directory = tmp_path / "tables"
     tables = load_measurement_tables(table_directory)
     assert set(tables) == set(TABLE_NAMES)
     assert len(tables["slices"]) == len(bundle.slices)
@@ -304,7 +301,7 @@ def test_parquet_export_round_trip_api_and_cli_views(base_config, tmp_path, monk
     )
     with pytest.raises(ValueError, match="positive"):
         l3_measurements(table_directory, height_m=0.0)
-    qc = json.loads((tmp_path / "qc" / "case-001_measurement-qc.json").read_text())
+    qc = json.loads((tmp_path / "qc" / "qc.json").read_text())
     schema = json.loads(
         Path("BodyComposition/schemas/measurement_qc.schema.json").read_text()
     )
@@ -312,63 +309,6 @@ def test_parquet_export_round_trip_api_and_cli_views(base_config, tmp_path, monk
     assert qc["provenance"]["vertebral"]["backend_id"] == "synthetic_body_only"
     assert qc["provenance"]["orientation"]["state"] == "PASS_METADATA_MATCH"
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "bodycomposition_measurements",
-            "--tables",
-            str(table_directory),
-            "--view",
-            "l3",
-            "--aggregation",
-            "slice",
-            "--height-m",
-            "2.0",
-        ],
-    )
-    measurement_view.main()
-    payload = json.loads(capsys.readouterr().out)
-    assert payload[0]["aggregation"] == "slice"
-    assert payload[0]["height_m"] == 2.0
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "bodycomposition_measurements",
-            "--tables",
-            str(table_directory),
-            "--view",
-            "l3",
-            "--aggregation",
-            "territory_mean",
-        ],
-    )
-    measurement_view.main()
-    payload = json.loads(capsys.readouterr().out)
-    assert payload[0]["aggregation"] == "territory_mean"
-    assert isinstance(payload[0]["contributing_slice_ids"], list)
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "bodycomposition_measurements",
-            "--tables",
-            str(table_directory),
-            "--view",
-            "range",
-            "--start-level",
-            "T12",
-            "--end-level",
-            "L5",
-        ],
-    )
-    measurement_view.main()
-    payload = json.loads(capsys.readouterr().out)
-    assert payload[0]["aggregation"] == "physical_range"
-    assert payload[0]["analysis_id"] == bundle.identity.analysis_id
     assert not list(tmp_path.rglob("*.partial*"))
 
     summaries_path = table_directory / "summaries.parquet"
@@ -400,7 +340,7 @@ def test_parquet_reader_rejects_missing_vertebral_territory_bin(base_config, tmp
         }
     )
 
-    vertebrae_path = tmp_path / "tables" / "case-001" / "vertebrae.parquet"
+    vertebrae_path = tmp_path / "tables" / "vertebrae.parquet"
     vertebrae = pq.read_table(vertebrae_path)
     frame = vertebrae.to_pandas()
     removed_row = frame.index[
@@ -431,7 +371,7 @@ def test_parquet_reader_rejects_schema_metadata_drift(base_config, tmp_path):
         }
     )
 
-    slices_path = tmp_path / "tables" / "case-001" / "slices.parquet"
+    slices_path = tmp_path / "tables" / "slices.parquet"
     slices = pq.read_table(slices_path)
     metadata = dict(slices.schema.metadata or {})
     metadata[b"bodycomposition.measurement_schema_version"] = b"0.0.0"
@@ -460,7 +400,7 @@ def test_missing_anatomy_keeps_identical_nullable_parquet_schemas(
                 "tmp/measurement_bundle": bundle,
             }
         )
-        table_directory = workspace / "tables" / "case-001"
+        table_directory = workspace / "tables"
         schemas[state] = {
             name: pq.read_schema(table_directory / f"{name}.parquet")
             for name in TABLE_NAMES
@@ -512,7 +452,7 @@ def test_range_api_reuses_the_analysis_coverage_tolerance(base_config, tmp_path)
     )
 
     result = range_measurements(
-        tmp_path / "tables" / "case-001",
+        tmp_path / "tables",
         start_level="L5",
         end_level="T12",
     ).iloc[0]
@@ -550,7 +490,7 @@ def test_informational_coverage_flag_does_not_request_manual_review(
 
     action(memory)
 
-    qc = json.loads((tmp_path / "qc" / "case-001_measurement-qc.json").read_text())
+    qc = json.loads((tmp_path / "qc" / "qc.json").read_text())
     assert qc["qc_status"] == "pass"
     assert not qc["manual_review_required"]
     assert qc["qc_flags"][0]["severity"] == "info"
@@ -686,8 +626,8 @@ def test_measurement_identity_configuration_excludes_output_and_review_policy(ba
     ) != _scientific_measurement_configuration(output_only)
 
 
-def test_fast_pipeline_uses_full_prepared_domain_and_explicit_body_label_source(pipeline_stub):
-    actions = BodyCompositionFast(pipeline_stub)
+def test_canonical_pipeline_uses_full_prepared_domain_and_body_label_source(pipeline_stub):
+    actions = canonical_actions(pipeline_stub)
     names = [type(action).__name__ for action in actions]
 
     assert "CreateBoundingBox" not in names
@@ -698,7 +638,7 @@ def test_fast_pipeline_uses_full_prepared_domain_and_explicit_body_label_source(
     )
     surface = next(action for action in actions if isinstance(action, CreateBodySurface))
     assert tissue.input_image_name == "tmp/index"
-    assert tissue.model_preset == "ResEncM"
+    assert tissue.model_preset == "ResEncL"
     assert measurement.vertebral_body_source_name == SPINEPS_BODY_MASK
     assert "tmp/vertebral_result" in measurement.io_inputs
     assert surface.backend == TISSUE_ENVELOPE_BACKEND
@@ -710,7 +650,7 @@ def test_tissue_envelope_pipeline_can_run_without_totalsegmentator(
 ):
     pipeline_stub.config["measurements"]["landmarks"]["enabled"] = False
 
-    actions = BodyCompositionFast(pipeline_stub)
+    actions = canonical_actions(pipeline_stub)
     names = [type(action).__name__ for action in actions]
 
     assert "SegmTotalSegmentatorConfig" not in names
@@ -748,7 +688,7 @@ def test_measurement_totalsegmentator_assets_are_checked_without_download(
     totalsegmentator_assets._check_cached.cache_clear()
     monkeypatch.setattr("totalsegmentator.config.get_weights_dir", lambda: tmp_path)
 
-    with pytest.raises(FileNotFoundError, match="Run `bodycomposition_download_models"):
+    with pytest.raises(FileNotFoundError, match="bodycomposition models sync"):
         _require_measurement_model("bodytrunk")
 
     model_directory = tmp_path / "Dataset299_body_1559subj"
@@ -799,41 +739,30 @@ def test_measurement_totalsegmentator_inference_is_pinned_and_cache_only(
         "task": "total",
         "fast": True,
         "roi_subset": None,
-        "license_nc": False,
     }
 
 
 def test_default_model_sync_omits_optional_body_model_but_keeps_landmarks():
-    for pipeline_name in ("BodyComposition", "BodyCompositionFast"):
-        models = definition_pipelines[pipeline_name]
-        assert "TotalSegmentator-body" not in models
-        assert "TotalSegmentator-total-fast" in models
+    models = required_model_ids(PipelineConfig.load())
+    assert "totalsegmentator_body_task299_v1" not in models
+    assert "totalsegmentator_total_task297_landmarks_v1" in models
 
 
-def test_configured_pipeline_model_sync_respects_optional_measurement_support(
-    base_config,
-):
-    config = deepcopy(base_config)
-    config["measurements"]["landmarks"]["enabled"] = False
-    for pipeline_name in ("BodyComposition", "BodyCompositionFast"):
-        models = configured_pipeline_models(pipeline_name, config)
-        assert "TotalSegmentator-body" not in models
-        assert "TotalSegmentator-total-fast" not in models
-
-    config["measurements"]["body_surface"]["backend"] = (
-        "totalsegmentator_body_task299_v1"
+def test_configured_model_sync_respects_optional_measurement_support():
+    config = PipelineConfig.model_validate(
+        {"measurements": {"landmarks": {"enabled": False}}}
     )
-    models = configured_pipeline_models("BodyComposition", config)
-    assert "TotalSegmentator-body" in models
-    assert "TotalSegmentator-total-fast" not in models
+    models = required_model_ids(config)
+    assert "totalsegmentator_body_task299_v1" not in models
+    assert "totalsegmentator_total_task297_landmarks_v1" not in models
 
-    config["measurements"]["landmarks"]["enabled"] = True
-    models = configured_pipeline_models("BodyCompositionFast", config)
-    assert "TotalSegmentator-body" in models
-    assert "TotalSegmentator-total-fast" in models
+    value = config.normalized()
+    value["body_surface"]["backend"] = "totalsegmentator_body_task299_v1"
+    models = required_model_ids(PipelineConfig.model_validate(value))
+    assert "totalsegmentator_body_task299_v1" in models
+    assert "totalsegmentator_total_task297_landmarks_v1" not in models
 
-
-def test_canonical_config_rejects_duplicate_csv_export(base_config):
-    base_config["measurements"]["export"]["csv"] = True
-    with pytest.raises(ConfigError, match="do not permit duplicate CSV"):
-        validate_config(base_config)
+    value["measurements"]["landmarks"]["enabled"] = True
+    models = required_model_ids(PipelineConfig.model_validate(value))
+    assert "totalsegmentator_body_task299_v1" in models
+    assert "totalsegmentator_total_task297_landmarks_v1" in models

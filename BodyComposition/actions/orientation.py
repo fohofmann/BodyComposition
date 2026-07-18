@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import copy
-import csv
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 from BodyComposition.orientation.core import (
@@ -20,9 +20,9 @@ from BodyComposition.utils.nifti import NiftiDataContainer
 class AssessOrientation(PipelineAction):
     """Run CTDeepRot before segmentation and replace only a repaired input."""
 
-    report_name = "orientation/{caseid}/orientation_report.json"
-    review_name = "orientation/{caseid}/orientation_review.png"
-    corrected_name = "orientation/{caseid}/corrected_input.nii.gz"
+    report_name = "orientation/orientation_report.json"
+    review_name = "orientation/orientation_review.png"
+    corrected_name = "orientation/corrected_input.nii.gz"
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
@@ -34,7 +34,6 @@ class AssessOrientation(PipelineAction):
             self.io_outputs.extend((self.report_name, self.review_name))
             self.io_persisted_outputs = [self.report_name, self.review_name]
         self.io_reset_outputs = [self.report_name, self.review_name, self.corrected_name]
-        self.licenses = ["ctdeeprot"]
         self._predictor = None
 
     def _get_predictor(self) -> CTDeepRotPredictor:
@@ -46,36 +45,37 @@ class AssessOrientation(PipelineAction):
             )
         return self._predictor
 
+    def release_model(self) -> None:
+        self._predictor = None
+        from BodyComposition.orientation.ctdeeprot import release_cached_models
+
+        release_cached_models()
+
     def __call__(self, memory):
         super().__call__(memory)
         source = memory["tmp/index"]
         if not isinstance(source, NiftiDataContainer):
             raise TypeError("tmp/index must be a NiftiDataContainer before orientation assessment.")
 
-        output_directory = (
-            Path(memory["workspace"])
-            / "orientation"
-            / str(memory["id"])
-        )
+        output_directory = Path(memory["workspace"]) / "orientation"
         case_config = self.config
-        metadata_path = (
-            source.path.parent.parent
-            / "metadata"
-            / f"{memory['id']}.csv"
-        )
-        if metadata_path.is_file():
-            with metadata_path.open(newline="", encoding="utf-8") as handle:
-                metadata_keys = {
-                    row[0]
-                    for row in csv.reader(handle)
-                    if row
-                }
-            if "ImageOrientationPatient" not in metadata_keys:
-                case_config = copy.deepcopy(self.config)
-                case_config["orientation"]["header_uncertain_reasons"] = [
-                    *case_config["orientation"].get("header_uncertain_reasons", []),
-                    "DICOM conversion provenance has no ImageOrientationPatient value.",
-                ]
+        input_summary = memory.get("tmp/input_summary", {})
+        dicom_summary = input_summary.get("dicom", {}) if isinstance(input_summary, Mapping) else {}
+        uncertain_reasons = []
+        if dicom_summary and not dicom_summary.get("image_orientation_patient_complete", False):
+            uncertain_reasons.append(
+                "The selected DICOM series has incomplete ImageOrientationPatient metadata."
+            )
+        if dicom_summary and not dicom_summary.get("image_position_patient_complete", False):
+            uncertain_reasons.append(
+                "The selected DICOM series has incomplete ImagePositionPatient metadata."
+            )
+        if uncertain_reasons:
+            case_config = copy.deepcopy(self.config)
+            case_config["orientation"]["header_uncertain_reasons"] = [
+                *case_config["orientation"].get("header_uncertain_reasons", []),
+                *uncertain_reasons,
+            ]
         try:
             outcome = assess_orientation(
                 source.img,
@@ -122,9 +122,8 @@ class AssessOrientation(PipelineAction):
             memory["tmp/index"] = corrected
             memory[self.corrected_name] = corrected_path
             logging.warning(
-                "  orientation changed for %s; downstream segmentation uses %s and manual review is required",
+                "  orientation changed for %s; downstream segmentation uses the corrected derivative and manual review is required",
                 memory["id"],
-                corrected_path,
             )
         else:
             logging.info(

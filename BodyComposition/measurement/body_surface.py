@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 from scipy import ndimage
@@ -12,7 +13,6 @@ from BodyComposition.measurement.contracts import BodySurfaceResult
 from BodyComposition.measurement.physical import validate_array_zyx
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCSeverity
-
 
 TOTALSEGMENTATOR_BODY_BACKEND = "totalsegmentator_body_task299_v1"
 DETERMINISTIC_BODY_BACKEND = "deterministic_body_mask_v1"

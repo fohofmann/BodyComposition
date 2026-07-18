@@ -27,11 +27,11 @@ from BodyComposition.measurement.contracts import (
     MeasurementBundle,
     MeasurementIdentity,
 )
+from BodyComposition.measurement.physical import geometry_digest
 from BodyComposition.measurement.slices import (
     annotate_longitudinal_circumference_qc,
     calculate_canonical_slice_measurements,
 )
-from BodyComposition.measurement.physical import geometry_digest
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 from BodyComposition.vertebral.contracts import QCFlag, QCSeverity, VertebralResult
 
@@ -59,9 +59,9 @@ def measurement_analysis_id(
     compartment_label_schema: Mapping[int, str] | None = None,
     orientation_provenance: Mapping[str, Any] | None = None,
 ) -> str:
-    """Return the deterministic measurement stage stage identity.
+    """Return the deterministic measurement-stage identity.
 
-    release stage may supply a broader analysis identity containing the container digest
+    The release service may supply a broader analysis identity containing the container digest
     and all stage manifests. Until then, this digest covers every scientific
     array and setting consumed by the measurement stage.
     """
@@ -69,15 +69,13 @@ def measurement_analysis_id(
     if vertebral_result.vertebral_body_labels is None:
         raise ValueError("Vertebral body labels are required for measurement identity.")
     payload = {
-        "schema": "measurement-measurement-analysis-v3",
+        "schema": "bodycomposition-measurement-analysis-v3",
         "bodycomposition_version": __version__,
         "geometry_sha256": geometry_digest(body_surface.geometry),
         "image_sha256": _array_digest(image_zyx),
         "tissue_sha256": _array_digest(tissue_labels_zyx),
         "compartment_sha256": (
-            _array_digest(compartment_labels_zyx)
-            if compartment_labels_zyx is not None
-            else None
+            _array_digest(compartment_labels_zyx) if compartment_labels_zyx is not None else None
         ),
         "body_sha256": _array_digest(body_surface.body_mask_zyx),
         "trunk_sha256": _array_digest(body_surface.trunk_mask_zyx),
@@ -86,23 +84,16 @@ def measurement_analysis_id(
         "body_surface_provenance": dict(body_surface.provenance),
         "vertebral_backend": vertebral_result.backend_id,
         "vertebral_label_schema": {
-            str(label): name
-            for label, name in sorted(vertebral_result.label_schema.items())
+            str(label): name for label, name in sorted(vertebral_result.label_schema.items())
         },
         "vertebral_provenance": dict(vertebral_result.provenance),
         "tissue_label_schema": (
-            {
-                str(label): name
-                for label, name in sorted(tissue_label_schema.items())
-            }
+            {str(label): name for label, name in sorted(tissue_label_schema.items())}
             if tissue_label_schema is not None
             else None
         ),
         "compartment_label_schema": (
-            {
-                str(label): name
-                for label, name in sorted(compartment_label_schema.items())
-            }
+            {str(label): name for label, name in sorted(compartment_label_schema.items())}
             if compartment_label_schema is not None
             else None
         ),
@@ -162,13 +153,13 @@ def build_measurement_bundle(
     assert_same_physical_domain(
         geometry,
         vertebral_result.geometry,
-        reference_name="prepared CT",
-        candidate_name="vertebral-body labels",
+        reference_name="orientation-prepared CT",
+        candidate_name="canonical vertebral-body labels",
     )
     assert_same_physical_domain(
         geometry,
         body_surface.geometry,
-        reference_name="prepared CT",
+        reference_name="orientation-prepared CT",
         candidate_name="body-surface result",
     )
     extent_settings = settings["vertebral_extent"]
@@ -194,13 +185,10 @@ def build_measurement_bundle(
         orientation_changed=orientation_changed,
     )
     orientation = dict(orientation_provenance or {})
-    if (
-        "orientation_changed" in orientation
-        and bool(orientation["orientation_changed"]) != bool(orientation_changed)
+    if "orientation_changed" in orientation and bool(orientation["orientation_changed"]) != bool(
+        orientation_changed
     ):
-        raise ValueError(
-            "orientation_changed contradicts the supplied orientation provenance."
-        )
+        raise ValueError("orientation_changed contradicts the supplied orientation provenance.")
     slices["full_coverage_tolerance"] = full_coverage_tolerance
     circumference_qc = settings["qc"]["circumference_jump"]
     slices = annotate_longitudinal_circumference_qc(
@@ -255,16 +243,11 @@ def build_measurement_bundle(
                     "removed_voxel_fraction": extent.removed_voxel_fraction,
                 },
                 thresholds={
-                    "minimum_component_voxels": int(
-                        extent_settings["minimum_component_voxels"]
-                    ),
-                    "maximum_removed_fraction": float(
-                        extent_settings["maximum_removed_fraction"]
-                    ),
+                    "minimum_component_voxels": int(extent_settings["minimum_component_voxels"]),
+                    "maximum_removed_fraction": float(extent_settings["maximum_removed_fraction"]),
                 },
                 suggested_review_action=(
-                    "Review the vertebral-body mask and confirm truncation or "
-                    "segmentation failure."
+                    "Review the vertebral-body mask and confirm truncation or segmentation failure."
                 ),
             )
         )
@@ -361,9 +344,7 @@ def build_measurement_bundle(
             QCFlag(
                 code="body_surface_contour_invalid",
                 stage="measurement",
-                reason=(
-                    "A non-empty trunk mask did not yield a valid closed external contour."
-                ),
+                reason=("A non-empty trunk mask did not yield a valid closed external contour."),
                 observed={"slice_count": int(contour_failure.sum())},
                 suggested_review_action="Review the affected axial contour overlays.",
             )
@@ -378,12 +359,8 @@ def build_measurement_bundle(
                 observed={"slice_count": jump_count},
                 thresholds={
                     "maximum_gap_mm": float(circumference_qc["maximum_gap_mm"]),
-                    "minimum_absolute_jump_cm": float(
-                        circumference_qc["minimum_absolute_jump_cm"]
-                    ),
-                    "minimum_relative_jump": float(
-                        circumference_qc["minimum_relative_jump"]
-                    ),
+                    "minimum_absolute_jump_cm": float(circumference_qc["minimum_absolute_jump_cm"]),
+                    "minimum_relative_jump": float(circumference_qc["minimum_relative_jump"]),
                 },
             )
         )
@@ -395,8 +372,7 @@ def build_measurement_bundle(
                 stage="measurement",
                 severity=(
                     QCSeverity.INFO
-                    if summary["l3_200mm_slab_reason"]
-                    in {"outside_fov", "partial_fov"}
+                    if summary["l3_200mm_slab_reason"] in {"outside_fov", "partial_fov"}
                     else QCSeverity.WARNING
                 ),
                 reason="The complete L3-centered 200-mm slab could not be measured.",
@@ -421,9 +397,7 @@ def build_measurement_bundle(
         if bool(summary.get(f"{prefix}_valid", False)):
             continue
         reason = str(summary.get(f"{prefix}_reason") or "invalid_measurement")
-        coverage = summary.get(
-            f"{prefix}_search_valid_contour_coverage_fraction"
-        )
+        coverage = summary.get(f"{prefix}_search_valid_contour_coverage_fraction")
         coverage = None if pd.isna(coverage) else float(coverage)
         flags.append(
             QCFlag(
@@ -431,8 +405,7 @@ def build_measurement_bundle(
                 stage="measurement",
                 severity=(
                     QCSeverity.INFO
-                    if reason
-                    in {"missing_anchor", "outside_fov", "partial_fov"}
+                    if reason in {"missing_anchor", "outside_fov", "partial_fov"}
                     else QCSeverity.WARNING
                 ),
                 reason=description,
@@ -465,9 +438,7 @@ def build_measurement_bundle(
                     stage="measurement",
                     reason=description,
                     observed={
-                        "position_superior_mm": summary.get(
-                            f"{prefix}_position_superior_mm"
-                        ),
+                        "position_superior_mm": summary.get(f"{prefix}_position_superior_mm"),
                         "slice_id": summary.get(f"{prefix}_slice_id"),
                     },
                     suggested_review_action=(
@@ -476,13 +447,17 @@ def build_measurement_bundle(
                     ),
                 )
             )
-    if landmarks is not None and all(
-        landmark.valid
-        for landmark in (
-            landmarks.lowest_rib_inferior,
-            landmarks.iliac_crest_superior,
+    if (
+        landmarks is not None
+        and all(
+            landmark.valid
+            for landmark in (
+                landmarks.lowest_rib_inferior,
+                landmarks.iliac_crest_superior,
+            )
         )
-    ) and not bool(summary["ct_midwaist_circumference_valid"]):
+        and not bool(summary["ct_midwaist_circumference_valid"])
+    ):
         flags.append(
             QCFlag(
                 code="midwaist_measurement_unavailable",
@@ -493,9 +468,7 @@ def build_measurement_bundle(
             )
         )
     incomplete_territories = [
-        territory.anatomical_label
-        for territory in territories.values()
-        if not territory.complete
+        territory.anatomical_label for territory in territories.values() if not territory.complete
     ]
     if incomplete_territories:
         flags.append(
@@ -545,13 +518,15 @@ def build_measurement_bundle(
             "orientation": orientation,
             "measurement": {
                 "schema_version": MEASUREMENT_SCHEMA_VERSION,
-                "vertebral_territory_schema_version": (
-                    VERTEBRAL_TERRITORY_SCHEMA_VERSION
-                ),
+                "vertebral_territory_schema_version": (VERTEBRAL_TERRITORY_SCHEMA_VERSION),
                 "settings": dict(settings),
             },
             "tissue": {
                 "backend_id": tissue_backend_id,
+                "label_sha256": _array_digest(tissue_labels_zyx),
+                "label_schema": {
+                    str(label): name for label, name in sorted(tissue_label_schema.items())
+                },
                 "preprocessing": dict(tissue_preprocessing),
                 "compartment_source": (
                     "raw_model_labels"

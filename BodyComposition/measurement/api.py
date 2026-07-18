@@ -1,4 +1,4 @@
-"""Read-only convenience views over canonical measurement stage Parquet tables."""
+"""Read-only convenience views over canonical measurement Parquet tables."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from BodyComposition.measurement.contracts import (
     VERTEBRA_REQUIRED_COLUMNS,
     canonical_arrow_schema,
 )
-
 
 TABLE_NAMES = ("slices", "vertebrae", "summaries")
 IDENTITY_COLUMNS = ("schema_version", "run_id", "analysis_id", "case_id")

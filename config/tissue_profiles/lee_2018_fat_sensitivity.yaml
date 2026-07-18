@@ -3,7 +3,6 @@ tissue:
   hu_denoise:
     method: curvature_anisotropic_diffusion
     apply_to: [vat, sat]
-    filter_median: false
     anisotropic_diffusion:
       dimensionality: 2D
       iterations: 5

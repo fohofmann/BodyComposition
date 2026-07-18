@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import cv2
-from jsonschema import Draft202012Validator
 import numpy as np
 import pytest
 import SimpleITK as sitk
+from jsonschema import Draft202012Validator
 from skimage.transform import resize
 
 from BodyComposition.actions.orientation import AssessOrientation
@@ -26,13 +26,13 @@ from BodyComposition.orientation.ctdeeprot import (
     CHECKPOINT_URL,
     CODE_LICENSE,
     DEFAULT_CHECKPOINT_PATH,
-    CTDeepRotPrediction,
-    CTDeepRotPredictor,
     LPS_YXZ_REFERENCE_CLASS_INDEX,
     MODEL_CITATION_DOI,
-    ModelAssetError,
     REDISTRIBUTION_MODE,
     UPSTREAM_REPOSITORY,
+    CTDeepRotPrediction,
+    CTDeepRotPredictor,
+    ModelAssetError,
     model_asset_record,
     projection_feature_groups,
     sync_checkpoint,
@@ -47,10 +47,8 @@ from BodyComposition.orientation.rotations import (
     is_axial_half_turn,
     signed_permutation_matrix,
 )
-from BodyComposition.pipeline import PipelineAction, PipelineBuilder
-from BodyComposition.pipeline_registry import pipeline_registry
+from BodyComposition.pipeline import PipelineAction
 from BodyComposition.utils.nifti import NiftiDataContainer
-
 
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
@@ -171,7 +169,7 @@ def test_ctdeeprot_projection_preprocessing_matches_pinned_upstream_order():
 
     observed_groups = projection_feature_groups(data)
     assert len(expected_groups) == len(observed_groups)
-    for expected, observed in zip(expected_groups, observed_groups):
+    for expected, observed in zip(expected_groups, observed_groups, strict=True):
         observed_uint8 = np.rint((observed + 0.5) * 255.0).astype(np.uint8)
         assert np.array_equal(observed_uint8, expected)
 
@@ -684,14 +682,14 @@ def test_pipeline_action_replaces_only_repaired_input_and_persists_review(
     assert np.array_equal(source.data, source_pixels)
     assert memory["tmp/index"] is not source
     assert memory["tmp/index"].path == (
-        tmp_path / "workspace/orientation/case-001/corrected_input.nii.gz"
+        tmp_path / "workspace/orientation/corrected_input.nii.gz"
     )
     assert memory["tmp/orientation_result"].manual_review_required
     prepared = memory["tmp/prepared_image"]
     assert prepared.result is memory["tmp/orientation_result"]
     assert prepared.prepared_image.GetSize() == memory["tmp/index"].img.GetSize()
-    assert (tmp_path / "workspace/orientation/case-001/orientation_report.json").is_file()
-    assert (tmp_path / "workspace/orientation/case-001/orientation_review.png").is_file()
+    assert (tmp_path / "workspace/orientation/orientation_report.json").is_file()
+    assert (tmp_path / "workspace/orientation/orientation_review.png").is_file()
 
 
 def test_uncertain_readable_case_reaches_next_pipeline_action(
@@ -731,33 +729,45 @@ def test_uncertain_readable_case_reaches_next_pipeline_action(
     assert memory["tmp/orientation_result"].state is OrientationState.MISMATCH_UNCERTAIN
 
 
-def test_pipeline_builder_prepends_orientation_unless_disabled(
-    base_config,
-    monkeypatch,
+def test_orientation_action_receives_incomplete_dicom_header_provenance(
+    pipeline_stub,
+    container_factory,
+    tmp_path,
 ):
-    import torch
+    source = container_factory(
+        tmp_path / "attempt/input/converted_input.nii.gz",
+        sitk.GetArrayFromImage(_ct_image()),
+    )
+    action = AssessOrientation(pipeline_stub)
+    action._predictor = FakePredictor(identity_class_index())
+    memory = {
+        "id": "case-001",
+        "workspace": tmp_path / "workspace",
+        "tmp/index": source,
+        "tmp/input_summary": {
+            "input_format": "dicom",
+            "dicom": {
+                "image_orientation_patient_complete": False,
+                "image_position_patient_complete": True,
+            },
+        },
+    }
 
-    class NoOp(PipelineAction):
-        pass
+    action(memory)
 
-    monkeypatch.setitem(pipeline_registry, "OrientationTest", lambda pipeline: [NoOp(pipeline)])
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(torch, "set_num_threads", lambda value: None)
-    monkeypatch.setattr(torch, "set_num_interop_threads", lambda value: None)
+    result = memory["tmp/orientation_result"]
+    assert result.state is OrientationState.HEADER_UNCERTAIN
+    assert not result.orientation_changed
+    assert "ORIENTATION_HEADER_UNCERTAIN" in {flag.code for flag in result.review_flags}
 
-    enabled = PipelineBuilder("OrientationTest", deepcopy(base_config), timestamp=1)
-    assert isinstance(enabled.actions[0], AssessOrientation)
-    assert isinstance(enabled.actions[1], NoOp)
-    assert enabled.get_io()[1][:2] == [
-        "orientation/{caseid}/orientation_report.json",
-        "orientation/{caseid}/orientation_review.png",
+
+def test_orientation_action_uses_canonical_case_bundle_paths(pipeline_stub):
+    action = AssessOrientation(pipeline_stub)
+    assert action.io_persisted_outputs == [
+        "orientation/orientation_report.json",
+        "orientation/orientation_review.png",
     ]
-
-    disabled_config = deepcopy(base_config)
-    disabled_config["orientation"]["enabled"] = False
-    disabled = PipelineBuilder("OrientationTest", disabled_config, timestamp=1)
-    assert len(disabled.actions) == 1
-    assert isinstance(disabled.actions[0], NoOp)
+    assert action.corrected_name == "orientation/corrected_input.nii.gz"
 
 
 def test_checkpoint_verification_rejects_modified_assets(tmp_path):
@@ -775,7 +785,7 @@ def test_ctdeeprot_inference_never_downloads_missing_assets(tmp_path, monkeypatc
         raise AssertionError("inference attempted a network request")
 
     monkeypatch.setattr("requests.get", unexpected_request)
-    with pytest.raises(ModelAssetError, match="bodycomposition_download_models"):
+    with pytest.raises(ModelAssetError, match="bodycomposition models sync"):
         CTDeepRotPredictor(tmp_path / "missing" / "net2d.pt")
 
 
@@ -842,27 +852,26 @@ def test_ctdeeprot_asset_record_is_complete_and_versioned():
     assert str(DEFAULT_CHECKPOINT_PATH.parent).endswith(asset["upstream_commit"])
 
 
-def test_ctdeeprot_sync_cli_does_not_require_repository_config(tmp_path, monkeypatch):
-    from BodyComposition.bin import pre_download_models
-    from BodyComposition.orientation import ctdeeprot
+def test_ctdeeprot_sync_cli_uses_the_unified_model_service(tmp_path, monkeypatch, capsys):
+    from BodyComposition import cli
+    from BodyComposition.model_manager import ModelStatus
 
-    synchronized = []
+    selected = []
 
-    def fake_sync(path):
-        synchronized.append(path)
-        return tmp_path / "models" / "net2d.pt"
+    def fake_sync(config, model_ids):
+        selected.extend(model_ids)
+        return (
+            ModelStatus(
+                model_id="ctdeeprot_2d_v1",
+                ready=True,
+                model_root=tmp_path,
+                errors=(),
+                checked_files={"net2d.pt": "a" * 64},
+                asset=model_asset_record(),
+            ),
+        )
 
-    def unexpected_config(*args, **kwargs):
-        raise AssertionError("single-model synchronization loaded repository config")
-
-    monkeypatch.setattr(ctdeeprot, "sync_checkpoint", fake_sync)
-    monkeypatch.setattr(pre_download_models, "update_config", unexpected_config)
-    monkeypatch.setattr(
-        "sys.argv",
-        ["bodycomposition_download_models", "--model", "CTDeepRot-2D"],
-    )
-    monkeypatch.chdir(tmp_path)
-
-    pre_download_models.main()
-
-    assert synchronized == [DEFAULT_CHECKPOINT_PATH]
+    monkeypatch.setattr(cli, "sync_models", fake_sync)
+    assert cli.main(["models", "sync", "--model", "ctdeeprot_2d_v1", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["ready"]
+    assert selected == ["ctdeeprot_2d_v1"]

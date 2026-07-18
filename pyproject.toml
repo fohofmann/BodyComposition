@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools==83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "BodyComposition"
-version = "0.3.0"
-description = "Pipeline for the segmentation of muscle and adipose tissue with postprocessing for mapping to vertebral levels and calculation of cross-sectional areas."
+version = "1.0.0rc1"
+description = "Reproducible CT body-composition research pipeline with orientation, vertebral, measurement, QC, and reporting stages."
 authors = [
     { name = "Felix Hofmann", email = "felix.hofmann@med.lmu.de" }
 ]
@@ -32,15 +32,14 @@ dependencies = [
     "pypdf>=6,<7",
     "reportlab>=4.4,<5",
     "psutil",
-    "pydicom",
-    "requests == 2.27.1",
+    "PyYAML>=6,<7",
+    "requests>=2.32.4,<3",
+    "urllib3>=2.7,<3",
     "scipy",
     "scikit-image",
     "SimpleITK",
     "SPINEPS==2.0.0",
     "TPTBox==0.7.5",
-    "tqdm",
-    "nnunet",
     "nnunetv2",
     "torch",
     "torchvision",
@@ -49,8 +48,15 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+    "build>=1.2,<2",
+    "mypy>=1.17,<2",
     "pdfplumber>=0.11,<0.12",
-    "pytest>=8,<10"
+    "pytest>=8,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.12,<1"
+]
+release = [
+    "pip-audit==2.10.1"
 ]
 
 [project.urls]
@@ -59,12 +65,7 @@ Source = "https://github.com/fohofmann/BodyComposition"
 Issues = "https://github.com/fohofmann/BodyComposition/issues"
 
 [project.scripts]
-bodycomposition = "BodyComposition.bin.run_batch:main"
-bodycomposition_download_models = "BodyComposition.bin.pre_download_models:main"
-bodycomposition_measurements = "BodyComposition.bin.measurement_view:main"
-bodycomposition_reports = "BodyComposition.bin.reporting:main"
-bodycomposition_segmentation = "BodyComposition.bin.run_segmentation_only:main"
-bodycomposition_transform_dcm_to_nifti = "BodyComposition.bin.pre_transform_dcm_to_nifti:main"
+bodycomposition = "BodyComposition.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -72,11 +73,53 @@ include = ["BodyComposition*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-BodyComposition = ["schemas/*.json", "utils/licenses.yaml"]
+BodyComposition = ["schemas/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "model_integration: requires pinned model assets and a controlled GPU environment",
     "real_world: runs the default models on a checksum-pinned public CT in a controlled GPU environment"
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+check_untyped_defs = true
+no_implicit_optional = true
+follow_imports = "skip"
+disable_error_code = ["import-untyped"]
+files = [
+    "BodyComposition/config.py",
+    "BodyComposition/results.py",
+    "BodyComposition/provenance.py",
+    "BodyComposition/dicom.py",
+    "BodyComposition/service.py",
+    "BodyComposition/model_manager.py",
+    "BodyComposition/cli.py",
+]
+
+[[tool.mypy.overrides]]
+module = ["SimpleITK", "pandas", "yaml"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+# Measure the complete package. Model/GPU execution remains a separate test
+# lane, but package-owned adapters and failure paths stay in this denominator.
+branch = true
+source = ["BodyComposition"]
+
+[tool.coverage.report]
+# coverage.py applies this floor to combined statement and branch opportunities.
+fail_under = 80
+precision = 1
+show_missing = true

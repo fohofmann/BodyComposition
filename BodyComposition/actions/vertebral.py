@@ -29,12 +29,11 @@ from BodyComposition.vertebral.spineps_backend import (
 )
 from BodyComposition.vertebral.spineps_manifest import SPINEPS_BACKEND_ID
 
-
-SPINEPS_BODY_MASK = "masks/{caseid}_vertebral-bodies.nii.gz"
-SPINEPS_SEMANTIC_MASK = "masks/{caseid}_spineps-semantic.nii.gz"
-SPINEPS_WHOLE_MASK = "masks/{caseid}_spineps-vertebrae.nii.gz"
-SPINEPS_RESULT_JSON = "qc/{caseid}_vertebral-result.json"
-SPINEPS_REVIEW_PNG = "qc/{caseid}_spine-review.png"
+SPINEPS_BODY_MASK = "masks/vertebral_bodies.nii.gz"
+SPINEPS_SEMANTIC_MASK = "masks/spine_semantic.nii.gz"
+SPINEPS_WHOLE_MASK = "masks/vertebra_labels.nii.gz"
+SPINEPS_RESULT_JSON = "qc/vertebral_result.json"
+SPINEPS_REVIEW_PNG = "qc/spine_review.png"
 
 
 def _atomic_copy(source: Path, destination: Path) -> Path:
@@ -62,7 +61,8 @@ def _geometry_from_sitk(image: sitk.Image) -> ImageGeometry:
 
     if image.GetDimension() != 3:
         raise GeometryError(
-            f"The prepared image must be three-dimensional, got {image.GetDimension()}D."
+            "The orientation-prepared image must be three-dimensional, "
+            f"got {image.GetDimension()}D."
         )
     return ImageGeometry(
         size_xyz=tuple(int(value) for value in image.GetSize()),
@@ -73,16 +73,14 @@ def _geometry_from_sitk(image: sitk.Image) -> ImageGeometry:
 
 
 class SegmSpinepsVeridah(PipelineAction):
-    """Run the default pinned backend on preparation stage's immutable prepared image."""
-
-    licenses = ["spineps", "veridah", "tptbox", "vibeseg", "nnunet"]
+    """Run the default pinned backend on the immutable orientation-prepared image."""
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
         if not self.config["orientation"]["enabled"]:
             raise ValueError(
                 "spineps_veridah_ct_v1 requires orientation.enabled=true so it receives "
-                "the prepared-image contract."
+                "the orientation-prepared image contract."
             )
         settings = self.config["vertebrae"]["spineps"]
         self.adapter = SpinepsVeridahAdapter(
@@ -108,6 +106,12 @@ class SegmSpinepsVeridah(PipelineAction):
             SPINEPS_REVIEW_PNG,
         ]
 
+    def set_low_memory_mode(self, enabled: bool = True) -> None:
+        self.adapter.set_low_memory_mode(enabled)
+
+    def release_model(self) -> None:
+        self.adapter.release_models()
+
     def _path(self, memory: dict, template: str) -> Path:
         return Path(memory["workspace"]) / template.format(caseid=memory["id"])
 
@@ -128,7 +132,7 @@ class SegmSpinepsVeridah(PipelineAction):
         if not self.save_native_outputs:
             return {}
         output: dict[str, Path] = {}
-        root = Path(memory["workspace"]) / "native" / "spineps" / str(memory["id"])
+        root = Path(memory["workspace"]) / "native" / "spineps"
         for name, source in sorted(result.native_outputs.items()):
             source_path = Path(source)
             if not source_path.is_file():
@@ -231,7 +235,7 @@ class SegmSpinepsVeridah(PipelineAction):
             assert_same_physical_domain(
                 prepared_geometry,
                 body.geometry,
-                reference_name="prepared CT",
+                reference_name="orientation-prepared CT",
                 candidate_name="reused vertebral-body mask",
             )
             result = adapt_spineps_sitk_outputs(
@@ -279,11 +283,7 @@ class SegmSpinepsVeridah(PipelineAction):
         reused = self._reuse_identical(memory)
         if reused is not None:
             return
-        attempt_parent = (
-            Path(memory["workspace"])
-            / ".attempts"
-            / str(memory["id"])
-        )
+        attempt_parent = Path(memory["workspace"]) / ".stage"
         attempt_parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="spineps-", dir=attempt_parent) as temporary:
             result = self.adapter.run(

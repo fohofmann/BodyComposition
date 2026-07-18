@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: >-
+  Cite BodyComposition and every enabled model listed in the run provenance and
+  THIRD_PARTY_NOTICES.md.
+title: BodyComposition
+type: software
+version: 1.0.0rc1
+authors:
+  - family-names: Hofmann
+    given-names: Felix
+license: Apache-2.0
+repository-code: https://github.com/fohofmann/BodyComposition
+url: https://github.com/fohofmann/BodyComposition
+keywords:
+  - computed tomography
+  - body composition
+  - sarcopenia
+  - medical imaging
+abstract: >-
+  A reproducible research pipeline for CT orientation assessment, vertebral-body
+  localization, tissue segmentation, native-physical measurements, quality
+  control, and optional reports.

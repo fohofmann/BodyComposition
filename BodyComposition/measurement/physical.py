@@ -12,7 +12,6 @@ from scipy import ndimage
 
 from BodyComposition.utils.geometry import ImageGeometry
 
-
 SUPERIOR_LPS = np.asarray((0.0, 0.0, 1.0), dtype=float)
 MIN_SUPERIOR_COSINE = 1e-3
 

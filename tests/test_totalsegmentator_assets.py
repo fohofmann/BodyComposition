@@ -6,8 +6,8 @@ import zipfile
 
 import pytest
 
-from BodyComposition.bin.pre_download_models import definition_sources
 from BodyComposition.measurement import totalsegmentator_assets as assets
+from BodyComposition.model_manager import model_asset
 
 
 @pytest.fixture(autouse=True)
@@ -157,9 +157,11 @@ def test_asset_records_cover_the_shared_model_contract():
         assert all(len(item["sha256"]) == 64 for item in record["expected_files"])
 
 
-def test_measurement_model_titles_route_to_the_pinned_sync_adapter():
-    assert definition_sources["TotalSegmentator-body"]["measurement_task"] == "bodytrunk"
+def test_release_model_ids_route_to_the_pinned_sync_adapter():
     assert (
-        definition_sources["TotalSegmentator-total-fast"]["measurement_task"]
-        == "body_landmarks"
+        model_asset("totalsegmentator_body_task299_v1")["task_id"] == 299
+    )
+    assert (
+        model_asset("totalsegmentator_total_task297_landmarks_v1")["task_id"]
+        == 297
     )

@@ -19,7 +19,6 @@ from BodyComposition.measurement.contracts import (
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import ExecutionStatus, VertebralResult
 
-
 IDENTITY = MeasurementIdentity("case", "run", "analysis")
 
 
