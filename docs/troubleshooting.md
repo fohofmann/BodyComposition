@@ -18,11 +18,13 @@ Run `models verify` to identify exact missing, size-mismatched, or
 hash-mismatched files. Then run the explicit `models sync` command with a
 writable external cache and network access. Inference itself will not download.
 
-An existing invalid bundle is intentionally not repaired in place. Move it to
-a quarantine location, rerun sync, and retain the old copy until the cause is
-understood. For the current default tissue model,
-`upstream_revision_unresolved` is a publication blocker, not a corrupt-cache
-message; see [models.md](models.md).
+Inference and `models verify` never alter an invalid bundle. An explicit
+`models sync` stages the pinned replacement separately, verifies every required
+file, and only then promotes it atomically. Preserve the old bundle separately
+before synchronization when it is needed for investigation.
+`upstream_revision_unresolved` means a model definition lacks an immutable
+public source and is a publication blocker rather than a corrupt-cache message;
+released model definitions must not report it. See [models.md](models.md).
 
 ## Dirty source tree
 

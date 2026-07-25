@@ -47,13 +47,13 @@ notes/QC cards complete the page.
 
 `spine_profile_v2` retains the sagittal and axial views and adds an unsmoothed
 stacked tissue-area profile aligned to the same physical superior-coordinate
-axis. It stacks mutually exclusive SM, IMAT, SAT, aVAT, and tVAT when present;
-total VAT is never stacked together with aVAT/tVAT. Trunk area is an unfilled
-reference curve. Its fixed left-to-right order is sagittal spine, tissue-area
-profile, vertebral summary, and axial example. The adjacent spine and profile
-share one physical superior-coordinate scale. The table uses a regular
-categorical grid with equal-height rows because anatomical position is already
-shown by the labeled spine and must not make the numerical table irregular.
+axis. It stacks conventional skeletal-muscle tissue, SAT, aVAT, and tVAT;
+trunk area is an unfilled reference curve. Its fixed left-to-right order is sagittal
+spine, tissue-area profile, vertebral summary, and axial example. The adjacent
+spine and profile share one physical superior-coordinate scale. The table uses
+a regular categorical grid with equal-height rows because anatomical position
+is already shown by the labeled spine and must not make the numerical table
+irregular.
 
 Both layouts:
 
@@ -64,11 +64,14 @@ Both layouts:
 - retain missing/invalid values as `NA` with a marker; and
 - store unrounded audit values in the report manifest.
 
-The axial panel uses the same processed tissue-label mask as the measurement stage. The report
-verifies its digest before rendering so the image and displayed measurements
-cannot come from different analyses. L3 is preferred. If L3 is unavailable,
-the selected nearest native vertebral level and the fallback are stated on the
-page and in the report manifest; no anatomical level is inferred silently.
+The axial panel uses the stable processed tissue-label view generated in the
+same analysis. Scientific measurements remain derived from the separate raw
+compartment mask. The measurement provenance records both digests, and the
+report verifies the processed-view digest before rendering so the overlay and
+displayed measurements cannot come from different analyses. L3 is preferred.
+If L3 is unavailable, the selected nearest native vertebral level and the
+fallback are stated on the page and in the report manifest; no anatomical
+level is inferred silently.
 
 Technical metadata is deliberately allowlisted. It may include the analysis
 date, input format, package/pipeline version, runtime backend and hardware,

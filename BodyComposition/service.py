@@ -1392,7 +1392,13 @@ class PipelineService:
             **dict(provenance),
             "execution": {
                 "strategy": (
-                    "single_segmentation_bundle" if low_memory_mode else "persistent_models"
+                    "single_segmentation_bundle"
+                    if low_memory_mode
+                    else getattr(
+                        self._pipeline,
+                        "execution_strategy",
+                        "persistent_models",
+                    )
                 ),
                 "device": str(getattr(self._pipeline, "device", "not_initialized")),
                 "hardware_profile_id": hardware_profile_id(hardware_profile),

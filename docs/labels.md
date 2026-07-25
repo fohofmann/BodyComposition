@@ -25,7 +25,7 @@ and three-bin summary contract as other supported levels.
 ## Tissue compartments
 
 `masks/tissue_compartments.nii.gz` is the untouched model-predicted anatomical
-compartment map:
+compartment map. It contains native labels 1–7 only:
 
 | Label | Name |
 | ---: | --- |
@@ -36,12 +36,19 @@ compartment map:
 | 5 | tVAT |
 | 6 | HEART |
 | 7 | LUNG |
-| 8 | IMAT (learned compartment) |
+
+There is no learned label 8. Native label 1 is the complete muscle
+compartment and may include macroscopic fat-attenuation regions.
 
 Native aVAT and tVAT remain separate. `total_vat` is a derived union in the
 tables and does not overwrite either source label.
 
-`masks/tissue_labels.nii.gz` is the configured HU/cleanup compatibility mask.
+`masks/tissue_labels.nii.gz` is the default consensus visualization mask. It
+uses the same labels 1–7, retaining only the conventional -29-to-150 HU part
+of SM and -190-to--30 HU parts of SAT/aVAT/tVAT. It never introduces label 8.
+Optional tissue definitions add named table/signature measurements but do not
+change this stable single-label artifact.
+
 Canonical derived tissue classes are nevertheless calculated from the raw
 compartment map and untouched prepared CT so excluded voxels remain auditable.
 See [tissue_definitions.md](tissue_definitions.md).

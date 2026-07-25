@@ -20,7 +20,8 @@ UPSTREAM_PROJECT = "TotalSegmentator"
 UPSTREAM_REPOSITORY = "https://github.com/wasserth/TotalSegmentator"
 UPSTREAM_RELEASE = "v2.0.0-weights"
 UPSTREAM_RELEASE_COMMIT = "d0eb302278588eade4dcc33093d141fe57a3ca90"
-UPSTREAM_VERSION = "2.15.0"
+UPSTREAM_VERSION = UPSTREAM_RELEASE
+NNUNET_VERSION = "2.5.2"
 CITATION_DOI = "https://doi.org/10.1148/ryai.230024"
 CODE_LICENSE = "Apache-2.0"
 WEIGHT_LICENSE_STATUS = (
@@ -216,11 +217,46 @@ def model_asset_record(task: str) -> dict:
         "redistribution_mode": REDISTRIBUTION_MODE,
         "compatibility": {
             "BodyComposition": ">=0.3.0",
-            "TotalSegmentator": f"=={UPSTREAM_VERSION}",
+            "nnUNetv2": f"=={NNUNET_VERSION}",
             "storage": "nnUNet_results_dataset_directory",
         },
         "validation_set_version": VALIDATION_SET_VERSION,
     }
+
+
+def _default_weights_root() -> Path:
+    configured = os.environ.get("BODYCOMPOSITION_MODEL_ROOT")
+    if configured:
+        return Path(configured)
+    return Path.home() / ".cache" / "bodycomposition" / "models"
+
+
+def measurement_model_directory(
+    task: str,
+    weights_root: str | Path | None = None,
+) -> Path:
+    """Return the exact nnUNet trained-model folder for a pinned task."""
+
+    if task not in MEASUREMENT_MODEL_MANIFEST:
+        raise ValueError(
+            f"No measurement-support TotalSegmentator manifest exists for task {task!r}."
+        )
+    manifest = MEASUREMENT_MODEL_MANIFEST[task]
+    trainer_directories = {
+        PurePosixPath(relative).parts[0]
+        for relative in manifest["files"]
+        if PurePosixPath(relative).parts
+    }
+    if len(trainer_directories) != 1:
+        raise TotalSegmentatorAssetError(
+            f"Pinned task {task!r} does not resolve to one nnUNet trainer directory."
+        )
+    root = Path(weights_root) if weights_root is not None else _default_weights_root()
+    return (
+        root.expanduser().resolve()
+        / str(manifest["directory"])
+        / trainer_directories.pop()
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -247,6 +283,27 @@ def _install_manifest_status(task: str, model_directory: Path) -> tuple[bool, st
     if payload != expected:
         return False, "install_manifest_mismatch"
     return True, None
+
+
+def _write_install_manifest(task: str, model_directory: Path) -> None:
+    """Atomically record the current adapter metadata for verified model bytes."""
+
+    descriptor = {"schema_version": 1, "asset": model_asset_record(task)}
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{ASSET_MANIFEST_NAME}.",
+        suffix=".partial",
+        dir=model_directory,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+            json.dump(descriptor, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, model_directory / ASSET_MANIFEST_NAME)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 @lru_cache(maxsize=16)
@@ -294,11 +351,11 @@ def check_measurement_model(
 ) -> TotalSegmentatorAssetReport:
     if task not in MEASUREMENT_MODEL_MANIFEST:
         raise ValueError(f"No measurement-support TotalSegmentator manifest exists for task {task!r}.")
-    if weights_root is None:
-        from totalsegmentator.config import get_weights_dir
-
-        weights_root = get_weights_dir()
-    root = Path(weights_root).expanduser().resolve()
+    root = (
+        Path(weights_root)
+        if weights_root is not None
+        else _default_weights_root()
+    ).expanduser().resolve()
     manifest = MEASUREMENT_MODEL_MANIFEST[task]
     model_directory = root / manifest["directory"]
     fingerprints: list[tuple[str, int, int, int]] = []
@@ -333,6 +390,45 @@ def require_measurement_model(
         f"Pinned TotalSegmentator task {report.task_id} is not ready in the mounted model "
         f"directory ({details}). Run `{command}` before inference."
     )
+
+
+def measurement_label_schema(
+    task: str,
+    weights_root: str | Path | None = None,
+) -> dict[int, str]:
+    """Read the verified upstream nnUNet label schema as label-to-name."""
+
+    require_measurement_model(task, weights_root)
+    dataset_path = measurement_model_directory(task, weights_root) / "dataset.json"
+    try:
+        payload = json.loads(dataset_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise TotalSegmentatorAssetError(
+            f"Unable to read verified label metadata for task {task!r}."
+        ) from error
+    labels = payload.get("labels")
+    if not isinstance(labels, Mapping):
+        raise TotalSegmentatorAssetError(
+            f"Pinned task {task!r} dataset.json has no label mapping."
+        )
+    schema: dict[int, str] = {}
+    for name, value in labels.items():
+        if (
+            not isinstance(name, str)
+            or isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value in schema
+        ):
+            raise TotalSegmentatorAssetError(
+                f"Pinned task {task!r} contains an invalid or duplicate label."
+            )
+        schema[value] = name
+    if not schema or schema.get(0) != "background":
+        raise TotalSegmentatorAssetError(
+            f"Pinned task {task!r} has no canonical background label."
+        )
+    return schema
 
 
 def _verify_archive(path: Path, manifest: Mapping[str, object]) -> None:
@@ -450,11 +546,18 @@ def sync_measurement_model(
     if existing.ready:
         return existing
 
-    if weights_root is None:
-        from totalsegmentator.config import get_weights_dir
-
-        weights_root = get_weights_dir()
-    root = Path(weights_root).expanduser().resolve()
+    root = (
+        Path(weights_root)
+        if weights_root is not None
+        else _default_weights_root()
+    ).expanduser().resolve()
+    metadata_errors = {"install_manifest_mismatch", "invalid_install_manifest"}
+    if existing.errors and set(existing.errors) <= metadata_errors:
+        _write_install_manifest(task, existing.model_directory)
+        _check_cached.cache_clear()
+        repaired = check_measurement_model(task, root)
+        if repaired.ready:
+            return repaired
     root.mkdir(parents=True, exist_ok=True)
     manifest = MEASUREMENT_MODEL_MANIFEST[task]
     archive_name = manifest.get("archive_name")
@@ -503,15 +606,7 @@ def sync_measurement_model(
                 "Extracted model failed its pinned file checks: "
                 + ", ".join(staged_report.errors)
             )
-        (staged / ASSET_MANIFEST_NAME).write_text(
-            json.dumps(
-                {"schema_version": 1, "asset": model_asset_record(task)},
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        _write_install_manifest(task, staged)
 
         previous = temporary_path / "previous"
         promoted = False

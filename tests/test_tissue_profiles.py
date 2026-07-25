@@ -1,30 +1,85 @@
-from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
 
-from BodyComposition.config import PipelineConfig
+from BodyComposition.config import (
+    CANONICAL_TISSUE_DEFINITIONS,
+    CONSENSUS_TISSUE_PROFILE_ID,
+    PipelineConfig,
+)
 from BodyComposition.measurement.aggregation import aggregate_physical_range
-from BodyComposition.measurement.contracts import BodySurfaceResult, MeasurementIdentity
+from BodyComposition.measurement.contracts import (
+    BodySurfaceResult,
+    MeasurementIdentity,
+)
 from BodyComposition.measurement.slices import calculate_canonical_slice_measurements
 from BodyComposition.measurement.tissues import derive_configured_tissue_masks
-from BodyComposition.tissue import cleanup_tissue_mask, prepare_classification_images
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.utils.masks import fill_small_holes, remove_small_objects
 
 
-def test_every_shipped_tissue_profile_is_a_valid_override():
+def test_every_shipped_tissue_profile_is_a_valid_downstream_override():
     profiles = sorted(Path("config/tissue_profiles").glob("*.yaml"))
     assert profiles
     profile_ids = set()
     for profile in profiles:
         override = yaml.safe_load(profile.read_text(encoding="utf-8"))
         config = PipelineConfig.model_validate(override)
-        profile_id = config.normalized()["tissue"]["profile_id"]
+        normalized = config.normalized()
+        profile_id = normalized["measurements"]["tissue_profile_id"]
         assert profile_id not in profile_ids
         profile_ids.add(profile_id)
+        assert normalized["tissue"] == {
+            "backend": "bodycomposition_resenc_l_v1"
+        }
+        for name, definition in CANONICAL_TISSUE_DEFINITIONS.items():
+            assert normalized["measurements"]["tissue_definitions"][name] == definition
+
+
+def test_default_is_the_consensus_profile():
+    default = PipelineConfig.model_validate({}).normalized()
+
+    assert (
+        default["measurements"]["tissue_profile_id"]
+        == CONSENSUS_TISSUE_PROFILE_ID
+    )
+
+
+def test_native_and_consensus_visualization_label_sets_are_stable(base_config):
+    expected = {
+        1: "SM",
+        2: "BONE",
+        3: "SAT",
+        4: "aVAT",
+        5: "tVAT",
+        6: "HEART",
+        7: "LUNG",
+    }
+    assert base_config["LBL_TISSUE_COMPARTMENTS"] == expected
+    assert base_config["LBL_TISSUE"] == expected
+
+    for profile in Path("config/tissue_profiles").glob("*.yaml"):
+        runtime = PipelineConfig.load(profile).to_runtime_dict()
+        assert runtime["LBL_TISSUE_COMPARTMENTS"] == expected
+        assert runtime["LBL_TISSUE"] == expected
+
+
+def test_unknown_label_is_rejected_as_a_model_native_compartment(base_config):
+    image = np.full((1, 1, 1), -100, dtype=np.int16)
+    invalid_compartments = np.full((1, 1, 1), 8, dtype=np.uint8)
+
+    with pytest.raises(
+        ValueError,
+        match="outside the model-native schema: \\[8\\]",
+    ):
+        derive_configured_tissue_masks(
+            image,
+            invalid_compartments,
+            base_config["LBL_TISSUE_COMPARTMENTS"],
+            base_config["measurements"]["tissue_definitions"],
+        )
 
 
 def test_pixel_component_threshold_and_connectivity_are_reproducible():
@@ -59,7 +114,7 @@ def test_hole_filling_is_bounded_and_does_not_fill_exterior_background():
     mask = np.zeros((1, 7, 7), dtype=bool)
     mask[0, 1:6, 1:6] = True
     mask[0, 3, 3] = False
-    mask[0, 1, 3] = False  # connects to exterior through the top background
+    mask[0, 1, 3] = False
 
     fill_small_holes(
         mask,
@@ -74,63 +129,78 @@ def test_hole_filling_is_bounded_and_does_not_fill_exterior_background():
     assert not mask[0, 1, 3]
 
 
-def test_cleanup_never_fills_outside_anatomical_support(base_config):
-    support = np.zeros((1, 7, 7), dtype=bool)
-    support[0, 1:6, 1:6] = True
-    support[0, 3, 3] = False
-    mask = support.copy()
-    settings = deepcopy(base_config["tissue"]["imat"])
-    settings.update(
-        {
-            "filter_size": False,
-            "fill_holes": True,
-            "fill_holes_version": "2D",
-            "fill_holes_2D": 2,
-            "fill_holes_unit": "voxel",
-            "fill_holes_connectivity": 8,
+def test_definition_cleanup_never_fills_outside_anatomical_support():
+    image = np.full((1, 7, 7), -100, dtype=np.int16)
+    support = np.zeros((1, 7, 7), dtype=np.uint8)
+    support[0, 1:6, 1:6] = 1
+    support[0, 3, 3] = 0
+    definitions = {
+        "test_hole_fill": {
+            "enabled": True,
+            "source_labels": ["SM"],
+            "hu_range": [-190, -30],
+            "cleanup": {
+                "fill_small_holes": {
+                    "dimensionality": "2D",
+                    "threshold": 2,
+                    "unit": "voxel",
+                    "connectivity": 8,
+                }
+            },
         }
-    )
+    }
 
-    cleanup_tissue_mask(
-        mask,
-        settings,
-        (1.0, 1.0, 2.0),
-        support_mask=support,
-    )
+    mask = derive_configured_tissue_masks(
+        image,
+        support,
+        {1: "SM"},
+        definitions,
+        spacing_xyz=(1.0, 1.0, 2.0),
+    )["test_hole_fill"]
 
     assert not mask[0, 3, 3]
-    assert np.all(mask <= support)
+    assert np.all(mask <= (support == 1))
 
 
-@pytest.mark.parametrize("method", ["adaptive_median", "curvature_anisotropic_diffusion"])
-def test_optional_noise_methods_are_selectable_without_mutating_raw_hu(
-    base_config,
-    method,
+@pytest.mark.parametrize(
+    "profile_name",
+    [
+        "boa_median_3x3.yaml",
+        "ahmad_2023_adaptive_median_sensitivity.yaml",
+        "lee_2018_fat_sensitivity.yaml",
+    ],
+)
+def test_profile_preprocessing_is_downstream_and_does_not_mutate_raw_ct(
+    profile_name,
 ):
-    settings = deepcopy(base_config["tissue"]["hu_denoise"])
-    settings.update(
-        {
-            "method": method,
-            "apply_to": ["vat"],
-        }
-    )
+    config = PipelineConfig.load(
+        Path("config/tissue_profiles") / profile_name
+    ).to_runtime_dict()
     image = np.zeros((1, 9, 9), dtype=np.int16)
     image[0, 4, 4] = 500
     original = image.copy()
+    compartments = np.ones(image.shape, dtype=np.uint8)
 
-    classified = prepare_classification_images(
-        image,
-        (0.8, 0.8, 3.0),
-        settings,
-    )
+    definitions = {
+        name: definition
+        for name, definition in config["measurements"]["tissue_definitions"].items()
+        if "preprocessing" in definition
+        and "SM" in definition["source_labels"]
+    }
+    if definitions:
+        derived = derive_configured_tissue_masks(
+            image,
+            compartments,
+            {1: "SM"},
+            definitions,
+            spacing_xyz=(0.8, 0.8, 3.0),
+        )
+        assert all(mask.shape == image.shape for mask in derived.values())
 
     assert np.array_equal(image, original)
-    assert np.shares_memory(classified["sm"], image)
-    assert classified["vat"].shape == image.shape
-    assert np.isfinite(classified["vat"]).all()
 
 
-def test_default_phenotypes_are_derived_from_raw_compartments_and_raw_hu(base_config):
+def test_consensus_phenotypes_use_raw_compartments_and_raw_hu(base_config):
     shape = (1, 10, 10)
     geometry = ImageGeometry(
         size_xyz=tuple(reversed(shape)),
@@ -140,14 +210,17 @@ def test_default_phenotypes_are_derived_from_raw_compartments_and_raw_hu(base_co
     )
     image = np.zeros(shape, dtype=np.int16)
     compartments = np.zeros(shape, dtype=np.uint8)
-    postprocessed = np.zeros(shape, dtype=np.uint8)
 
-    muscle_points = [(3, 2, -100), (3, 3, 0), (3, 4, 40), (3, 5, 160)]
+    muscle_points = [
+        (3, 2, -100),
+        (3, 3, 0),
+        (3, 4, 40),
+        (3, 5, 160),
+        (4, 2, -80),
+    ]
     for y, x, hu in muscle_points:
         compartments[0, y, x] = 1
         image[0, y, x] = hu
-    compartments[0, 4, 2] = 8
-    image[0, 4, 2] = -80
     compartments[0, 5, 2] = 3
     image[0, 5, 2] = -100
     compartments[0, 6, 2:4] = 4
@@ -156,12 +229,6 @@ def test_default_phenotypes_are_derived_from_raw_compartments_and_raw_hu(base_co
     compartments[0, 7, 2:4] = 2
     image[0, 7, 2] = 200
     image[0, 7, 3] = 100
-
-    postprocessed[0, 3, 2] = 8
-    postprocessed[0, 3, 3:5] = 1
-    postprocessed[0, 4, 2] = 8
-    postprocessed[0, 5, 2] = 3
-    postprocessed[0, 6, 2:4] = 4
 
     body = np.ones(shape, dtype=bool)
     trunk = np.zeros(shape, dtype=bool)
@@ -174,39 +241,55 @@ def test_default_phenotypes_are_derived_from_raw_compartments_and_raw_hu(base_co
     )
     table = calculate_canonical_slice_measurements(
         image,
-        postprocessed,
+        compartments,
         geometry,
-        base_config["LBL_TISSUE"],
+        base_config["LBL_TISSUE_COMPARTMENTS"],
         body_surface,
         MeasurementIdentity("case", "run", "analysis"),
         tissue_backend_id="synthetic",
         compartment_labels_zyx=compartments,
-        compartment_label_schema=base_config["LBL_TISSUE"],
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
         tissue_definitions=base_config["measurements"]["tissue_definitions"],
     )
     row = table.iloc[0]
 
-    assert row["muscle_compartment_voxel_count"] == 5
-    assert row["learned_imat_voxel_count"] == 1
-    assert row["whole_bone_anatomical_voxel_count"] == 2
-    assert row["bone_tissue_hu_152_1000_voxel_count"] == 1
+    assert row["sm_voxel_count"] == 5
+    assert row["bone_voxel_count"] == 2
     assert row["skeletal_muscle_tissue_hu_m29_150_voxel_count"] == 2
-    assert row["lama_hu_m29_29_voxel_count"] == 1
-    assert row["nama_hu_30_150_voxel_count"] == 1
-    assert row["imat_ct_hu_m190_m30_voxel_count"] == 2
+    assert row["sat_total_hu_m190_m30_voxel_count"] == 1
+    assert row["avat_hu_m190_m30_voxel_count"] == 2
+    assert row["tvat_hu_m190_m30_voxel_count"] == 0
     assert row["vat_total_hu_m190_m30_voxel_count"] == 2
-    assert row["vat_total_hu_m150_m50_voxel_count"] == 1
-    assert row["muscle_compartment_mean_hu"] == pytest.approx(4.0)
-    assert row["lama_fraction_of_skeletal_muscle_tissue_hu_m29_150"] == pytest.approx(0.5)
-    assert row["imat_fraction_of_sm_plus_imat_hu_m190_m30"] == pytest.approx(0.5)
+    assert row["sm_mean_hu"] == pytest.approx(4.0)
+    assert "imat_hu_m190_m30_voxel_count" not in table
+    assert "bone_tissue_hu_152_1000_voxel_count" not in table
+    assert "vat_total_hu_m150_m50_voxel_count" not in table
 
     aggregate = aggregate_physical_range(
         table,
         float(table["slice_slab_inferior_mm"].iloc[0]),
         float(table["slice_slab_superior_mm"].iloc[0]),
     )
-    assert aggregate["lama_fraction_of_skeletal_muscle_tissue_hu_m29_150"] == pytest.approx(0.5)
     assert aggregate["vat_to_sat_ratio_hu_m190_m30"] == pytest.approx(2.0)
+
+
+def test_literature_window_profile_adds_a_named_definition(base_config):
+    optional = PipelineConfig.load(
+        Path("config/tissue_profiles/derstine_2022_vat_m150_m50.yaml")
+    ).to_runtime_dict()
+    image = np.array([[[-170, -100, -45]]], dtype=np.int16)
+    labels = np.full(image.shape, 4, dtype=np.uint8)
+
+    masks = derive_configured_tissue_masks(
+        image,
+        labels,
+        base_config["LBL_TISSUE_COMPARTMENTS"],
+        optional["measurements"]["tissue_definitions"],
+        spacing_xyz=(1.0, 1.0, 1.0),
+    )
+
+    assert masks["vat_total_hu_m190_m30"].sum() == 3
+    assert masks["vat_total_hu_m150_m50"].sum() == 1
 
 
 def test_generic_derivation_accepts_validated_anatomical_subcompartments():

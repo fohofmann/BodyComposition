@@ -172,22 +172,6 @@ wheels = [
 ]
 
 [[package]]
-name = "blosc"
-version = "1.11.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9e/66/3c0e1801d4674582c38f9b009e71c09eb501fc3db591e35436dac15fa7a7/blosc-1.11.4.tar.gz", hash = "sha256:e0b312d9554d3aea93c75af4ad70dfa8b815ef4fe2b658c313b2f27ed0f41d37", size = 1439535, upload-time = "2026-01-17T23:02:25.209Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/80/03/68dd30549d3140d1d2054b68ed8d45630be2e87b976bc8c3c9e2e9a1104d/blosc-1.11.4-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:7a6a713949d5b69c68f394b70131d05c9cbb73d1e3751dde3034e9d16310c1a9", size = 2196403, upload-time = "2026-01-17T23:01:31.361Z" },
-    { url = "https://files.pythonhosted.org/packages/db/99/afd1929822dfbda6d11bb88673580c079c462dc85e6cefd6f3a320396557/blosc-1.11.4-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:19521732282f6d3690a6a3e2bc67a7d61697ac8bc5f1e37d35f9bab42087bc2f", size = 1802803, upload-time = "2026-01-17T23:01:32.756Z" },
-    { url = "https://files.pythonhosted.org/packages/e3/86/256d5268e877bfa4606e9ee7d5ccd9de3b5090df7956bf0d641b1bc92f68/blosc-1.11.4-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:65f0a54185667225174b3a8f63a2bd663910cd9d440359d0ea9f0a828fc70970", size = 2637888, upload-time = "2026-01-17T23:01:34.337Z" },
-    { url = "https://files.pythonhosted.org/packages/5d/af/b455443a688632981da49b3e1a313085e2a1281111eadaca95ccee5141e9/blosc-1.11.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:247d2edd7f510e3d0b0a75178f3e6f9d8820ffc55cf897a16f24520a645a70e5", size = 2728814, upload-time = "2026-01-17T23:01:35.578Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/cb/aff868e1eb1bff3d8e679862eebc0e84df073b2cd1049b378f7465ff8894/blosc-1.11.4-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:61937055333e5a567cded39fd0776625a3761e725e253db3699dc0f27b509e6e", size = 2678217, upload-time = "2026-01-17T23:01:36.857Z" },
-    { url = "https://files.pythonhosted.org/packages/9b/e2/74c45886f39127a8253a648d15d1f21cca19559071f535dcd0535d0292ff/blosc-1.11.4-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:b66d6529ff0ea981f4f963c5e2139520635b8a27155de3cbd505c17c98449cba", size = 2752709, upload-time = "2026-01-17T23:01:38.628Z" },
-    { url = "https://files.pythonhosted.org/packages/76/84/671ad63a07d52439094fed982f2a75ac820b1c7e9d70ba5c7e2693ffccba/blosc-1.11.4-cp311-cp311-win32.whl", hash = "sha256:d3029765009ef1841aa651e0094ed0497823199c4d3c023b20fed9ad05f0e508", size = 1529664, upload-time = "2026-01-17T23:01:40.394Z" },
-    { url = "https://files.pythonhosted.org/packages/fc/97/02f8ffddcc7a1b1afbb180abca3fbe8573f63b5dd49909691f0540ab76e1/blosc-1.11.4-cp311-cp311-win_amd64.whl", hash = "sha256:b0f11b193756e51ddc7a7db0d15111535b4a69c44f1872ac73ec257024e7f754", size = 1812758, upload-time = "2026-01-17T23:01:41.978Z" },
-]
-
-[[package]]
 name = "bodycomposition"
 version = "1.0.0rc1"
 source = { editable = "." }
@@ -211,7 +195,6 @@ dependencies = [
     { name = "spineps" },
     { name = "torch" },
     { name = "torchvision" },
-    { name = "totalsegmentator" },
     { name = "tptbox" },
     { name = "urllib3" },
 ]
@@ -236,7 +219,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "mypy", marker = "extra == 'test'", specifier = ">=1.17,<2" },
     { name = "nibabel" },
-    { name = "nnunetv2" },
+    { name = "nnunetv2", specifier = "==2.5.2" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
     { name = "pandas" },
@@ -257,7 +240,6 @@ requires-dist = [
     { name = "spineps", specifier = "==2.0.0" },
     { name = "torch" },
     { name = "torchvision" },
-    { name = "totalsegmentator", specifier = "==2.15.0" },
     { name = "tptbox", specifier = "==0.7.5" },
     { name = "urllib3", specifier = ">=2.7,<3" },
 ]
@@ -893,18 +875,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/84/93bcd1300216ea50811cee96873b84a1bebf8d0489ffaf7f2a3756bab866/imageio-2.37.3.tar.gz", hash = "sha256:bbb37efbfc4c400fcd534b367b91fcd66d5da639aaa138034431a1c5e0a41451", size = 389673, upload-time = "2026-03-09T11:31:12.573Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/49/fa/391e437a34e55095173dca5f24070d89cbc233ff85bf1c29c93248c6588d/imageio-2.37.3-py3-none-any.whl", hash = "sha256:46f5bb8522cd421c0f5ae104d8268f569d856b29eb1a13b92829d1970f32c9f0", size = 317646, upload-time = "2026-03-09T11:31:10.771Z" },
-]
-
-[[package]]
-name = "imgkit"
-version = "1.2.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/96/66/49089f7ca929e854f4f110259de392ec8bbed5ac3f2f9e1ff493f6623b15/imgkit-1.2.3.tar.gz", hash = "sha256:c9ade93d0281277c898b983c959f11f0cc1cb4a5fed144560dfa4d273fb50cd8", size = 11690, upload-time = "2023-02-23T08:01:58.396Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/bf/b0/e0c8aaafb20377eccb9aedbb9e00c21aeaac9cdc13d31d1c7532e1241bab/imgkit-1.2.3-py3-none-any.whl", hash = "sha256:cba8e3f67da6e0a5c87345a8b41605337851f9b9b75719500fa6810ecff84791", size = 10634, upload-time = "2023-02-23T08:01:57.223Z" },
 ]
 
 [[package]]
@@ -2372,33 +2342,6 @@ wheels = [
 ]
 
 [[package]]
-name = "totalsegmentator"
-version = "2.15.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "blosc" },
-    { name = "dicom2nifti" },
-    { name = "imgkit" },
-    { name = "jinja2" },
-    { name = "nibabel" },
-    { name = "nnunetv2" },
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "pyarrow" },
-    { name = "requests" },
-    { name = "scikit-image" },
-    { name = "simpleitk" },
-    { name = "torch" },
-    { name = "tqdm" },
-    { name = "xmltodict" },
-    { name = "xvfbwrapper" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/9b/8ff7649fe1bf14364d43304407f6a7e121728fed2920a9ba7e035c7ef79e/totalsegmentator-2.15.0.tar.gz", hash = "sha256:7713b501c0b7c0e44cf5eaa6e9f40e75fb9f1f1dd22ddf32cdb7aac751b10022", size = 10181443, upload-time = "2026-07-01T16:20:39.708Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/fc/fb8fcbb9eb7549ce89f62aa401960099dcc678b31b2d27114f28bd1216dc/totalsegmentator-2.15.0-py3-none-any.whl", hash = "sha256:6fb98e9c40cfde5243647d705b9d3250eb4443bb1d3a54e8f5523004da97ccb1", size = 1703516, upload-time = "2026-07-01T16:20:36.953Z" },
-]
-
-[[package]]
 name = "tptbox"
 version = "0.7.5"
 source = { registry = "https://pypi.org/simple" }
@@ -2519,24 +2462,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1d/7a/eb316761ec35664ea5174709a68bbd3389de60d4a1ebab8808bfc264ed67/webcolors-25.10.0.tar.gz", hash = "sha256:62abae86504f66d0f6364c2a8520de4a0c47b80c03fc3a5f1815fedbef7c19bf", size = 53491, upload-time = "2025-10-31T07:51:03.977Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/cc/e097523dd85c9cf5d354f78310927f1656c422bd7b2613b2db3e3f9a0f2c/webcolors-25.10.0-py3-none-any.whl", hash = "sha256:032c727334856fc0b968f63daa252a1ac93d33db2f5267756623c210e57a4f1d", size = 14905, upload-time = "2025-10-31T07:51:01.778Z" },
-]
-
-[[package]]
-name = "xmltodict"
-version = "1.0.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/19/70/80f3b7c10d2630aa66414bf23d210386700aa390547278c789afa994fd7e/xmltodict-1.0.4.tar.gz", hash = "sha256:6d94c9f834dd9e44514162799d344d815a3a4faec913717a9ecbfa5be1bb8e61", size = 26124, upload-time = "2026-02-22T02:21:22.074Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/38/34/98a2f52245f4d47be93b580dae5f9861ef58977d73a79eb47c58f1ad1f3a/xmltodict-1.0.4-py3-none-any.whl", hash = "sha256:a4a00d300b0e1c59fc2bfccb53d7b2e88c32f200df138a0dd2229f842497026a", size = 13580, upload-time = "2026-02-22T02:21:21.039Z" },
-]
-
-[[package]]
-name = "xvfbwrapper"
-version = "0.2.27"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d8/a8/1a0d1104241adc19c5e1ba4bc67f0941ad2e5d15d78e768ac3e808a26189/xvfbwrapper-0.2.27.tar.gz", hash = "sha256:341a436f6ad4f3c30915add6c421b8518ad6efcc809592e4205f5112fd678855", size = 12716, upload-time = "2026-07-01T19:38:11.611Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d3/e5/130dd2847d7c580fc08a77e53320dd7263fd936cc0aa7f000606773f33b4/xvfbwrapper-0.2.27-py3-none-any.whl", hash = "sha256:4d47e3c910a80532a6f8641cbda72940dac44d20eea3970246970a5d6820a9c8", size = 7074, upload-time = "2026-07-01T19:38:10.571Z" },
 ]
 
 [[package]]

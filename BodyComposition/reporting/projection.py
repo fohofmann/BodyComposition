@@ -93,7 +93,6 @@ def vertebral_color(anatomical_label: str) -> tuple[int, int, int]:
 def tissue_color(name: str) -> tuple[int, int, int]:
     return {
         "sm": (0, 114, 178),
-        "imat": (204, 121, 167),
         "sat": (240, 228, 66),
         "avat": (213, 94, 0),
         "tvat": (0, 158, 115),
@@ -314,9 +313,14 @@ def build_axial_segmentation_view(
     grey = np.rint(grey * 255).astype(np.uint8)
     rgb = np.repeat(grey[..., None], 3, axis=2).astype(np.float32)
     displayed: list[str] = []
-    palette_names = {"SM": "sm", "IMAT": "imat", "SAT": "sat", "AVAT": "avat", "TVAT": "tvat"}
+    palette_names = {
+        "SM": "sm",
+        "SAT": "sat",
+        "aVAT": "avat",
+        "tVAT": "tvat",
+    }
     for native_label, anatomical_name in sorted(TISSUE_LABELS.items()):
-        palette_name = palette_names.get(anatomical_name.upper())
+        palette_name = palette_names.get(anatomical_name)
         mask = tissue_yx == native_label
         if palette_name is None or not np.any(mask):
             continue

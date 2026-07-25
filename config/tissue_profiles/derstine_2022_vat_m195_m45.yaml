@@ -1,9 +1,7 @@
-tissue:
-  profile_id: derstine_2022_vat_m195_m45_v1
-  vat:
-    filter_hu_range: [-195, -45]
-
 measurements:
+  tissue_profile_id: derstine_2022_vat_m195_m45_v1
   tissue_definitions:
     vat_total_hu_m195_m45:
       enabled: true
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-195, -45]

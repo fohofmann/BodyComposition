@@ -97,7 +97,13 @@ def test_internal_model_sync_uses_pinned_snapshot_and_replaces_bad_cache(
 
     report = models._sync_internal(model_id, tmp_path)
     assert report.ready
-    assert len(calls) == 1
+    assert calls == [
+        (
+            asset["repo_id"],
+            asset["revision"],
+            (f"{asset['trainer']}/weights.bin",),
+        )
+    ]
 
     target = tmp_path / asset["directory"] / asset["trainer"] / "weights.bin"
     target.write_bytes(b"mismatch")
@@ -114,6 +120,36 @@ def test_unresolved_internal_model_refuses_network_sync(monkeypatch, tmp_path):
     monkeypatch.setitem(models.INTERNAL_MODELS, model_id, _asset(revision=None))
     with pytest.raises(ModelAssetError, match="no immutable revision"):
         models._sync_internal(model_id, tmp_path)
+
+
+def test_public_tissue_models_are_immutable_original_sources():
+    expected = {
+        "bodycomposition_resenc_l_v1": (
+            "b355aa7254f5307b6d18005dfbabae8c439d24fb",
+            "fhofmann/BodyCompositionCT-ResEncL",
+        ),
+        "bodycomposition_resenc_m_v1": (
+            "9c60c8f59a99442b9b8cc1a45abf6c4d81690c0d",
+            "fhofmann/BodyCompositionCT-ResEncM",
+        ),
+    }
+
+    for model_id, (revision, repo_id) in expected.items():
+        definition = models.INTERNAL_MODELS[model_id]
+        asset = models.model_asset(model_id)
+        assert definition["repo_id"] == repo_id
+        assert definition["revision"] == revision
+        assert definition["license"] == "CC-BY-4.0"
+        assert definition["weight_license_status"] == "published_with_model_card_and_license"
+        assert asset["upstream_revision"] == revision
+        assert asset["download_url"].endswith(f"/tree/{revision}")
+        assert definition["files"]["dataset.json"] == {
+            "sha256": "8de2ff6b2b4229312517acf9bfd3dd4d23cc7ebedc48c0ad8e36bd3ba10e7f1d",
+            "byte_size": 844,
+        }
+
+    assert len(models.INTERNAL_MODELS["bodycomposition_resenc_l_v1"]["files"]) == 7
+    assert len(models.INTERNAL_MODELS["bodycomposition_resenc_m_v1"]["files"]) == 3
 
 
 def test_verify_model_routes_ctdeeprot_and_captures_checkpoint_errors(
@@ -240,8 +276,7 @@ def test_required_and_release_model_sets_are_explicit(monkeypatch, tmp_path):
         (),
         include_all_selectable=True,
     )
-    assert "bodycomposition_resenc_l_v1:upstream_revision_unresolved" in all_issues
-    assert "bodycomposition_resenc_m_v1:upstream_revision_unresolved" in all_issues
+    assert all_issues == ()
 
 
 def test_require_models_reports_all_failed_assets(monkeypatch, tmp_path):

@@ -52,8 +52,8 @@ upstream artifact does not justify using posterior elements for territories.
 
 ## Measurement review
 
-Use `qc/measurement_review.png`, `qc/qc.json`, and the three tables. Important
-conditions include body/trunk contour contact with the image edge,
+Use `qc/measurement_review.png`, `qc/qc.json`, and the four canonical tables.
+Important conditions include body/trunk contour contact with the image edge,
 fragmentation, internal gaps, abrupt circumference changes, incomplete
 vertebral territories, insufficient coverage, invalid landmarks, and extrema
 at a search boundary.

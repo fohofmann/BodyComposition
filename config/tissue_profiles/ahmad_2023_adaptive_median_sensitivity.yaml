@@ -1,7 +1,27 @@
-tissue:
-  profile_id: ahmad_2023_adaptive_median_sensitivity_v1
-  hu_denoise:
-    method: adaptive_median
-    apply_to: [imat, sm, vat, sat]
-    adaptive_median_min_kernel: [1, 3, 3]
-    adaptive_median_max_kernel: [1, 7, 7]
+measurements:
+  tissue_profile_id: ahmad_2023_adaptive_median_sensitivity_v1
+  tissue_definitions:
+    skeletal_muscle_tissue_hu_m29_150_adaptive_median_1x3x3_1x7x7:
+      enabled: true
+      source_labels: [SM]
+      hu_range: [-29, 150]
+      preprocessing:
+        method: adaptive_median
+        minimum_kernel_zyx: [1, 3, 3]
+        maximum_kernel_zyx: [1, 7, 7]
+    sat_total_hu_m190_m30_adaptive_median_1x3x3_1x7x7:
+      enabled: true
+      source_labels: [SAT]
+      hu_range: [-190, -30]
+      preprocessing:
+        method: adaptive_median
+        minimum_kernel_zyx: [1, 3, 3]
+        maximum_kernel_zyx: [1, 7, 7]
+    vat_total_hu_m190_m30_adaptive_median_1x3x3_1x7x7:
+      enabled: true
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-190, -30]
+      preprocessing:
+        method: adaptive_median
+        minimum_kernel_zyx: [1, 3, 3]
+        maximum_kernel_zyx: [1, 7, 7]

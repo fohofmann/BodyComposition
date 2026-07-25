@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import zipfile
 
 import pytest
@@ -114,6 +115,37 @@ def test_failed_sync_keeps_existing_partial_asset_untouched(tmp_path, monkeypatc
     assert not any(path.name.startswith(f".{directory}-sync-") for path in tmp_path.iterdir())
 
 
+def test_sync_repairs_stale_install_metadata_without_downloading(
+    tmp_path,
+    monkeypatch,
+):
+    files = {
+        "trainer/dataset.json": b'{"labels":{"background":0}}',
+        "trainer/plans.json": b"plans",
+        "trainer/fold_0/checkpoint_final.pth": b"checkpoint",
+    }
+    payload = _archive("Dataset999_test", files)
+    directory, _ = _pin_test_asset(monkeypatch, payload, files)
+    assets.sync_measurement_model(
+        "test",
+        tmp_path,
+        opener=lambda request: io.BytesIO(payload),
+    )
+    install_manifest = tmp_path / directory / assets.ASSET_MANIFEST_NAME
+    install_manifest.write_text('{"schema_version": 0}\n', encoding="utf-8")
+
+    repaired = assets.sync_measurement_model(
+        "test",
+        tmp_path,
+        opener=lambda request: (_ for _ in ()).throw(
+            AssertionError("verified model bytes must not be downloaded again")
+        ),
+    )
+
+    assert repaired.ready
+    assert repaired.install_manifest_verified
+
+
 def test_sync_rejects_unsafe_archive_before_promotion(tmp_path, monkeypatch):
     files = {"trainer/checkpoint_final.pth": b"checkpoint"}
     payload = _archive("Dataset999_test", files, unsafe=True)
@@ -155,6 +187,41 @@ def test_asset_records_cover_the_shared_model_contract():
         assert record["redistribution_mode"] == "user_model_sync"
         assert len(record["archive_sha256"]) == 64
         assert all(len(item["sha256"]) == 64 for item in record["expected_files"])
+
+
+def test_verified_dataset_metadata_defines_the_runtime_label_schema(
+    tmp_path,
+    monkeypatch,
+):
+    files = {
+        "trainer/dataset.json": json.dumps(
+            {
+                "labels": {
+                    "background": 0,
+                    "hip_left": 92,
+                    "hip_right": 93,
+                }
+            }
+        ).encode(),
+        "trainer/plans.json": b"plans",
+        "trainer/fold_0/checkpoint_final.pth": b"checkpoint",
+    }
+    payload = _archive("Dataset999_test", files)
+    _pin_test_asset(monkeypatch, payload, files)
+    assets.sync_measurement_model(
+        "test",
+        tmp_path,
+        opener=lambda request: io.BytesIO(payload),
+    )
+
+    assert assets.measurement_model_directory("test", tmp_path) == (
+        tmp_path.resolve() / "Dataset999_test" / "trainer"
+    )
+    assert assets.measurement_label_schema("test", tmp_path) == {
+        0: "background",
+        92: "hip_left",
+        93: "hip_right",
+    }
 
 
 def test_release_model_ids_route_to_the_pinned_sync_adapter():

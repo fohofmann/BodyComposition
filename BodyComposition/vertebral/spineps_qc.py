@@ -8,6 +8,8 @@ from scipy import ndimage
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCSeverity, VertebralCentroid
 from BodyComposition.vertebral.spineps_manifest import (
+    SACRUM_BODY_SEMANTIC_LABEL,
+    SPINEPS_AUXILIARY_INSTANCE_LABELS,
     SPINEPS_CRANIO_CAUDAL_ORDER,
     SPINEPS_NATIVE_LABELS,
     VERTEBRA_CORPUS_SEMANTIC_LABEL,
@@ -32,14 +34,39 @@ def construct_vertebral_body_labels(
     vertebra_labels_zyx: np.ndarray,
     geometry: ImageGeometry,
 ) -> np.ndarray:
-    """Intersect native vertebra labels with semantic corpus label 49."""
+    """Intersect native labels with the corresponding vertebral-body region."""
 
     _validate_label_array("semantic_labels_zyx", semantic_labels_zyx, geometry)
     _validate_label_array("vertebra_labels_zyx", vertebra_labels_zyx, geometry)
     output = np.zeros_like(vertebra_labels_zyx)
-    corpus = semantic_labels_zyx == VERTEBRA_CORPUS_SEMANTIC_LABEL
+    corpus = (
+        (semantic_labels_zyx == VERTEBRA_CORPUS_SEMANTIC_LABEL)
+        & (vertebra_labels_zyx != 26)
+    ) | (
+        (semantic_labels_zyx == SACRUM_BODY_SEMANTIC_LABEL)
+        & (vertebra_labels_zyx == 26)
+    )
     output[corpus] = vertebra_labels_zyx[corpus]
     return output
+
+
+def vertebra_only_instance_labels(
+    instance_labels_zyx: np.ndarray,
+    geometry: ImageGeometry,
+) -> tuple[np.ndarray, tuple[int, ...]]:
+    """Remove documented SPINEPS disc/endplate instances from a copied array."""
+
+    _validate_label_array("instance_labels_zyx", instance_labels_zyx, geometry)
+    present = {
+        int(value)
+        for value in np.unique(instance_labels_zyx)
+        if value != 0
+    }
+    removed = tuple(sorted(present & SPINEPS_AUXILIARY_INSTANCE_LABELS))
+    output = np.array(instance_labels_zyx, copy=True)
+    if removed:
+        output[np.isin(output, removed)] = 0
+    return output, removed
 
 
 def centroids_from_body_labels(
@@ -138,7 +165,11 @@ def evaluate_spineps_qc(
         return tuple(flags)
 
     if semantic_labels_zyx is not None:
-        semantic_corpus = semantic_labels_zyx == VERTEBRA_CORPUS_SEMANTIC_LABEL
+        semantic_corpus = (
+            semantic_labels_zyx == VERTEBRA_CORPUS_SEMANTIC_LABEL
+        ) | (
+            semantic_labels_zyx == SACRUM_BODY_SEMANTIC_LABEL
+        )
         unlabeled_corpus = semantic_corpus & (whole_vertebra_labels_zyx == 0)
         unlabeled_count = int(np.count_nonzero(unlabeled_corpus))
         if unlabeled_count:

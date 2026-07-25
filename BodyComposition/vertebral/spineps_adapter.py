@@ -30,6 +30,7 @@ from BodyComposition.vertebral.spineps_qc import (
     centroids_from_body_labels,
     construct_vertebral_body_labels,
     evaluate_spineps_qc,
+    vertebra_only_instance_labels,
 )
 
 SUCCESS_CODES = {"OK", "ALL_DONE"}
@@ -133,7 +134,15 @@ def adapt_spineps_outputs(
             error_summary="SPINEPS success response omitted required outputs.",
         )
 
-    whole = np.asarray(vertebra_labels_zyx)
+    whole, removed_auxiliary_labels = vertebra_only_instance_labels(
+        np.asarray(vertebra_labels_zyx),
+        geometry,
+    )
+    combined_provenance["instance_label_policy"] = {
+        "output": "vertebrae_only",
+        "removed_auxiliary_labels": list(removed_auxiliary_labels),
+        "native_outputs_preserved": True,
+    }
     body = construct_vertebral_body_labels(np.asarray(semantic_labels_zyx), whole, geometry)
     flags = evaluate_spineps_qc(
         whole,

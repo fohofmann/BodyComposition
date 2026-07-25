@@ -20,12 +20,8 @@ from BodyComposition.actions.measurement import (
     MeasureCanonicalBodyComposition,
     _scientific_measurement_configuration,
 )
-from BodyComposition.actions.segm_int import SegmIntBodyComposition
-from BodyComposition.actions.segm_totalsegmentator import (
-    SegmTotalSegmentator,
-    _measurement_model_download_guard,
-    _require_measurement_model,
-)
+from BodyComposition.actions.segm_int import SegmIntBodyComposition, _SegmInternal
+from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentator
 from BodyComposition.actions.vertebral import SPINEPS_BODY_MASK
 from BodyComposition.config import PipelineConfig
 from BodyComposition.measurement import totalsegmentator_assets
@@ -34,6 +30,7 @@ from BodyComposition.measurement.api import (
     l3_measurements,
     load_measurement_tables,
     range_measurements,
+    signature_measurements,
 )
 from BodyComposition.measurement.body_surface import (
     TISSUE_ENVELOPE_BACKEND,
@@ -71,12 +68,10 @@ def make_measurement_inputs(config, *, empty_vertebrae=False):
     tissues[:, 9:11, 6:10] = 3
     tissues[:, 11:13, 7:9] = 4
     tissues[:, 13:15, 8:10] = 5
-    tissues[:, 15:17, 9:11] = 8
     image[tissues == 1] = 40
     image[tissues == 3] = -100
     image[tissues == 4] = -90
     image[tissues == 5] = -70
-    image[tissues == 8] = -50
 
     body_labels = np.zeros(shape, dtype=np.uint8)
     body_labels[:, 2:-2, 2:-2] = 1
@@ -121,6 +116,8 @@ def make_bundle(config, *, empty_vertebrae=False):
         tissue_label_schema=config["LBL_TISSUE"],
         tissue_backend_id="synthetic",
         tissue_preprocessing={"hu_denoise": False},
+        compartment_labels_zyx=tissues,
+        compartment_label_schema=config["LBL_TISSUE_COMPARTMENTS"],
         body_surface=body_surface,
         vertebral_result=vertebral_result,
         identity=identity,
@@ -153,11 +150,58 @@ def test_complete_bundle_validates_three_native_territory_bins(base_config):
     assert bundle.vertebrae.groupby("vertebral_level").size().eq(3).all()
     assert set(bundle.vertebrae["territory_bin"]) == {1, 2, 3}
     assert "SACRUM" in set(bundle.vertebrae["vertebral_level"])
-    assert "signatures" not in bundle.__dict__
+    assert len(bundle.signature) == 100
+    assert bundle.signature["signature_bin"].tolist() == list(range(100))
+    assert bundle.signature["bin_width_mm"].eq(20.0).all()
+    assert bundle.signature["reference_alignment_method"].eq("direct_l3").all()
     assert bundle.summaries.iloc[0]["l3_200mm_slab_valid"]
     assert "orientation_changed" not in bundle.slices
     assert bundle.provenance["orientation"]["state"] == "PASS_METADATA_MATCH"
-    assert set(TABLE_NAMES) == {"slices", "vertebrae", "summaries"}
+    assert set(TABLE_NAMES) == {"slices", "vertebrae", "summaries", "signature"}
+
+
+def test_slice_table_is_the_longitudinal_csa_and_hu_feature_source(base_config):
+    bundle, _, _, _, _ = make_bundle(base_config)
+    slices = bundle.slices
+
+    assert np.all(np.diff(slices["position_superior_mm"].to_numpy(dtype=float)) > 0)
+    assert slices["assigned_vertebral_level"].notna().any()
+    for tissue in (
+        "sm",
+        "sat",
+        "avat",
+        "tvat",
+        "total_vat",
+        "skeletal_muscle_tissue_hu_m29_150",
+        "sat_total_hu_m190_m30",
+        "avat_hu_m190_m30",
+        "tvat_hu_m190_m30",
+    ):
+        required = {
+            f"{tissue}_area_cm2",
+            f"{tissue}_area_valid",
+            f"{tissue}_area_reason",
+            f"{tissue}_mean_hu",
+            f"{tissue}_hu_valid",
+            f"{tissue}_hu_reason",
+        }
+        assert required.issubset(slices.columns)
+
+    assert slices.loc[slices["sm_hu_valid"], "sm_mean_hu"].notna().all()
+
+
+def test_named_tissue_profile_appends_signature_features_without_changing_core():
+    config = PipelineConfig.load(
+        Path("config/tissue_profiles/derstine_2022_vat_m150_m50.yaml")
+    ).to_runtime_dict()
+
+    bundle, *_ = make_bundle(config)
+
+    assert "vat_total_hu_m150_m50_mean_csa_cm2" in bundle.signature
+    assert "vat_total_hu_m150_m50_mean_hu" in bundle.signature
+    assert "vat_total_hu_m150_m50_mean_csa_fraction_of_trunk" in bundle.signature
+    assert "sm_mean_csa_cm2" in bundle.signature
+    assert "imat_hu_m190_m30_mean_csa_cm2" not in bundle.signature
 
 
 def test_empty_vertebral_segmentation_preserves_slices_and_explicit_qc(base_config):
@@ -169,6 +213,10 @@ def test_empty_vertebral_segmentation_preserves_slices_and_explicit_qc(base_conf
     assert set(bundle.slices["vertebral_assignment_status"]) == {
         "no_valid_territory"
     }
+    assert len(bundle.signature) == 100
+    assert not bundle.signature["reference_alignment_valid"].any()
+    assert not bundle.signature["bin_valid"].any()
+    assert bundle.signature["bin_reason"].eq("missing_anchor").all()
     assert any(flag.code == "vertebral_body_segmentation_empty" for flag in bundle.qc_flags)
 
 
@@ -193,6 +241,8 @@ def test_bundle_surfaces_fragmented_trunk_and_backend_neutral_variant_qc(base_co
         tissue_label_schema=base_config["LBL_TISSUE"],
         tissue_backend_id="synthetic",
         tissue_preprocessing={"hu_denoise": False},
+        compartment_labels_zyx=tissues,
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
         body_surface=body_surface,
         vertebral_result=vertebral_result,
         identity=MeasurementIdentity("case-001", "run-001", "analysis-001"),
@@ -230,6 +280,8 @@ def test_ambiguous_sequence_variant_stays_continuous_and_is_flagged(
         tissue_label_schema=base_config["LBL_TISSUE"],
         tissue_backend_id="synthetic",
         tissue_preprocessing={"hu_denoise": False},
+        compartment_labels_zyx=tissues,
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
         body_surface=body_surface,
         vertebral_result=vertebral_result,
         identity=MeasurementIdentity("case-001", "run-001", "analysis-001"),
@@ -267,6 +319,22 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
     assert tables["vertebrae"][["vertebral_level", "territory_bin"]].to_numpy().tolist() == (
         bundle.vertebrae[["vertebral_level", "territory_bin"]].to_numpy().tolist()
     )
+    signature = signature_measurements(table_directory)
+    assert signature["signature_bin"].tolist() == list(range(100))
+    assert signature["signature_profile_id"].nunique() == 1
+    observed = signature.loc[signature["coverage_fraction"].fillna(0).gt(0)]
+    outside = signature.loc[signature["coverage_fraction"].eq(0)]
+    assert not observed.empty
+    assert not outside.empty
+    assert observed["sm_mean_csa_cm2_valid"].all()
+    assert observed["sm_mean_hu_valid"].all()
+    assert observed["heart_mean_csa_cm2"].eq(0).all()
+    assert not observed["heart_mean_hu_valid"].any()
+    assert outside["sm_mean_csa_cm2"].isna().all()
+    assert outside["sm_mean_csa_cm2_reason"].eq("outside_fov").all()
+    assert outside["sm_mean_csa_cm2_coverage_fraction"].eq(0).all()
+    assert outside["sm_mean_hu_reason"].eq("outside_fov").all()
+    assert outside["trunk_mean_csa_cm2_reason"].eq("outside_fov").all()
     assert l3_measurements(table_directory, aggregation="territory_mean").iloc[0][
         "aggregation"
     ] == "territory_mean"
@@ -379,6 +447,36 @@ def test_parquet_reader_rejects_schema_metadata_drift(base_config, tmp_path):
 
     with pytest.raises(ValueError, match="inconsistent measurement schema metadata"):
         load_measurement_tables(slices_path.parent)
+
+
+def test_parquet_reader_rejects_shifted_signature_grid(base_config, tmp_path):
+    bundle, _, _, _, _ = make_bundle(base_config)
+    action = ExportMeasurementBundle(
+        SimpleNamespace(config=base_config, timestamp=123, device="cpu")
+    )
+    action(
+        {
+            "id": "case-001",
+            "workspace": tmp_path,
+            "tmp/measurement_bundle": bundle,
+        }
+    )
+
+    signature_path = tmp_path / "tables" / "signature.parquet"
+    parquet_schema = pq.read_schema(signature_path)
+    metadata = parquet_schema.metadata
+    signature = pd.read_parquet(signature_path)
+    signature.loc[50, "reference_center_mm"] = 1.0
+    corrupted = pa.Table.from_pandas(
+        signature,
+        schema=parquet_schema.remove_metadata(),
+        preserve_index=False,
+        safe=True,
+    )
+    pq.write_table(corrupted.replace_schema_metadata(metadata), signature_path)
+
+    with pytest.raises(ValueError, match="fixed L3-centred grid"):
+        load_measurement_tables(signature_path.parent)
 
 
 def test_missing_anatomy_keeps_identical_nullable_parquet_schemas(
@@ -582,7 +680,7 @@ def test_measurement_analysis_identity_is_order_stable_and_content_sensitive(bas
         vertebral_result,
         {"alpha": 1, "beta": 2},
         compartment_labels_zyx=compartments,
-        compartment_label_schema=base_config["LBL_TISSUE"],
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
     )
     changed_compartments = compartments.copy()
     changed_compartments[0, 0, 0] = 2
@@ -593,7 +691,7 @@ def test_measurement_analysis_identity_is_order_stable_and_content_sensitive(bas
         vertebral_result,
         {"alpha": 1, "beta": 2},
         compartment_labels_zyx=changed_compartments,
-        compartment_label_schema=base_config["LBL_TISSUE"],
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
     )
 
     assert first == reordered
@@ -641,6 +739,8 @@ def test_canonical_pipeline_uses_full_prepared_domain_and_body_label_source(pipe
     assert tissue.model_preset == "ResEncL"
     assert measurement.vertebral_body_source_name == SPINEPS_BODY_MASK
     assert "tmp/vertebral_result" in measurement.io_inputs
+    assert "masks/tissue_compartments.nii.gz" in measurement.io_inputs
+    assert "masks/tissue_labels.nii.gz" in measurement.io_inputs
     assert surface.backend == TISSUE_ENVELOPE_BACKEND
     assert names.index("MasksInternalTissue") < names.index("CreateBodySurface")
 
@@ -660,6 +760,30 @@ def test_tissue_envelope_pipeline_can_run_without_totalsegmentator(
     assert "MeasureCanonicalBodyComposition" in names
 
 
+def test_measurement_support_action_resolves_pinned_nnunet_directory(
+    tmp_path,
+    pipeline_stub,
+    monkeypatch,
+):
+    model_root = tmp_path / "models"
+    model_root.mkdir()
+    pipeline_stub.config["paths"]["weights"]["totalsegmentator"] = model_root
+    action = SegmTotalSegmentator(
+        pipeline_stub,
+        image="tmp/index",
+        task="body_landmarks",
+    )
+
+    assert action.task_id == 297
+    assert action.model_folds == [0]
+    assert action.model_path == (
+        model_root.resolve()
+        / "Dataset297_TotalSegmentator_total_3mm_1559subj"
+        / "nnUNetTrainer_4000epochs_NoMirroring__nnUNetPlans__3d_fullres"
+    )
+    assert list(model_root.iterdir()) == []
+
+
 def test_measurement_totalsegmentator_assets_are_checked_without_download(
     tmp_path,
     monkeypatch,
@@ -675,7 +799,10 @@ def test_measurement_totalsegmentator_assets_are_checked_without_download(
             "model_title": "TotalSegmentator-body",
             "directory": "Dataset299_body_1559subj",
             "files": {
-                relative: hashlib.sha256(content).hexdigest()
+                relative: {
+                    "bytes": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
                 for relative, content in files.items()
             },
         }
@@ -686,60 +813,55 @@ def test_measurement_totalsegmentator_assets_are_checked_without_download(
         manifest,
     )
     totalsegmentator_assets._check_cached.cache_clear()
-    monkeypatch.setattr("totalsegmentator.config.get_weights_dir", lambda: tmp_path)
 
     with pytest.raises(FileNotFoundError, match="bodycomposition models sync"):
-        _require_measurement_model("bodytrunk")
+        totalsegmentator_assets.require_measurement_model("bodytrunk", tmp_path)
 
     model_directory = tmp_path / "Dataset299_body_1559subj"
     for relative, content in files.items():
         path = model_directory / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
-    _require_measurement_model("bodytrunk")
-    _require_measurement_model("spine")
+    totalsegmentator_assets.require_measurement_model("bodytrunk", tmp_path)
 
     (model_directory / "trainer/plans.json").write_bytes(b"corrupted")
-    report = totalsegmentator_assets.check_measurement_model("bodytrunk")
+    report = totalsegmentator_assets.check_measurement_model("bodytrunk", tmp_path)
     assert not report.ready
-    assert report.errors == ("sha256_mismatch:trainer/plans.json",)
+    assert report.errors == ("size_mismatch:trainer/plans.json",)
 
 
-def test_measurement_totalsegmentator_inference_is_pinned_and_cache_only(
+def test_measurement_support_verifies_asset_before_predictor_initialization(
+    tmp_path,
     pipeline_stub,
     monkeypatch,
 ):
-    checks = []
-    monkeypatch.setattr(
-        totalsegmentator_assets,
-        "require_measurement_model",
-        lambda task: checks.append(task),
+    pipeline_stub.config["paths"]["weights"]["totalsegmentator"] = tmp_path
+    events = []
+    report = object()
+    predictor = object()
+    pipeline_stub.prepare_exclusive_model = lambda action: events.append(
+        ("exclusive", action.task)
     )
-    import totalsegmentator.python_api as upstream_api
-
-    upstream_download = upstream_api.download_pretrained_weights
-    upstream_usage_stats = upstream_api.send_usage_stats
-    with _measurement_model_download_guard("body_landmarks"):
-        assert upstream_api.download_pretrained_weights is not upstream_download
-        assert upstream_api.send_usage_stats is not upstream_usage_stats
-        upstream_api.download_pretrained_weights(297)
-        assert upstream_api.send_usage_stats({}, {}) is None
-        with pytest.raises(RuntimeError, match="unexpected model"):
-            upstream_api.download_pretrained_weights(298)
-    assert upstream_api.download_pretrained_weights is upstream_download
-    assert upstream_api.send_usage_stats is upstream_usage_stats
-    assert checks == ["body_landmarks", "body_landmarks"]
+    monkeypatch.setattr(
+        "BodyComposition.actions.segm_totalsegmentator.require_measurement_model",
+        lambda task, root: events.append(("verify", task, Path(root))) or report,
+    )
+    monkeypatch.setattr(
+        _SegmInternal,
+        "_get_predictor",
+        lambda self: events.append(("initialize", self.model_path)) or predictor,
+    )
 
     action = SegmTotalSegmentator(
         pipeline_stub,
         image="tmp/index",
         task="body_landmarks",
     )
-    assert action.task_config == {
-        "task": "total",
-        "fast": True,
-        "roi_subset": None,
-    }
+    assert action._get_predictor() is predictor
+    assert action.asset_report is report
+    assert events[0] == ("exclusive", "body_landmarks")
+    assert events[1] == ("verify", "body_landmarks", tmp_path)
+    assert events[2][0] == "initialize"
 
 
 def test_default_model_sync_omits_optional_body_model_but_keeps_landmarks():

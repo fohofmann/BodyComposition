@@ -1,243 +1,218 @@
 # Canonical physical measurements
 
 The canonical pipeline writes one outcome-blind measurement bundle per case.
-The bundle preserves the acquired longitudinal
-profile and compact anatomical summaries. It does not create a learned or
-template-normalized signature, impute missing coverage, or use clinical
-outcomes.
+Schema `3.0.0` preserves every acquired slice, compact native vertebral
+summaries, established case summaries, and a comparable fixed-millimetre
+longitudinal signature. No tissue curve is stretched and no unscanned anatomy
+is imputed.
 
 ## Authoritative files
 
 - `tables/slices.parquet`: one row for every prepared CT slice;
-- `tables/vertebrae.parquet`: three physical bins for every detected
-  native vertebral territory, including sacrum;
-- `tables/summaries.parquet`: one row of deterministic case-level
-  summaries; and
-- `qc/qc.json`: provenance, QC, and review status.
+- `tables/vertebrae.parquet`: three physical bins for every detected native
+  vertebral territory, including sacrum;
+- `tables/summaries.parquet`: one deterministic case-level row;
+- `tables/signature.parquet`: 100 fixed 20-mm bins in a versioned
+  vertebral-reference coordinate; and
+- `qc/qc.json`: provenance, validity, QC, and review status.
 
-`qc/measurement_review.png` is an optional visual derivative. The
-three Parquet tables remain authoritative. There is deliberately no
-`signatures.parquet`: cohort-specific longitudinal representations are derived
-later from the native-mm tables after a coverage audit.
-
-Every table row carries `schema_version`, `case_id`, `run_id`, and
-`analysis_id`. Parquet metadata repeats the table and identity fields. The
-reader rejects missing columns, mixed identities, changed field order/types,
-and unsupported schema versions. Schema `2.1.0` adds raw-compartment-derived
-tissue classes and composition ratios while retaining the native compatibility
-labels from schema 2.0.
+`slices.parquet` remains the lossless longitudinal measurement source.
+`signature.parquet` is a compact comparison view derived from it. Every table
+row carries `schema_version`, `case_id`, `run_id`, and `analysis_id`; Parquet
+metadata repeats the identity and table name. The reader rejects missing
+tables/columns, changed field types or order, mixed identities, invalid fixed
+bins, and unsupported schema versions.
 
 ## Geometry and units
 
 - SimpleITK metadata, sizes, and indices are `x-y-z`.
 - Arrays returned by SimpleITK are `z-y-x`.
 - Physical coordinates use DICOM LPS millimetres.
-- Rows in `slices.parquet` are ordered inferior to superior by
-  `position_superior_mm`, independently of array storage direction.
-- Areas are cm², volumes are cm³, lengths are millimetres unless a column ends
-  in `_cm`, and attenuation is in HU.
+- Slice rows are ordered inferior to superior by
+  `position_superior_mm`, independently of storage order.
+- Areas are cm², volumes are cm³, lengths are millimetres unless a name ends
+  in `_cm`, and attenuation is HU.
 
-For a binary label on one acquired plane:
+For one binary label on an acquired plane:
 
 `area_cm2 = voxel_count * in_plane_pixel_area_mm2 / 100`
 
-The in-plane area and contours use the complete direction matrix. Range and
-bin aggregation uses exact overlap between the acquired slice slab and the
-requested physical superior-axis interval.
+Range and bin aggregation uses exact overlap between each acquired slice slab
+and the requested physical superior-axis interval. Mean CSA is overlap-
+weighted where a boundary cuts a slice. Mean HU is pooled by contributing
+tissue voxels and overlap fraction; it is not an unweighted average of slice
+means.
 
-## Tissue-derived body and trunk envelope
+## Tissue measurements
 
-The release default is `tissue_segmentation_envelope_v1`. It requires no
-separate body model:
-
-1. start from every non-zero voxel in the postprocessed tissue segmentation;
-2. find axial connected components and discard components smaller than the
-   configured physical area only for envelope construction;
-3. apply a physical closing, convex envelope, and Gaussian edge smoothing to
-   each retained component;
-4. define the body as the union of all original tissue voxels and retained
-   component envelopes; and
-5. define the trunk as the envelope of the largest retained component on each
-   slice.
-
-The default parameters are a 100 mm² component threshold, 6 mm closing radius,
-and 2 mm smoothing sigma. They enter the deterministic analysis identity.
-The body always contains every source tissue voxel. A clearly separate arm or
-device can remain in the body while being excluded from the primary trunk.
-Connected arms, sparse tissue predictions, external devices, and lateral
-field-of-view truncation remain clinical-validation cases; the algorithm does
-not claim a true skin surface before that gate passes.
-
-`totalsegmentator_body_task299_v1` and `deterministic_body_mask_v1` remain
-explicit alternatives. A backend failure never triggers another backend.
-Disabling measurement landmarks permits a canonical run without any
-TotalSegmentator stage. Enabling anatomical mid-waist landmarks still uses the
-pinned TotalSegmentator task-297 adapter.
-
-## `slices.parquet`
-
-Every acquired slice remains present, including empty, cropped, or invalid
-slices. Missing or ineligible values are null with a validity flag and reason;
-a truly absent tissue has a valid area of zero.
-
-### Geometry and anatomical assignment
-
-Important fields include:
-
-- `slice_id`, `slice_index_zyx_z`, and `longitudinal_order`;
-- `position_superior_mm`, physical slice centre and normal;
-- `slice_slab_inferior_mm`, `slice_slab_superior_mm`, native through-plane
-  thickness, and in-plane pixel area;
-- `assigned_vertebral_level`, `vertebral_territory_bin`, and
-  `vertebral_assignment_status`.
-
-The level/bin annotation identifies the territory containing the slice centre
-and is useful for plotting and tables. At an exact midpoint tie, the cranial
-territory is selected deterministically. Exact bin summaries use physical slab
-overlap rather than this centre annotation.
-
-### Tissue measurements
-
-For every released tissue `<name>`:
+The raw model compartments and default HU definitions are documented in
+[tissue_definitions.md](tissue_definitions.md). Each tissue prefix in
+`slices.parquet` has:
 
 - `<name>_voxel_count`;
-- `<name>_area_cm2`, `<name>_area_valid`, and `<name>_area_reason`;
+- `<name>_area_cm2`, `<name>_area_valid`, and `<name>_area_reason`; and
 - `<name>_mean_hu`, `<name>_hu_valid`, and `<name>_hu_reason`.
 
-Native aVAT and tVAT remain separate. `total_vat` is their deterministic union
-when both are present, or the native VAT label when that is the source schema.
-`total_segmented_tissue_area_cm2` is the union of all non-zero tissue labels;
-it is not called body or trunk CSA.
+Raw `sm_mean_hu` measures the complete muscle compartment. The filtered
+`skeletal_muscle_tissue_hu_m29_150_*` fields are the conventional
+-29-to-150 HU subset. The default does not calculate IMAT, LAMA, or NAMA.
 
-Schema 2.1 additionally derives explicitly named classes from the untouched
-anatomical compartment label map and untouched prepared CT. Defaults include
-the muscle compartment, learned IMAT, -29/150 HU skeletal-muscle tissue,
-LAMA, NAMA, -190/-30 HU CT-IMAT, matched SAT/VAT, the -150/-50 HU VAT
-compatibility window, whole-bone anatomy, and the 152/1000 HU foundational
-bone-tissue class. The bone outputs are not trabecular attenuation or BMD. It
-also exports four explicitly denominated composition ratios. Multilevel ratios
-are recalculated from integrated volumes rather than averaging slice ratios. See the
-[tissue-definition contract](tissue_definitions.md) for exact names and
-rationale.
+A supported tissue that is absent on a valid scanned slice has CSA zero and
+mean HU null with reason `empty_tissue`. An invalid measurement is null with
+its reason. Unscanned signature bins are null with coverage zero. These states
+must not be merged during analysis.
 
-The canonical slice export continues to omit body perimeter,
-vertebral-overlap lists, and local centroid coordinates. It does not emit an
-opaque binary sarcopenia or myosteatosis phenotype.
+## Body/trunk support
 
-### Trunk and QC fields
+The default `tissue_segmentation_envelope_v1` builds a deterministic
+measurement envelope from the raw model compartments. It does not rewrite the
+tissue masks. It retains all source tissue voxels, uses physical closing and
+smoothing only for the envelope, and identifies the primary trunk component
+per slice.
 
-- `trunk_area_cm2` and its validity/reason;
-- `trunk_circumference_cm` from the primary closed external contour;
-- component, closure, boundary-contact, fragmentation, and internal-gap QC;
-- adjacent-slice circumference jump measures; and
-- `slice_measurement_valid` plus `slice_qc_status`.
-
-Internal contour holes are not added to circumference. A contour touching the
-image edge or a fragmented primary trunk is observable but ineligible for
+`trunk_area_cm2` and `trunk_circumference_cm` include explicit contour,
+fragmentation, field-of-view, and longitudinal-gap QC. Circumference uses only
+the closed external contour; internal holes are not added. A contour touching
+the image boundary or a fragmented trunk remains observable but is invalid for
 strict summaries.
 
 ## Native vertebral territories
 
-Only the canonical vertebral-body/corpus labels from the vertebral stage define vertebral
-anatomy. Whole-vertebra masks and posterior elements are never used.
+Only canonical vertebral-body/corpus labels define downstream anatomy. Full
+vertebrae and posterior elements are never used.
 
-For every detected cervical, thoracic, lumbar, or sacral label:
+For every detected cervical, thoracic, lumbar, or sacral level:
 
-1. retain the largest cleaned vertebral-body component and calculate its
-   physical centroid and extent;
-2. sort valid centroids cranial to caudal;
-3. place the boundary between adjacent detected levels at the physical
-   midpoint of their centroids; and
-4. divide each resulting territory into three equal superior-axis bins:
-   superior, middle, and inferior.
+1. retain the largest cleaned vertebral-body component;
+2. calculate its physical centroid and extent;
+3. bound each territory at the midpoint of adjacent detected centroids; and
+4. divide the territory into three equal physical superior-axis bins.
 
-The midpoint territories assign intervertebral slices to the closest adjacent
-level without stretching the scan or normalizing patient height. A complete C1
-uses its observed superior body boundary; a complete sacrum uses its observed
-inferior boundary. When the acquisition starts below C1 or ends above the
-sacrum, the outer detected territory is marked incomplete and values beyond
-its observed body extent remain unassigned. Internal label gaps remain
-continuous to avoid breaking the longitudinal contour, but affected levels are
-flagged for enumeration review.
-
-T13 and L6 remain ordinary native levels and are not compressed. Sacrum is
-treated like every other supported level and contributes three rows.
+Intervertebral slices are therefore assigned to the closest adjacent detected
+level. Slices above the first supported territory or below the last remain
+unassigned. Internal label gaps remain continuous but are flagged. T13 and L6
+remain native levels and are never compressed. Sacrum is handled like a
+vertebral territory and receives three rows.
 
 ## `vertebrae.parquet`
 
 The table contains exactly three ordered rows per detected supported level.
-`territory_bin=1` is superior and `territory_bin=3` is inferior. Important
-fields include:
+`territory_bin=1` is superior and `territory_bin=3` is inferior. It includes:
 
-- native label, native level, variant and sequence-gap flags;
-- vertebral-body centroid/extent fields;
-- territory and bin physical bounds, height, completeness, coverage, and QC;
-- mean CSA for every available tissue and for the trunk;
-- mean trunk circumference; and
-- pooled tissue HU.
+- native label, anatomical level, variants, and sequence-gap flags;
+- vertebral-body centroid and extent;
+- territory/bin physical bounds, completeness, coverage, and QC;
+- mean CSA and pooled HU for every available tissue;
+- trunk mean CSA and circumference.
 
-Mean CSA is the ordinary arithmetic mean when complete contributing slices
-have equal height. Exact physical overlap weights are used only where needed,
-such as partial boundary slices, varying spacing, or obliquity. HU is pooled by
-contributing tissue voxels and fractional slice overlap.
-
-Volume columns are intentionally not duplicated in this table. For any valid
-bin, exact volume can be reconstructed as:
+Volume is not duplicated. For a valid bin:
 
 `volume_cm3 = mean_csa_cm2 * bin_integration_length_mm / 10`
 
-`bin_height_mm` is the anatomical superior-axis span used for longitudinal
-position. `bin_integration_length_mm` is the through-plane physical length
-needed for exact volume reconstruction and differs only for oblique
-acquisitions. A whole-territory mean or volume is the length-weighted
-combination/sum of its three bins.
+The integration length preserves oblique geometry. Whole-territory means and
+volumes can be reconstructed from the three rows.
 
 ## `summaries.parquet`
 
-The single case row contains deterministic, interpretable views:
+The single case row contains deterministic views:
 
-- exact 200-mm L3-centred slab measurements when L3 and the full slab are
-  covered;
-- a whole-L3-territory view derived from the slice table;
-- minimum valid trunk circumference across the complete T10-to-L5 search
-  interval;
-- anatomical mid-waist circumference when both rib and iliac landmarks are
-  valid;
-- maximum trunk circumference in the complete sacral territory; and
-- explicitly named minimum-waist-to-pelvic and midwaist-to-pelvic ratios.
+- a complete 200-mm L3-centred slab when available;
+- a whole-L3-territory view;
+- minimum valid trunk circumference across complete T10-to-L5 coverage;
+- anatomical mid-waist circumference when rib and iliac landmarks are valid;
+- maximum valid circumference in the complete sacral territory; and
+- explicitly named waist-to-pelvic ratios.
 
-A search extremum at its interval boundary remains visible but is ineligible
-for an unqualified waist/pelvic ratio. The sacral maximum is called pelvic,
-not hip, until separately validated.
+An extremum at a search boundary is visible but not accepted as an
+unqualified result. The sacral maximum is called pelvic, not hip, until that
+clinical interpretation is separately validated.
 
-## Range and L3 views
+## `signature.parquet`
 
-The persisted tables contain the exact ingredients for a whole-L3 territory,
-the acquired plane closest to the L3 corpus centroid, strict named physical
-ranges, and explicitly partial ranges. The 1.x product surface deliberately
-does not persist additional overlapping view files. Downstream analysis must
-use validity and coverage columns and must never label a partial range
-complete.
+The default signature is a wide table with 100 rows. Each row spans exactly
+20 mm; `reference_center_mm` runs from -1000 to +980 mm in ascending physical
+superior direction. Bin 50 is centred on zero. The coordinate is a
+translation-only vertebral reference:
 
-## Longitudinal analyses
+- zero is the L3 vertebral-body centroid when reliable L3 is visible;
+- when L3 is absent, a robust linear fit of the visible native vertebral
+  centroids estimates the latent L3 position;
+- a single visible level uses a versioned 30-mm nominal pitch and is explicitly
+  low confidence;
+- multi-anchor confidence is reduced when the nearest observed level is more
+  than three native steps from L3, and becomes low beyond six steps, so long
+  extrapolations are never presented as high-confidence alignment;
+- the fused sacral label remains a dominant-level annotation but is not used
+  alone to extrapolate an L3 origin;
+- no CT curve, vertebral interval, or tissue measurement is scaled; and
+- no values are filled into unscanned bins.
 
-The full native-mm longitudinal result is `slices.parquet`. A study may model
-each tissue curve with a vertical offset, functions, splines, functional data
-analysis, or a fixed-mm grid, but that representation is not frozen in the
-production package. Patient size and CT coverage remain explicit through
-physical positions, anatomical assignments, coverage, and missingness. Scans
-are never stretched and absent anatomy is never imputed by the pipeline.
+The robust fit uses patient-specific measured vertebral pitch only to estimate
+the missing origin. This accommodates patient size without normalizing away
+the physical length of the tissue profile. T13 and L6 are inserted into the
+native reference sequence when detected. Alignment method, confidence,
+anchors, fitted pitch, residual, variant sequence, and review requirement are
+stored in every row and in QC provenance.
 
-The three-bin territory table is a compact, interpretable comparison view; it
-does not replace the native longitudinal source.
+Each bin includes:
+
+- reference and original physical bounds;
+- coverage and contributing-slice count;
+- dominant vertebral territory and overlap fraction;
+- alignment and bin validity;
+- trunk mean CSA and circumference;
+- mean CSA and pooled mean HU for raw SM, bone, heart, and lung;
+- mean CSA and pooled mean HU for conventional skeletal-muscle tissue,
+  SAT, aVAT, and tVAT;
+- CSA divided by trunk CSA for each tissue channel.
+
+Raw values and normalized fractions are stored together. This keeps patient
+size information available while providing a simple within-trunk comparison.
+One fraction is valid only when its tissue numerator and trunk denominator
+cover the same physical part of the bin; differing valid-support coverage is
+reported as an invalid measurement rather than mixed silently.
+The exact redundant total-VAT union is omitted from the default signature
+because aVAT and tVAT remain separate; it is still available in the slice,
+vertebral, range, and summary tables.
+
+If a named tissue profile enables additional definitions, corresponding CSA,
+HU, and trunk-fraction channels are appended to the signature. The fixed grid
+and default channels do not change. `signature_profile_id` records the exact
+profile.
+
+### Missingness
+
+- `coverage_fraction=0`: the bin is outside the acquired CT; measurements are
+  null.
+- `0 < coverage_fraction < full_coverage_tolerance`: the observed portion is
+  summarized and the bin is marked `partial_fov`.
+- scanned bin with no supported tissue: CSA is valid zero, mean HU is null
+  with `empty_tissue`.
+- failed tissue/trunk measurement: value is null with the specific QC reason.
+- unresolved vertebral reference: physical bounds and measurements are null
+  with `missing_anchor` or `invalid_extent`.
+
+Downstream cohort code must retain coverage and validity instead of replacing
+structural missingness with zero.
+
+## Reader views
+
+`BodyComposition.measurement.api` validates the four tables and provides:
+
+- `load_measurement_tables`;
+- `signature_measurements`;
+- `l3_measurements`; and
+- `range_measurements`.
+
+The L3 and range views are read-only derivations. Caller-supplied measured
+height may be used for explicitly named indices; the pipeline never infers
+patient height from the CT.
 
 ## Validation boundary
 
-Automated tests cover array/metadata ordering, affine geometry, anisotropic and
-oblique volumes, contour calculations, deterministic body-envelope behavior,
-midpoint territories, T13/L6/sacrum, three-bin overlap, equal-height arithmetic
-means, missing edges, schema stability, API/CLI views, and atomic export.
-
-Clinical release claims still require the prespecified contour, waist/pelvic,
-and cohort-coverage audits. Until those pass, derived trunk circumference and
-anthropometric extrema must retain their QC/research-use framing.
+Automated tests cover array/metadata order, affine geometry, anisotropic and
+oblique integration, contours, native territories, T13/L6/sacrum, fixed-mm
+signature alignment, profile extensions, missingness, schema stability, API
+views, and atomic export. Clinical use still requires prespecified
+segmentation, attenuation/protocol, circumference, alignment, cohort coverage,
+and missingness validation.

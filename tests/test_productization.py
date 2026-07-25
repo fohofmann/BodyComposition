@@ -132,7 +132,7 @@ class SuccessfulPipeline:
         memory["tmp/measurement_bundle"] = SimpleNamespace(
             qc_status=SimpleNamespace(value="pass"),
             qc_flags=(),
-            slices=pd.DataFrame({"schema_version": ["2.1.0"]}),
+            slices=pd.DataFrame({"schema_version": ["3.0.0"]}),
         )
         memory["tmp/stage_events"] = [
             {"stage": "Synthetic", "result_code": "succeeded", "duration_seconds": 0.01}
@@ -196,7 +196,11 @@ def test_scientific_identity_ignores_runtime_paths_and_reporting():
     second = PipelineConfig.model_validate(value)
     assert first.digest() != second.digest()
     assert first.scientific_digest() == second.scientific_digest()
-    value["tissue"]["sm"]["filter_hu_range"] = [-20, 150]
+    value["measurements"]["tissue_definitions"]["vat_sensitivity_hu_m150_m50"] = {
+        "enabled": True,
+        "source_labels": ["aVAT", "tVAT", "VAT"],
+        "hu_range": [-150, -50],
+    }
     assert first.scientific_digest() != PipelineConfig.model_validate(value).scientific_digest()
 
 
@@ -276,7 +280,6 @@ def test_internal_model_verification_separates_local_readiness_from_release_pin(
         include_all_selectable=True,
     ) == (
         "bodycomposition_resenc_l_v1:upstream_revision_unresolved",
-        "bodycomposition_resenc_m_v1:upstream_revision_unresolved",
     )
     assert sync_model(model_id, tmp_path).ready
 
@@ -307,6 +310,14 @@ def test_model_sync_preflights_unresolved_assets_before_any_download(
     import BodyComposition.model_manager as manager
 
     calls = []
+    monkeypatch.setitem(
+        manager.INTERNAL_MODELS,
+        "bodycomposition_resenc_l_v1",
+        {
+            **manager.INTERNAL_MODELS["bodycomposition_resenc_l_v1"],
+            "revision": None,
+        },
+    )
     monkeypatch.setattr(manager, "sync_model", lambda *args: calls.append(args))
     config = PipelineConfig.model_validate(
         {

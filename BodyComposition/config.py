@@ -46,7 +46,7 @@ VERTEBRAL_LABELS = {
     21: "T13",
 }
 
-TISSUE_LABELS = {
+TISSUE_COMPARTMENT_LABELS = {
     1: "SM",
     2: "BONE",
     3: "SAT",
@@ -54,31 +54,48 @@ TISSUE_LABELS = {
     5: "tVAT",
     6: "HEART",
     7: "LUNG",
-    8: "IMAT",
+}
+
+# ``tissue_labels`` is a single-label consensus visualization derived from the
+# immutable model compartments. Optional overlapping definitions remain
+# downstream binary measurements and are never forced into this label map.
+TISSUE_LABELS = dict(TISSUE_COMPARTMENT_LABELS)
+
+CONSENSUS_TISSUE_PROFILE_ID = (
+    "consensus_hu_muscle_m29_150_adipose_m190_m30_v1"
+)
+
+CANONICAL_TISSUE_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "skeletal_muscle_tissue_hu_m29_150": {
+        "enabled": True,
+        "source_labels": ["SM"],
+        "hu_range": [-29, 150],
+    },
+    "sat_total_hu_m190_m30": {
+        "enabled": True,
+        "source_labels": ["SAT"],
+        "hu_range": [-190, -30],
+    },
+    "avat_hu_m190_m30": {
+        "enabled": True,
+        "source_labels": ["aVAT"],
+        "hu_range": [-190, -30],
+    },
+    "tvat_hu_m190_m30": {
+        "enabled": True,
+        "source_labels": ["tVAT"],
+        "hu_range": [-190, -30],
+    },
+    "vat_total_hu_m190_m30": {
+        "enabled": True,
+        "source_labels": ["aVAT", "tVAT", "VAT"],
+        "hu_range": [-190, -30],
+    },
 }
 
 
 class ConfigError(ValueError):
     """Raised when a public configuration is incomplete or inconsistent."""
-
-
-def _cleanup_rule(hu_range: list[int]) -> dict[str, Any]:
-    return {
-        "filter_hu": True,
-        "filter_hu_range": hu_range,
-        "filter_size": False,
-        "filter_size_version": "3D",
-        "filter_size_2D": 10.0,
-        "filter_size_3D": 20.0,
-        "filter_size_unit": "physical",
-        "filter_size_connectivity": 26,
-        "fill_holes": False,
-        "fill_holes_version": "2D",
-        "fill_holes_2D": 0.0,
-        "fill_holes_3D": 0.0,
-        "fill_holes_unit": "physical",
-        "fill_holes_connectivity": 8,
-    }
 
 
 def _default_mapping() -> dict[str, Any]:
@@ -126,26 +143,6 @@ def _default_mapping() -> dict[str, Any]:
         },
         "tissue": {
             "backend": "bodycomposition_resenc_l_v1",
-            "profile_id": "hofmann_2025_canonical_raw_v1",
-            "hu_denoise": {
-                "method": "none",
-                "apply_to": ["imat", "sm", "vat", "sat"],
-                "filter_outliers": False,
-                "filter_outliers_range": [-1024.0, 3071.0],
-                "filter_median_kernel": [1, 3, 3],
-                "adaptive_median_min_kernel": [1, 3, 3],
-                "adaptive_median_max_kernel": [1, 7, 7],
-                "anisotropic_diffusion": {
-                    "dimensionality": "2D",
-                    "iterations": 5,
-                    "time_step": 0.0625,
-                    "conductance": 3.0,
-                },
-            },
-            "imat": _cleanup_rule([-190, -30]),
-            "sm": _cleanup_rule([-29, 150]),
-            "vat": _cleanup_rule([-190, -30]),
-            "sat": _cleanup_rule([-190, -30]),
         },
         "body_surface": {
             "backend": "tissue_segmentation_envelope_v1",
@@ -158,83 +155,8 @@ def _default_mapping() -> dict[str, Any]:
         "measurements": {
             "full_coverage_tolerance": 0.999,
             "l3_slab_length_mm": 200.0,
-            "tissue_definitions": {
-                "muscle_compartment": {
-                    "enabled": True,
-                    "source_labels": ["SM", "IMAT"],
-                    "hu_range": None,
-                },
-                "learned_imat": {
-                    "enabled": True,
-                    "source_labels": ["IMAT"],
-                    "hu_range": None,
-                },
-                "whole_bone_anatomical": {
-                    "enabled": True,
-                    "source_labels": ["BONE"],
-                    "hu_range": None,
-                },
-                "bone_tissue_hu_152_1000": {
-                    "enabled": True,
-                    "source_labels": ["BONE"],
-                    "hu_range": [152, 1000],
-                },
-                "skeletal_muscle_tissue_hu_m29_150": {
-                    "enabled": True,
-                    "source_labels": ["SM", "IMAT"],
-                    "hu_range": [-29, 150],
-                },
-                "lama_hu_m29_29": {
-                    "enabled": True,
-                    "source_labels": ["SM", "IMAT"],
-                    "hu_range": [-29, 29],
-                },
-                "nama_hu_30_150": {
-                    "enabled": True,
-                    "source_labels": ["SM", "IMAT"],
-                    "hu_range": [30, 150],
-                },
-                "imat_ct_hu_m190_m30": {
-                    "enabled": True,
-                    "source_labels": ["SM", "IMAT"],
-                    "hu_range": [-190, -30],
-                },
-                "sat_total_hu_m190_m30": {
-                    "enabled": True,
-                    "source_labels": ["SAT"],
-                    "hu_range": [-190, -30],
-                },
-                "vat_total_hu_m190_m30": {
-                    "enabled": True,
-                    "source_labels": ["aVAT", "tVAT", "VAT"],
-                    "hu_range": [-190, -30],
-                },
-                "vat_total_hu_m150_m50": {
-                    "enabled": True,
-                    "source_labels": ["aVAT", "tVAT", "VAT"],
-                    "hu_range": [-150, -50],
-                },
-                "vat_total_hu_m205_m51": {
-                    "enabled": False,
-                    "source_labels": ["aVAT", "tVAT", "VAT"],
-                    "hu_range": [-205, -51],
-                },
-                "vat_total_hu_m195_m45": {
-                    "enabled": False,
-                    "source_labels": ["aVAT", "tVAT", "VAT"],
-                    "hu_range": [-195, -45],
-                },
-                "vat_total_hu_m250_m50": {
-                    "enabled": False,
-                    "source_labels": ["aVAT", "tVAT", "VAT"],
-                    "hu_range": [-250, -50],
-                },
-                "vat_total_hu_m274_m49": {
-                    "enabled": False,
-                    "source_labels": ["aVAT", "tVAT", "VAT"],
-                    "hu_range": [-274, -49],
-                },
-            },
+            "tissue_profile_id": CONSENSUS_TISSUE_PROFILE_ID,
+            "tissue_definitions": copy.deepcopy(CANONICAL_TISSUE_DEFINITIONS),
             "landmarks": {
                 "enabled": True,
                 "backend": "totalsegmentator_total_task297_landmarks_v1",
@@ -262,11 +184,10 @@ def _default_mapping() -> dict[str, Any]:
             "spine_view": "sagittal_thick_slab_v1",
             "measure_aggregation": "territory_mean",
             "measurement_columns": [
-                "sm_mean_csa_cm2",
+                "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
                 "sm_mean_hu",
-                "imat_mean_csa_cm2",
-                "total_vat_mean_csa_cm2",
-                "sat_mean_csa_cm2",
+                "vat_total_hu_m190_m30_mean_csa_cm2",
+                "sat_total_hu_m190_m30_mean_csa_cm2",
                 "trunk_mean_circumference_cm",
             ],
             "vertebral_range": "detected",
@@ -303,6 +224,13 @@ def _merge_strict(base: dict[str, Any], update: Mapping[str, Any], path: str = "
     for key, value in update.items():
         location = f"{path}.{key}" if path else str(key)
         if key not in base:
+            if path == "measurements.tissue_definitions":
+                if not isinstance(value, Mapping):
+                    raise ConfigError(
+                        f"Configuration value {location} must be a mapping."
+                    )
+                base[key] = copy.deepcopy(dict(value))
+                continue
             raise ConfigError(f"Unknown configuration value: {location}.")
         if isinstance(base[key], dict):
             if not isinstance(value, Mapping):
@@ -389,9 +317,9 @@ def _validate_public(data: Mapping[str, Any]) -> None:
     forced = orientation["force_review_reasons"]
     if any(not isinstance(value, str) for value in [*reasons, *forced]):
         raise ConfigError("Orientation review reasons must be strings.")
-    profile_id = data["tissue"]["profile_id"]
+    profile_id = data["measurements"]["tissue_profile_id"]
     if not isinstance(profile_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", profile_id):
-        raise ConfigError("tissue.profile_id must be a lowercase identifier.")
+        raise ConfigError("measurements.tissue_profile_id must be a lowercase identifier.")
 
 
 def _json_safe(value: Any) -> Any:
@@ -546,7 +474,7 @@ class PipelineConfig:
         measurements.update(
             {
                 "enabled": True,
-                "totalsegmentator_version": "2.15.0",
+                "measurement_support_nnunet_version": "2.5.2",
                 "body_surface": {
                     **copy.deepcopy(value["body_surface"]),
                     "save_mask": value["output"]["save_body_surface"],
@@ -594,7 +522,6 @@ class PipelineConfig:
                     "int-bodycomposition": root / "Dataset611_BodyComposition",
                     "totalsegmentator": root,
                 },
-                "totalsegmentator_config": root / "totalsegmentator_config",
                 "cache": root / ".cache",
             },
             "logging_level": {"file": level, "console": level},
@@ -610,6 +537,7 @@ class PipelineConfig:
             "measurements": measurements,
             "reporting": copy.deepcopy(value["reporting"]),
             "crop": {},
+            "LBL_TISSUE_COMPARTMENTS": copy.deepcopy(TISSUE_COMPARTMENT_LABELS),
             "LBL_TISSUE": copy.deepcopy(TISSUE_LABELS),
             "LBL_VERTEBRALBODIES": copy.deepcopy(VERTEBRAL_LABELS),
         }
@@ -673,6 +601,129 @@ def configuration_schema() -> dict[str, Any]:
         "totalsegmentator_body_task299_v1",
         "deterministic_body_mask_v1",
     ]
+    operation_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["dimensionality", "threshold", "unit", "connectivity"],
+        "properties": {
+            "dimensionality": {"enum": ["2D", "3D"]},
+            "threshold": {"type": "number", "minimum": 0},
+            "unit": {"enum": ["physical", "voxel"]},
+            "connectivity": {"enum": [4, 6, 8, 18, 26]},
+        },
+    }
+    definition_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["enabled", "source_labels", "hu_range"],
+        "properties": {
+            "enabled": {"type": "boolean"},
+            "source_labels": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1},
+            },
+            "hu_range": {
+                "oneOf": [
+                    {"type": "null"},
+                    {
+                        "type": "array",
+                        "prefixItems": [{"type": "number"}, {"type": "number"}],
+                        "minItems": 2,
+                        "maxItems": 2,
+                    },
+                ]
+            },
+            "preprocessing": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["method"],
+                "properties": {
+                    "method": {
+                        "enum": [
+                            "none",
+                            "median",
+                            "adaptive_median",
+                            "curvature_anisotropic_diffusion",
+                        ]
+                    },
+                    "clip_hu_range": {
+                        "oneOf": [
+                            {"type": "null"},
+                            {
+                                "type": "array",
+                                "prefixItems": [
+                                    {"type": "number"},
+                                    {"type": "number"},
+                                ],
+                                "minItems": 2,
+                                "maxItems": 2,
+                            },
+                        ]
+                    },
+                    "kernel_zyx": {
+                        "type": "array",
+                        "prefixItems": [
+                            {"type": "integer"},
+                            {"type": "integer"},
+                            {"type": "integer"},
+                        ],
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                    "minimum_kernel_zyx": {
+                        "type": "array",
+                        "prefixItems": [
+                            {"type": "integer"},
+                            {"type": "integer"},
+                            {"type": "integer"},
+                        ],
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                    "maximum_kernel_zyx": {
+                        "type": "array",
+                        "prefixItems": [
+                            {"type": "integer"},
+                            {"type": "integer"},
+                            {"type": "integer"},
+                        ],
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                    "anisotropic_diffusion": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "dimensionality",
+                            "iterations",
+                            "time_step",
+                            "conductance",
+                        ],
+                        "properties": {
+                            "dimensionality": {"enum": ["2D", "3D"]},
+                            "iterations": {"type": "integer", "minimum": 1},
+                            "time_step": {"type": "number", "exclusiveMinimum": 0},
+                            "conductance": {"type": "number", "exclusiveMinimum": 0},
+                        },
+                    },
+                },
+            },
+            "cleanup": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "fill_small_holes": operation_schema,
+                    "remove_small_objects": operation_schema,
+                },
+            },
+        },
+    }
+    definitions_schema = properties["measurements"]["properties"][
+        "tissue_definitions"
+    ]
+    definitions_schema["propertyNames"] = {"pattern": "^[a-z][a-z0-9_]*$"}
+    definitions_schema["additionalProperties"] = definition_schema
     properties["runtime"]["properties"]["device"]["enum"] = ["auto", "cpu", "cuda"]
     properties["output"]["properties"]["log_level"]["enum"] = ["DEBUG", "INFO", "WARNING", "ERROR"]
     properties["models"]["properties"]["root"]["minLength"] = 1

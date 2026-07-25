@@ -144,9 +144,9 @@ def calculate_canonical_slice_measurements(
     identity: MeasurementIdentity,
     *,
     tissue_backend_id: str,
+    compartment_labels_zyx: np.ndarray,
+    compartment_label_schema: Mapping[int, str],
     tissue_preprocessing: Mapping[str, Any] | None = None,
-    compartment_labels_zyx: np.ndarray | None = None,
-    compartment_label_schema: Mapping[int, str] | None = None,
     tissue_definitions: Mapping[str, Mapping[str, Any]] | None = None,
     orientation_changed: bool = False,
 ) -> pd.DataFrame:
@@ -175,6 +175,24 @@ def calculate_canonical_slice_measurements(
     )
     if unknown:
         raise ValueError(f"Tissue mask contains labels outside its schema: {unknown}.")
+    compartment_labels = validate_array_zyx(
+        compartment_labels_zyx,
+        geometry,
+        "compartment_labels_zyx",
+    )
+    if not np.issubdtype(compartment_labels.dtype, np.integer):
+        raise TypeError("Compartment labels must be integer-valued.")
+    compartment_schema = _validated_label_schema(compartment_label_schema)
+    unknown_compartments = sorted(
+        int(value)
+        for value in np.unique(compartment_labels)
+        if value != 0 and int(value) not in compartment_schema
+    )
+    if unknown_compartments:
+        raise ValueError(
+            "Compartment mask contains labels outside its schema: "
+            f"{unknown_compartments}."
+        )
 
     table = slice_geometry_table(geometry).drop(columns=["original_storage_index"])
     del orientation_changed
@@ -250,8 +268,8 @@ def calculate_canonical_slice_measurements(
 
     tissue_masks: dict[str, np.ndarray] = {}
     tissue_columns: dict[str, Any] = {}
-    for label, name in schema.items():
-        tissue_mask = labels == label
+    for label, name in compartment_schema.items():
+        tissue_mask = compartment_labels == label
         tissue_masks[name] = tissue_mask
         tissue_columns.update(_tissue_measurement_columns(
             name=name,
@@ -297,27 +315,12 @@ def calculate_canonical_slice_measurements(
         )
 
     if tissue_definitions:
-        compartment_labels = (
-            labels
-            if compartment_labels_zyx is None
-            else validate_array_zyx(
-                compartment_labels_zyx,
-                geometry,
-                "compartment_labels_zyx",
-            )
-        )
-        if not np.issubdtype(compartment_labels.dtype, np.integer):
-            raise TypeError("Compartment labels must be integer-valued.")
-        compartment_schema = (
-            schema
-            if compartment_label_schema is None
-            else _validated_label_schema(compartment_label_schema)
-        )
         derived_masks = derive_configured_tissue_masks(
             image,
             compartment_labels,
             compartment_schema,
             tissue_definitions,
+            spacing_xyz=geometry.spacing_xyz,
         )
         reserved_names = {*tissue_masks, "total_vat"}
         collisions = sorted(reserved_names.intersection(derived_masks))
@@ -353,8 +356,13 @@ def calculate_canonical_slice_measurements(
             axis=1,
         )
 
-    segmented_counts = np.count_nonzero(labels, axis=(1, 2)).astype(np.int64)
-    tissue_outside_body = (labels != 0) & ~body_surface.body_mask_zyx
+    segmented_counts = np.count_nonzero(
+        compartment_labels,
+        axis=(1, 2),
+    ).astype(np.int64)
+    tissue_outside_body = (
+        (compartment_labels != 0) & ~body_surface.body_mask_zyx
+    )
     outside_counts = np.count_nonzero(tissue_outside_body, axis=(1, 2)).astype(np.int64)
     total_valid = outside_counts[storage] == 0
     table["total_segmented_tissue_voxel_count"] = segmented_counts[storage]

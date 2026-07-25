@@ -225,6 +225,27 @@ def test_low_memory_mode_releases_models_and_is_idempotent(
     assert cache_releases == ["cpu", "cpu"]
 
 
+def test_exclusive_model_stage_releases_only_other_model_bundles(
+    pipeline_stub,
+    monkeypatch,
+):
+    first = _OutputAction(pipeline_stub)
+    support = _OutputAction(pipeline_stub)
+    third = _OutputAction(pipeline_stub)
+    runtime = _runtime([first, support, third])
+    cache_releases = []
+    monkeypatch.setattr(
+        pipeline_module,
+        "release_accelerator_cache",
+        lambda device: cache_releases.append(device),
+    )
+
+    runtime.prepare_exclusive_model(support)
+
+    assert (first.released, support.released, third.released) == (1, 0, 1)
+    assert cache_releases == ["cpu"]
+
+
 def test_model_release_failure_is_contained(pipeline_stub, caplog):
     action = _OutputAction(pipeline_stub)
 

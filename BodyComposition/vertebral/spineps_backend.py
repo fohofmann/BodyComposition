@@ -300,7 +300,6 @@ class SpinepsVeridahAdapter:
                     "All pinned SPINEPS/VERIDAH and VibeSeg Dataset100 assets are verified.",
                 )
             )
-        checks.append(_writable_location(self.model_root, "model_cache"))
         if output_root is not None:
             checks.append(_writable_location(Path(output_root), "output_root"))
         device, device_check = self._resolved_device()

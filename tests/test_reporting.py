@@ -28,6 +28,7 @@ from BodyComposition.measurement.builder import build_measurement_bundle
 from BodyComposition.measurement.contracts import MeasurementIdentity
 from BodyComposition.reporting.contracts import (
     MAX_REVIEW_SUMMARY_ROWS,
+    MEASUREMENT_DEFINITIONS,
     CaseReportInput,
     CaseReportResult,
     ReportingSettings,
@@ -79,12 +80,13 @@ def _report_case(config, case_id="case-001", *, orientation=None):
     tissues[:, 13:16, 8:14] = 3
     tissues[:, 16:19, 9:14] = 4
     tissues[:, 19:22, 10:15] = 5
-    tissues[:, 22:25, 11:16] = 8
     image[tissues == 1] = 42
     image[tissues == 3] = -100
     image[tissues == 4] = -85
     image[tissues == 5] = -70
-    image[tissues == 8] = -45
+    image[0, 8, 8] = -100
+    tissue_labels = tissues.copy()
+    tissue_labels[0, 8, 8] = 0
 
     vertebral = np.zeros(shape, dtype=np.uint8)
     for label, start in ((19, 4), (17, 12), (16, 20), (15, 28), (14, 36), (13, 44), (12, 52)):
@@ -124,11 +126,13 @@ def _report_case(config, case_id="case-001", *, orientation=None):
         warnings.simplefilter("ignore", pd.errors.PerformanceWarning)
         bundle = build_measurement_bundle(
             image_zyx=image,
-            tissue_labels_zyx=tissues,
+            tissue_labels_zyx=tissue_labels,
             geometry=geometry,
             tissue_label_schema=config["LBL_TISSUE"],
             tissue_backend_id="synthetic",
             tissue_preprocessing={"mode": "none"},
+            compartment_labels_zyx=tissues,
+            compartment_label_schema=config["LBL_TISSUE_COMPARTMENTS"],
             body_surface=body_surface,
             vertebral_result=result,
             identity=identity,
@@ -149,7 +153,7 @@ def _report_case(config, case_id="case-001", *, orientation=None):
         prepared_image=prepared,
         vertebral_result=result,
         measurement_bundle=bundle,
-        tissue_labels_zyx=tissues,
+        tissue_labels_zyx=tissue_labels,
         orientation=orientation,
         technical_metadata={
             "analysis_started_at": "2026-07-18T12:30:00+02:00",
@@ -172,6 +176,13 @@ def test_reporting_settings_and_palette_are_frozen():
     settings = _settings()
     assert settings.page_size == "A4_landscape"
     assert settings.measure_aggregation == "territory_mean"
+    assert settings.measurement_columns == (
+        "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
+        "sm_mean_hu",
+        "vat_total_hu_m190_m30_mean_csa_cm2",
+        "sat_total_hu_m190_m30_mean_csa_cm2",
+        "trunk_mean_circumference_cm",
+    )
     assert vertebral_color("T13") == vertebral_color("T13")
     assert vertebral_color("T13") != vertebral_color("L6")
     assert vertebral_color("SACRUM") != vertebral_color("L5")
@@ -342,7 +353,7 @@ def test_axial_segmentation_view_uses_l3_and_explicit_xyz_zyx_boundary(base_conf
     assert view.native_label == 15
     assert view.l3_available
     assert view.rgb.ndim == 3 and view.rgb.shape[2] == 3
-    assert {"SM", "SAT", "aVAT", "tVAT", "IMAT"}.issubset(view.tissue_names)
+    assert {"SM", "SAT", "aVAT", "tVAT"}.issubset(view.tissue_names)
 
     without_l3 = [row for row in rows if row["vertebral_level"] != "L3"]
     fallback = build_axial_segmentation_view(
@@ -450,7 +461,7 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     assert "Research Test Imaging Synthetic CT 1.0" in text
     assert "NVIDIA A100-SXM4-80GB" in text
     audit = manifest["display"]["audit"]
-    assert audit["layout_revision"] == "scientific_onepager_v5"
+    assert audit["layout_revision"] == "scientific_onepager_v6"
     assert not {"PASS", "REVIEW"}.intersection(word["text"] for word in words)
     assert audit["sagittal_projection"]["crop_basis"] == "vertebral_body_mask"
     assert (
@@ -479,7 +490,10 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
             "axial_segmentation",
         ]
         profile = manifest["display"]["audit"]["profile"]
-        assert profile["layers"] == ["sm", "imat", "sat", "avat", "tvat"]
+        assert profile["layers"] == ["sm", "sat", "avat", "tvat"]
+        assert profile["legend_labels"] == ["Muscle", "SAT", "aVAT", "tVAT"]
+        assert profile["legend_rows"] == 1
+        assert profile["hu_definition_caption"] == "Muscle -29..150 | fat -190..-30 HU"
         positions = case.measurement_bundle.slices["position_superior_mm"].to_numpy(dtype=float)
         inferior_mm, superior_mm = profile["displayed_superior_range_mm"]
         displayed_valid = (
@@ -585,6 +599,25 @@ def test_report_rejects_mixed_orientation_vertebral_measurement_sources(
             tmp_path / "tissue-labels",
             _settings(),
         )
+
+
+def test_report_label_view_is_distinct_from_raw_measurement_compartments(
+    base_config,
+    tmp_path,
+):
+    case = _report_case(base_config, "case-dual-tissue-source")
+    tissue_provenance = case.measurement_bundle.provenance["tissue"]
+
+    assert tissue_provenance["label_sha256"] != tissue_provenance[
+        "compartment_sha256"
+    ]
+    processed_sm_count = int(np.count_nonzero(case.tissue_labels_zyx[0] == 1))
+    assert case.measurement_bundle.slices.iloc[0]["sm_voxel_count"] == (
+        processed_sm_count + 1
+    )
+
+    result = render_case_report(case, tmp_path / "dual-source", _settings())
+    assert result.pdf_path.is_file()
 
 
 def test_interrupted_rerender_removes_stale_pdf_completion_marker(
@@ -844,7 +877,12 @@ def test_failure_page_preserves_available_vertebral_body_overview(
     assert "AVAILABLE SPINE OVERVIEW" in text
     assert "Sagittal thick-slab projection" in text
     assert "Measurements unavailable" in text
-    assert "SM (cm2): NA*" in text
+    for column in _settings(layout).measurement_columns:
+        definition = MEASUREMENT_DEFINITIONS[column]
+        assert (
+            f"{definition['short_label']} ({definition['unit']}): NA*"
+            in text
+        )
     if layout == "spine_profile_v2":
         assert "Stacked tissue-area profile" in text
         assert "Measurement output incomplete" in text

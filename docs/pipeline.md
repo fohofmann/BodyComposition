@@ -65,10 +65,12 @@ conditions. They never cause relabeling by silent heuristic fallback.
 
 ## Execution and atomicity
 
-One process keeps model objects resident across cases. Multiple identical
-processes can join a filesystem-backed whole-case queue. Claims have
-heartbeats, bounded stale takeover, fencing tokens, and a maximum attempt
-count. A stale process cannot overwrite a reclaimed case.
+One process reuses compatible model objects across cases. A stage-aware memory
+barrier releases earlier segmentation bundles before the large optional
+measurement-support predictor and releases that predictor immediately after
+use. Multiple identical processes can join a filesystem-backed whole-case
+queue. Claims have heartbeats, bounded stale takeover, fencing tokens, and a
+maximum attempt count. A stale process cannot overwrite a reclaimed case.
 
 Case work occurs in an attempt directory on the same filesystem. A successful
 bundle is renamed atomically to its content-addressed destination only after

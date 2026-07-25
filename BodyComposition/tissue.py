@@ -142,24 +142,6 @@ def prepare_classification_image(
     raise ValueError(f"Unknown HU classification preprocessing method {method!r}.")
 
 
-def prepare_classification_images(
-    image_zyx: np.ndarray,
-    spacing_xyz,
-    settings: Mapping[str, object],
-    tissue_names=("imat", "sm", "vat", "sat"),
-) -> dict[str, np.ndarray]:
-    """Return raw or preprocessed classification images by tissue rule."""
-
-    names = tuple(str(name) for name in tissue_names)
-    apply_to = set(settings.get("apply_to", names))
-    processed = prepare_classification_image(image_zyx, spacing_xyz, settings)
-    raw = np.asarray(image_zyx)
-    return {
-        name: processed if name in apply_to else raw
-        for name in names
-    }
-
-
 def cleanup_tissue_mask(
     mask_zyx: np.ndarray,
     settings: Mapping[str, object],

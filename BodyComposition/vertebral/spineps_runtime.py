@@ -116,7 +116,13 @@ def _run_spineps(img_ref: Any, models: Any, derivative_name: str) -> Any:
         auto_crop_to_spine=False,
         proc_lab_force_no_tl_anomaly=False,
         ignore_bids_filter=True,
-        ignore_compatibility_issues=False,
+        # The pinned CT model declares an "iso" acquisition, while routine CT
+        # is commonly anisotropic. SPINEPS itself reorients and resamples the
+        # image to the model's 0.8-mm grid and returns outputs in input space.
+        # BodyComposition validates the governed CT and its physical domain
+        # before and after this call, so the coarse BIDS acquisition check must
+        # not reject a physically valid anisotropic CT before that resampling.
+        ignore_compatibility_issues=True,
         return_output_instead_of_save=False,
         verbose=False,
     )
@@ -361,6 +367,9 @@ class SpinepsRuntime:
             {
                 "vibeseg_model_id": "dataset100",
                 "vibeseg_precomputed": True,
+                "input_compatibility_policy": (
+                    "bodycomposition_validated_ct_with_upstream_resampling"
+                ),
                 "staged_input_name": staged_input.name,
                 "orientation": prepared.result.to_dict(),
             }

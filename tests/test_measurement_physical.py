@@ -102,6 +102,8 @@ def test_prepared_slice_ids_do_not_claim_an_original_axis_after_orientation_repa
         body,
         MeasurementIdentity("case", "run", "analysis"),
         tissue_backend_id="synthetic",
+        compartment_labels_zyx=tissue,
+        compartment_label_schema={1: "SM"},
         orientation_changed=True,
     )
 
@@ -213,6 +215,8 @@ def test_oblique_anisotropic_elliptical_solid_matches_voxel_volume_reference():
         body,
         MeasurementIdentity("case", "run", "analysis"),
         tissue_backend_id="synthetic",
+        compartment_labels_zyx=labels,
+        compartment_label_schema={1: "SM"},
     )
     voxel_count_per_slice = int(np.count_nonzero(ellipse_yx))
     expected_area_cm2 = voxel_count_per_slice * geometry.in_plane_area_mm2 / 100.0
@@ -248,22 +252,33 @@ def test_slice_measurements_are_concise_and_preserve_native_and_total_vat_areas(
     labels[0, 3:5, 3:7] = 3
     labels[0, 5:7, 4:6] = 4
     labels[0, 7:9, 5:7] = 5
-    labels[1, 5, 5] = 8
+    labels[1, 5, 5] = 1
     image[labels == 1] = 40
     image[labels == 3] = -100
     image[labels == 4] = -90
     image[labels == 5] = -70
-    image[labels == 8] = -50
     body = body_surface_from_totalsegmentator(body_labels, geometry)
 
     table = calculate_canonical_slice_measurements(
         image,
         labels,
         geometry,
-        {1: "SM", 3: "SAT", 4: "aVAT", 5: "tVAT", 8: "IMAT"},
+        {
+            1: "SM",
+            3: "SAT",
+            4: "aVAT",
+            5: "tVAT",
+        },
         body,
         MeasurementIdentity("case", "run", "analysis"),
         tissue_backend_id="synthetic",
+        compartment_labels_zyx=labels,
+        compartment_label_schema={
+            1: "SM",
+            3: "SAT",
+            4: "aVAT",
+            5: "tVAT",
+        },
     )
 
     first = table.iloc[0]
@@ -279,8 +294,8 @@ def test_slice_measurements_are_concise_and_preserve_native_and_total_vat_areas(
     assert "sm_fraction_body_area" not in table
     assert "body_outer_perimeter_cm" not in table
     second = table.iloc[1]
-    assert not second["imat_area_valid"]
-    assert second["imat_area_reason"] == "invalid_measurement"
+    assert not second["sm_area_valid"]
+    assert second["sm_area_reason"] == "invalid_measurement"
     assert second["tissue_outside_body_voxel_count"] == 1
     assert not second["slice_measurement_valid"]
 
@@ -463,6 +478,8 @@ def test_fragmented_trunk_is_observed_but_ineligible_for_canonical_summaries():
         body,
         MeasurementIdentity("case", "run", "analysis"),
         tissue_backend_id="synthetic",
+        compartment_labels_zyx=labels,
+        compartment_label_schema={1: "SM"},
     )
 
     row = table.iloc[0]
@@ -495,6 +512,8 @@ def test_internal_body_surface_gap_and_empty_end_slices_are_explicitly_invalid()
         body,
         MeasurementIdentity("case", "run", "analysis"),
         tissue_backend_id="synthetic",
+        compartment_labels_zyx=labels,
+        compartment_label_schema={1: "SM"},
     ).set_index("slice_id")
 
     assert table.loc[2, "body_mask_internal_gap"]

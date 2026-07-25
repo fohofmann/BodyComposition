@@ -40,10 +40,9 @@ dependencies = [
     "SimpleITK",
     "SPINEPS==2.0.0",
     "TPTBox==0.7.5",
-    "nnunetv2",
+    "nnunetv2==2.5.2",
     "torch",
-    "torchvision",
-    "TotalSegmentator==2.15.0"
+    "torchvision"
 ]
 
 [project.optional-dependencies]

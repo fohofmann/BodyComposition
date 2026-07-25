@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from BodyComposition import __version__
+from BodyComposition.config import CANONICAL_TISSUE_DEFINITIONS
 from BodyComposition.measurement.aggregation import (
     annotate_slice_anatomy,
     build_case_summaries,
@@ -28,6 +29,7 @@ from BodyComposition.measurement.contracts import (
     MeasurementIdentity,
 )
 from BodyComposition.measurement.physical import geometry_digest
+from BodyComposition.measurement.signature import build_longitudinal_signature
 from BodyComposition.measurement.slices import (
     annotate_longitudinal_circumference_qc,
     calculate_canonical_slice_measurements,
@@ -136,6 +138,8 @@ def build_measurement_bundle(
     tissue_label_schema: Mapping[int, str],
     tissue_backend_id: str,
     tissue_preprocessing: Mapping[str, Any],
+    compartment_labels_zyx: np.ndarray,
+    compartment_label_schema: Mapping[int, str],
     body_surface: BodySurfaceResult,
     vertebral_result: VertebralResult,
     identity: MeasurementIdentity,
@@ -143,8 +147,6 @@ def build_measurement_bundle(
     settings: Mapping[str, Any],
     orientation_changed: bool = False,
     orientation_provenance: Mapping[str, Any] | None = None,
-    compartment_labels_zyx: np.ndarray | None = None,
-    compartment_label_schema: Mapping[int, str] | None = None,
 ) -> MeasurementBundle:
     """Build all canonical tables from one immutable set of prepared inputs."""
 
@@ -178,9 +180,9 @@ def build_measurement_bundle(
         body_surface,
         identity,
         tissue_backend_id=tissue_backend_id,
-        tissue_preprocessing=tissue_preprocessing,
         compartment_labels_zyx=compartment_labels_zyx,
         compartment_label_schema=compartment_label_schema,
+        tissue_preprocessing=tissue_preprocessing,
         tissue_definitions=settings.get("tissue_definitions"),
         orientation_changed=orientation_changed,
     )
@@ -214,6 +216,22 @@ def build_measurement_bundle(
         slab_length_mm=float(settings["l3_slab_length_mm"]),
         full_coverage_tolerance=full_coverage_tolerance,
     )
+    definitions = settings.get("tissue_definitions", {})
+    extra_signature_definitions = tuple(
+        name
+        for name, definition in definitions.items()
+        if bool(definition.get("enabled", False))
+        and name not in CANONICAL_TISSUE_DEFINITIONS
+    )
+    signature, signature_alignment = build_longitudinal_signature(
+        slices,
+        extents,
+        territories,
+        identity,
+        tissue_profile_id=str(settings["tissue_profile_id"]),
+        extra_tissue_definitions=extra_signature_definitions,
+        full_coverage_tolerance=full_coverage_tolerance,
+    )
 
     flags: list[QCFlag] = [*body_surface.qc_flags, *vertebral_result.qc_flags]
     if not extents:
@@ -223,6 +241,54 @@ def build_measurement_bundle(
                 stage="measurement",
                 severity=QCSeverity.ERROR,
                 reason="No labeled vertebral-body instance is available for aggregation.",
+            )
+        )
+    elif not signature_alignment.valid:
+        flags.append(
+            QCFlag(
+                code="signature_reference_unresolved",
+                stage="measurement",
+                severity=QCSeverity.WARNING,
+                reason=(
+                    "The detected vertebral bodies could not define the "
+                    "versioned longitudinal reference coordinate."
+                ),
+                observed={
+                    "method": signature_alignment.method,
+                    "reason": signature_alignment.reason,
+                    "anchor_levels": list(signature_alignment.anchor_levels),
+                    "slope_mm_per_level": (
+                        signature_alignment.slope_mm_per_level
+                    ),
+                },
+                suggested_review_action=(
+                    "Review vertebral enumeration and centroids before using "
+                    "the longitudinal signature."
+                ),
+            )
+        )
+    elif signature_alignment.confidence == "low":
+        flags.append(
+            QCFlag(
+                code="signature_reference_low_confidence",
+                stage="measurement",
+                severity=QCSeverity.WARNING,
+                reason=(
+                    "The longitudinal reference coordinate was inferred from "
+                    "insufficient, distant, or inconsistent vertebral anchors."
+                ),
+                observed={
+                    "method": signature_alignment.method,
+                    "anchor_levels": list(signature_alignment.anchor_levels),
+                    "slope_mm_per_level": (
+                        signature_alignment.slope_mm_per_level
+                    ),
+                    "residual_mm": signature_alignment.residual_mm,
+                },
+                suggested_review_action=(
+                    "Confirm vertebral enumeration and the inferred L3 origin "
+                    "before comparing the longitudinal signature."
+                ),
             )
         )
     if landmarks is not None:
@@ -510,6 +576,7 @@ def build_measurement_bundle(
         slices=slices,
         vertebrae=vertebrae,
         summaries=summaries,
+        signature=signature,
         body_surface=body_surface,
         vertebral_extents=extents,
         vertebral_territories=territories,
@@ -519,6 +586,31 @@ def build_measurement_bundle(
             "measurement": {
                 "schema_version": MEASUREMENT_SCHEMA_VERSION,
                 "vertebral_territory_schema_version": (VERTEBRAL_TERRITORY_SCHEMA_VERSION),
+                "signature_schema_version": str(
+                    signature["signature_schema_version"].iloc[0]
+                ),
+                "signature_profile_id": str(
+                    signature["signature_profile_id"].iloc[0]
+                ),
+                "signature_reference": {
+                    "alignment_version": str(
+                        signature["reference_alignment_version"].iloc[0]
+                    ),
+                    "level": str(signature["reference_level"].iloc[0]),
+                    "method": signature_alignment.method,
+                    "confidence": signature_alignment.confidence,
+                    "anchor_levels": list(signature_alignment.anchor_levels),
+                    "origin_position_superior_mm": (
+                        signature_alignment.origin_position_superior_mm
+                    ),
+                    "slope_mm_per_level": (
+                        signature_alignment.slope_mm_per_level
+                    ),
+                    "residual_mm": signature_alignment.residual_mm,
+                    "review_required": signature_alignment.review_required,
+                    "variant_sequence": signature_alignment.variant_sequence,
+                    "reason": signature_alignment.reason,
+                },
                 "settings": dict(settings),
             },
             "tissue": {
@@ -528,11 +620,12 @@ def build_measurement_bundle(
                     str(label): name for label, name in sorted(tissue_label_schema.items())
                 },
                 "preprocessing": dict(tissue_preprocessing),
-                "compartment_source": (
-                    "raw_model_labels"
-                    if compartment_labels_zyx is not None
-                    else "postprocessed_tissue_fallback"
-                ),
+                "compartment_sha256": _array_digest(compartment_labels_zyx),
+                "compartment_schema": {
+                    str(label): name
+                    for label, name in sorted(compartment_label_schema.items())
+                },
+                "compartment_source": "raw_model_labels",
                 "definitions": dict(settings.get("tissue_definitions", {})),
             },
             "body_surface": {

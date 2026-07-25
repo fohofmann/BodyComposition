@@ -48,6 +48,8 @@ MEASUREMENT_QC = "qc/qc.json"
 SLICE_TABLE = "tables/slices.parquet"
 VERTEBRA_TABLE = "tables/vertebrae.parquet"
 SUMMARY_TABLE = "tables/summaries.parquet"
+SIGNATURE_TABLE = "tables/signature.parquet"
+TISSUE_LABEL_MASK = "masks/tissue_labels.nii.gz"
 TOTALSEG_BODY_LABEL = "masks/totalsegmentator_body.nii.gz"
 TOTALSEG_LANDMARK_LABEL = "masks/totalsegmentator_landmarks.nii.gz"
 
@@ -135,17 +137,17 @@ def _atomic_parquet(
 class CreateBodySurface(PipelineAction):
     """Build aligned body/trunk masks with no implicit backend substitution."""
 
-    def __init__(self, pipeline, *, tissue_mask: str):
+    def __init__(self, pipeline, *, compartment_mask: str):
         super().__init__(pipeline)
         self.settings = self.config["measurements"]["body_surface"]
         self.backend = self.settings["backend"]
-        self.tissue_mask_name = tissue_mask
+        self.compartment_mask_name = compartment_mask
         if self.backend == TOTALSEGMENTATOR_BODY_BACKEND:
             self.input_name = TOTALSEG_BODY_LABEL
         elif self.backend == DETERMINISTIC_BODY_BACKEND:
             self.input_name = "tmp/prepared_image"
         elif self.backend == TISSUE_ENVELOPE_BACKEND:
-            self.input_name = tissue_mask
+            self.input_name = compartment_mask
         else:
             raise ValueError(f"Unknown body-surface backend {self.backend!r}.")
         self.io_inputs = [self.input_name, "tmp/prepared_image"]
@@ -164,7 +166,8 @@ class CreateBodySurface(PipelineAction):
                 require_measurement_model,
             )
 
-            asset_report = require_measurement_model("bodytrunk")
+            model_root = self.config["paths"]["weights"]["totalsegmentator"]
+            asset_report = require_measurement_model("bodytrunk", model_root)
             label = memory[self.input_name]
             label.validate()
             assert_same_physical_domain(
@@ -177,10 +180,11 @@ class CreateBodySurface(PipelineAction):
                 label.data,
                 geometry,
                 provenance={
-                    "software_version": self.config["measurements"][
-                        "totalsegmentator_version"
+                    "inference_engine": "nnUNetv2",
+                    "inference_engine_version": self.config["measurements"][
+                        "measurement_support_nnunet_version"
                     ],
-                    "inference_mode": "body_1p5mm_full_volume_cache_only",
+                    "inference_mode": "pinned_task299_full_volume_cache_only",
                     "model_assets": asset_report.provenance(),
                 },
             )
@@ -198,7 +202,7 @@ class CreateBodySurface(PipelineAction):
                 geometry,
                 tissue.geometry,
                 reference_name="orientation-prepared CT",
-                candidate_name="tissue segmentation used for body envelope",
+                candidate_name="raw tissue compartments used for body envelope",
             )
             result = tissue_segmentation_envelope(
                 tissue.data,
@@ -208,7 +212,7 @@ class CreateBodySurface(PipelineAction):
                 ),
                 closing_radius_mm=float(self.settings["closing_radius_mm"]),
                 smoothing_sigma_mm=float(self.settings["smoothing_sigma_mm"]),
-                provenance={"tissue_mask_input": "canonical_pipeline_tissue_mask"},
+                provenance={"tissue_mask_input": "raw_model_compartments"},
             )
 
         encoded = np.where(result.body_mask_zyx, 2, 0).astype(np.uint8)
@@ -241,12 +245,13 @@ class CreateMeasurementLandmarks(PipelineAction):
 
     def __call__(self, memory):
         super().__call__(memory)
-        from totalsegmentator.map_to_binary import class_map
-
         from BodyComposition.measurement.totalsegmentator_assets import (
+            measurement_label_schema,
             require_measurement_model,
         )
 
+        model_root = self.config["paths"]["weights"]["totalsegmentator"]
+        asset_report = require_measurement_model("body_landmarks", model_root)
         prepared = memory["tmp/prepared_image"].prepared_image
         geometry = ImageGeometry.from_sitk(prepared)
         label = memory[TOTALSEG_LANDMARK_LABEL]
@@ -260,19 +265,18 @@ class CreateMeasurementLandmarks(PipelineAction):
         memory["tmp/measurement_landmarks"] = landmarks_from_totalsegmentator(
             label.data,
             geometry,
-            class_map["total"],
+            measurement_label_schema("body_landmarks", model_root),
             minimum_voxels=int(self.minimum_voxels),
             maximum_side_disagreement_mm=float(self.maximum_side_disagreement_mm),
             provenance={
-                "software_version": self.config["measurements"][
-                    "totalsegmentator_version"
+                "inference_engine": "nnUNetv2",
+                "inference_engine_version": self.config["measurements"][
+                    "measurement_support_nnunet_version"
                 ],
-                "inference_mode": "fast_total_3mm_full_volume_cache_only",
+                "inference_mode": "pinned_task297_full_volume_cache_only",
                 "upstream_roi_subset_used": False,
                 "consumed_labels": "bilateral_hips_and_ribs",
-                "model_assets": require_measurement_model(
-                    "body_landmarks"
-                ).provenance(),
+                "model_assets": asset_report.provenance(),
             },
         )
 
@@ -284,13 +288,11 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         self,
         pipeline,
         *,
-        tissue_mask: str,
+        compartment_mask: str,
         tissue_backend_id: str,
         vertebral_body_source: str,
-        compartment_mask: str | None = None,
     ):
         super().__init__(pipeline)
-        self.tissue_mask_name = tissue_mask
         self.tissue_backend_id = tissue_backend_id
         self.compartment_mask_name = compartment_mask
         self.vertebral_body_source_name = vertebral_body_source
@@ -298,12 +300,11 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         self.timestamp = pipeline.timestamp
         self.io_inputs = [
             "tmp/prepared_image",
-            tissue_mask,
+            compartment_mask,
+            TISSUE_LABEL_MASK,
             "tmp/vertebral_result",
             "tmp/body_surface_result",
         ]
-        if compartment_mask is not None:
-            self.io_inputs.append(compartment_mask)
         if self.settings["landmarks"]["enabled"]:
             self.io_inputs.append("tmp/measurement_landmarks")
         self.io_outputs = [
@@ -311,6 +312,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             "tmp/slice_measurements",
             "tmp/vertebra_measurements",
             "tmp/case_summaries",
+            "tmp/longitudinal_signature",
         ]
 
     def __call__(self, memory):
@@ -318,19 +320,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         prepared = memory["tmp/prepared_image"].prepared_image
         geometry = ImageGeometry.from_sitk(prepared)
         image_zyx = sitk.GetArrayFromImage(prepared)
-        tissue = memory[self.tissue_mask_name]
-        tissue.validate()
-        assert_same_physical_domain(
-            geometry,
-            tissue.geometry,
-            reference_name="orientation-prepared CT",
-            candidate_name="tissue mask",
-        )
-        compartment = (
-            memory[self.compartment_mask_name]
-            if self.compartment_mask_name is not None
-            else tissue
-        )
+        compartment = memory[self.compartment_mask_name]
         compartment.validate()
         assert_same_physical_domain(
             geometry,
@@ -338,21 +328,25 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             reference_name="orientation-prepared CT",
             candidate_name="raw tissue-compartment labels",
         )
+        tissue_labels = memory[TISSUE_LABEL_MASK]
+        tissue_labels.validate()
+        assert_same_physical_domain(
+            geometry,
+            tissue_labels.geometry,
+            reference_name="orientation-prepared CT",
+            candidate_name="postprocessed tissue-label view",
+        )
         body_surface = memory["tmp/body_surface_result"]
         vertebral_result = memory["tmp/vertebral_result"]
         orientation_result = memory["tmp/prepared_image"].result
         measurement_config = _scientific_measurement_configuration(self.settings)
         tissue_preprocessing = {
-            "profile_id": self.config["tissue"]["profile_id"],
-            "hu_denoise": self.config["tissue"]["hu_denoise"],
-            "tissue_rules": {
-                name: self.config["tissue"][name]
-                for name in ("imat", "sm", "vat", "sat")
-            },
+            "source": "raw_model_compartments",
+            "profile_id": self.settings["tissue_profile_id"],
         }
         analysis_id = memory.get("analysis_id") or measurement_analysis_id(
             image_zyx,
-            tissue.data,
+            tissue_labels.data,
             body_surface,
             vertebral_result,
             measurement_config,
@@ -360,7 +354,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             tissue_label_schema=self.config["LBL_TISSUE"],
             tissue_preprocessing=tissue_preprocessing,
             compartment_labels_zyx=compartment.data,
-            compartment_label_schema=self.config["LBL_TISSUE"],
+            compartment_label_schema=self.config["LBL_TISSUE_COMPARTMENTS"],
             orientation_provenance=orientation_result.to_dict(),
         )
         identity = MeasurementIdentity(
@@ -370,11 +364,13 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         )
         bundle = build_measurement_bundle(
             image_zyx=image_zyx,
-            tissue_labels_zyx=tissue.data,
+            tissue_labels_zyx=tissue_labels.data,
             geometry=geometry,
             tissue_label_schema=self.config["LBL_TISSUE"],
             tissue_backend_id=self.tissue_backend_id,
             tissue_preprocessing=tissue_preprocessing,
+            compartment_labels_zyx=compartment.data,
+            compartment_label_schema=self.config["LBL_TISSUE_COMPARTMENTS"],
             body_surface=body_surface,
             vertebral_result=vertebral_result,
             identity=identity,
@@ -382,8 +378,6 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             settings=self.settings,
             orientation_changed=bool(orientation_result.orientation_changed),
             orientation_provenance=orientation_result.to_dict(),
-            compartment_labels_zyx=compartment.data,
-            compartment_label_schema=self.config["LBL_TISSUE"],
         )
         memory["analysis_id"] = identity.analysis_id
         memory["run_id"] = identity.run_id
@@ -391,6 +385,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         memory["tmp/slice_measurements"] = bundle.slices
         memory["tmp/vertebra_measurements"] = bundle.vertebrae
         memory["tmp/case_summaries"] = bundle.summaries
+        memory["tmp/longitudinal_signature"] = bundle.signature
 
 
 class WriteMeasurementReview(PipelineAction):
@@ -415,12 +410,13 @@ class WriteMeasurementReview(PipelineAction):
 
 
 class ExportMeasurementBundle(PipelineAction):
-    """Atomically persist the three authoritative Parquet tables and QC JSON."""
+    """Atomically persist the authoritative Parquet tables and QC JSON."""
 
     table_templates = {
         "slices": SLICE_TABLE,
         "vertebrae": VERTEBRA_TABLE,
         "summaries": SUMMARY_TABLE,
+        "signature": SIGNATURE_TABLE,
     }
 
     def __init__(self, pipeline):
@@ -465,22 +461,20 @@ class ExportMeasurementBundle(PipelineAction):
 def measurement_support_actions(
     pipeline,
     *,
-    tissue_mask: str,
+    compartment_mask: str,
 ) -> list[PipelineAction]:
     """Return explicit body/landmark actions; never insert a silent fallback."""
 
     settings = pipeline.config["measurements"]
     body_backend = settings["body_surface"]["backend"]
     landmarks_enabled = settings["landmarks"]["enabled"]
-    needs_totalsegmentator = body_backend == TOTALSEGMENTATOR_BODY_BACKEND or landmarks_enabled
+    needs_measurement_models = (
+        body_backend == TOTALSEGMENTATOR_BODY_BACKEND or landmarks_enabled
+    )
     actions: list[PipelineAction] = []
-    if needs_totalsegmentator:
-        from BodyComposition.actions.segm_totalsegmentator import (
-            SegmTotalSegmentator,
-            SegmTotalSegmentatorConfig,
-        )
+    if needs_measurement_models:
+        from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentator
 
-        actions.append(SegmTotalSegmentatorConfig(pipeline))
         if body_backend == TOTALSEGMENTATOR_BODY_BACKEND:
             actions.append(SegmTotalSegmentator(pipeline, image="tmp/index", task="bodytrunk"))
         if landmarks_enabled:
@@ -493,10 +487,11 @@ def measurement_support_actions(
                     pipeline,
                     image="tmp/index",
                     task="body_landmarks",
-                    fast=True,
                 )
             )
-    actions.append(CreateBodySurface(pipeline, tissue_mask=tissue_mask))
+    actions.append(
+        CreateBodySurface(pipeline, compartment_mask=compartment_mask)
+    )
     if landmarks_enabled:
         actions.append(CreateMeasurementLandmarks(pipeline))
     return actions

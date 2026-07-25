@@ -13,7 +13,13 @@ from BodyComposition.vertebral import (
     spineps_session,
 )
 from BodyComposition.vertebral.contracts import VertebralResult
-from BodyComposition.vertebral.spineps_qc import construct_vertebral_body_labels
+from BodyComposition.vertebral.spineps_manifest import (
+    SPINEPS_AUXILIARY_INSTANCE_LABELS,
+)
+from BodyComposition.vertebral.spineps_qc import (
+    construct_vertebral_body_labels,
+    vertebra_only_instance_labels,
+)
 
 
 def _geometry(shape_zyx=(12, 8, 6), direction=None):
@@ -44,6 +50,66 @@ def test_corpus_intersection_preserves_native_labels_and_inputs():
     assert set(np.unique(result)) == {0, 21, 22}
     assert np.array_equal(semantic, semantic_before)
     assert np.array_equal(vertebra, vertebra_before)
+
+
+def test_sacrum_uses_the_upstream_sacral_body_semantic_label():
+    shape = (4, 5, 6)
+    geometry = _geometry(shape)
+    vertebra = np.zeros(shape, dtype=np.uint8)
+    semantic = np.zeros(shape, dtype=np.uint8)
+    vertebra[1:3, 1:4, 1:5] = 26
+    semantic[1:3, 1:4, 1:5] = 73
+
+    result = adapt_spineps_outputs(semantic, vertebra, geometry)
+
+    assert set(np.unique(result.vertebral_body_labels)) == {0, 26}
+    assert [centroid.anatomical_label for centroid in result.centroids] == ["SACRUM"]
+    assert "empty_corpus_intersection" not in {
+        flag.code for flag in result.qc_flags
+    }
+
+
+def test_auxiliary_spineps_instances_are_removed_without_hiding_unknown_labels():
+    shape = (4, 5, 6)
+    geometry = _geometry(shape)
+    instances = np.zeros(shape, dtype=np.uint16)
+    instances[0, 1, 1] = 22
+    instances[1, 1, 1] = 122
+    instances[2, 1, 1] = 222
+    instances[3, 1, 1] = 90
+    before = instances.copy()
+
+    result, removed = vertebra_only_instance_labels(instances, geometry)
+
+    assert removed == (122, 222)
+    assert set(np.unique(result)) == {0, 22, 90}
+    assert np.array_equal(instances, before)
+
+
+def test_auxiliary_instance_ranges_match_pinned_spineps():
+    from spineps.seg_pipeline import ENDPLATE_LABEL_RANGE, IVD_LABEL_RANGE
+
+    assert frozenset(
+        (*IVD_LABEL_RANGE, *ENDPLATE_LABEL_RANGE)
+    ) == SPINEPS_AUXILIARY_INSTANCE_LABELS
+
+
+def test_adapter_records_removed_auxiliary_labels_and_qc_sees_only_vertebrae():
+    semantic, vertebra = _ordinary_outputs()
+    vertebra = vertebra.astype(np.uint16)
+    vertebra[0, 0, 0] = 121
+
+    result = adapt_spineps_outputs(semantic, vertebra, _geometry())
+
+    assert 121 not in np.unique(result.whole_vertebra_labels)
+    assert result.provenance["instance_label_policy"] == {
+        "output": "vertebrae_only",
+        "removed_auxiliary_labels": [121],
+        "native_outputs_preserved": True,
+    }
+    assert "unexpected_native_labels" not in {
+        flag.code for flag in result.qc_flags
+    }
 
 
 def test_adapter_returns_native_labels_centroids_and_provenance():

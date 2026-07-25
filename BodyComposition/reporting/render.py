@@ -40,7 +40,7 @@ PAGE_WIDTH, PAGE_HEIGHT = landscape(A4)
 FONT_REGULAR = "BCVera"
 FONT_BOLD = "BCVera-Bold"
 MIN_FONT_SIZE = 8.0
-LAYOUT_REVISION = "scientific_onepager_v5"
+LAYOUT_REVISION = "scientific_onepager_v6"
 _FONT_LOCK = threading.Lock()
 PAGE_BACKGROUND = colors.HexColor("#F4F7F9")
 CARD_BACKGROUND = colors.white
@@ -705,7 +705,12 @@ def _draw_axial_panel(
 
     legend_y = max(panel.bottom + key_height + 18, box.bottom - 17)
     legend_x = panel.left + 10
-    palette_lookup = {"SM": "sm", "IMAT": "imat", "SAT": "sat", "aVAT": "avat", "tVAT": "tvat"}
+    palette_lookup = {
+        "SM": "sm",
+        "SAT": "sat",
+        "aVAT": "avat",
+        "tVAT": "tvat",
+    }
     for name in view.tissue_names:
         palette_name = palette_lookup.get(name)
         if palette_name is None:
@@ -909,15 +914,30 @@ def _draw_notes_card(
 
 def _profile_layers(slices: pd.DataFrame) -> list[tuple[str, str, str]]:
     layers: list[tuple[str, str, str]] = []
-    for name, label in (("sm", "SM"), ("imat", "IMAT"), ("sat", "SAT")):
-        if f"{name}_area_cm2" in slices:
-            layers.append((name, label, f"{name}_area_cm2"))
-    if all(f"{name}_area_cm2" in slices for name in ("avat", "tvat")):
-        layers.extend((("avat", "aVAT", "avat_area_cm2"), ("tvat", "tVAT", "tvat_area_cm2")))
-    elif "vat_area_cm2" in slices:
-        layers.append(("vat", "VAT", "vat_area_cm2"))
-    elif "total_vat_area_cm2" in slices:
-        layers.append(("vat", "total VAT", "total_vat_area_cm2"))
+    for name, label, column in (
+        (
+            "sm",
+            "Muscle",
+            "skeletal_muscle_tissue_hu_m29_150_area_cm2",
+        ),
+        (
+            "sat",
+            "SAT",
+            "sat_total_hu_m190_m30_area_cm2",
+        ),
+        (
+            "avat",
+            "aVAT",
+            "avat_hu_m190_m30_area_cm2",
+        ),
+        (
+            "tvat",
+            "tVAT",
+            "tvat_hu_m190_m30_area_cm2",
+        ),
+    ):
+        if column in slices:
+            layers.append((name, label, column))
     return layers
 
 
@@ -992,6 +1012,15 @@ def _draw_profile(
         size=8,
         bold=True,
     )
+    hu_definition_caption = "Muscle -29..150 | fat -190..-30 HU"
+    pdf.setFillColor(MUTED)
+    _text(
+        pdf,
+        panel.left,
+        shared_y_box.top + 20,
+        hu_definition_caption,
+        size=8,
+    )
     pdf.setStrokeColor(colors.HexColor("#AEB8C0"))
     pdf.rect(panel.left, shared_y_box.bottom, panel.width, shared_y_box.height, stroke=1, fill=0)
     cumulative = np.zeros(len(slices), dtype=float)
@@ -1059,12 +1088,14 @@ def _draw_profile(
         bold=True,
     )
     legend_x = panel.left
-    legend_y = shared_y_box.top + 17
+    legend_y = shared_y_box.top + 7
+    legend_rows = 1
     for name, label, _ in layers:
         item_width = pdfmetrics.stringWidth(label, FONT_REGULAR, 8) + 19
         if legend_x > panel.left and legend_x + item_width > panel.right:
             legend_x = panel.left
             legend_y -= 10
+            legend_rows += 1
         red, green, blue = tissue_color(name)
         pdf.setFillColor(colors.Color(red / 255, green / 255, blue / 255))
         pdf.rect(legend_x, legend_y, 8, 8, stroke=0, fill=1)
@@ -1073,6 +1104,9 @@ def _draw_profile(
         legend_x += item_width
     return {
         "layers": [name for name, _, _ in layers],
+        "legend_labels": [label for _, label, _ in layers],
+        "legend_rows": legend_rows,
+        "hu_definition_caption": hu_definition_caption,
         "source_columns": [column for _, _, column in layers],
         "displayed_layer_integrals_cm3": {
             name: _display_integral_cm3(layer, positions, valid)
@@ -1214,7 +1248,7 @@ def render_case_page(
     elif settings.layout == "spine_profile_v2":
         sagittal_card = ImageBox(24, content_bottom, 150, content_top - content_bottom)
         profile_card = ImageBox(
-            sagittal_card.right + 8, content_bottom, 160, content_top - content_bottom
+            sagittal_card.right + 8, content_bottom, 190, content_top - content_bottom
         )
         axial_card = ImageBox(
             PAGE_WIDTH - 169, content_bottom, 145, content_top - content_bottom

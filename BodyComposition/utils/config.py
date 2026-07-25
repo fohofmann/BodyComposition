@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from BodyComposition.config import ConfigError
+from BodyComposition.config import CANONICAL_TISSUE_DEFINITIONS, ConfigError
 
 
 def _require_mapping(config: Mapping[str, Any], path: str) -> Mapping[str, Any]:
@@ -56,7 +56,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         raise ConfigError("Configuration must be a mapping.")
 
     paths = _require_mapping(config, "paths")
-    for path_name in ("workspace", "logs", "totalsegmentator_config", "cache"):
+    for path_name in ("workspace", "logs", "cache"):
         value = paths.get(path_name)
         if value is not None and not isinstance(value, (str, Path)):
             raise ConfigError(f"Configuration value paths.{path_name} must be a path or null.")
@@ -81,7 +81,6 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         "vertebrae.spineps.review_enabled",
         "tissue.save_mask",
         "tissue.save_compartment_mask",
-        "tissue.hu_denoise.filter_outliers",
         "measurements.enabled",
         "measurements.body_surface.save_mask",
         "measurements.landmarks.enabled",
@@ -174,14 +173,16 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     ):
         raise ConfigError("vertebrae.deprioritize_anatomical must be a list of names.")
 
-    tissue = _require_mapping(config, "tissue")
-    profile_id = tissue.get("profile_id")
+    _require_mapping(config, "tissue")
+    measurement = _require_mapping(config, "measurements")
+    profile_id = measurement.get("tissue_profile_id")
     if not isinstance(profile_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", profile_id):
-        raise ConfigError("tissue.profile_id must be a non-empty lowercase profile identifier.")
-    _require_range(config, "tissue.hu_denoise.filter_outliers_range")
+        raise ConfigError(
+            "measurements.tissue_profile_id must be a non-empty lowercase "
+            "profile identifier."
+        )
 
-    def require_kernel(path: str) -> list[int]:
-        kernel = _value(config, path)
+    def require_kernel(kernel: Any, path: str) -> list[int]:
         if (
             not isinstance(kernel, list)
             or len(kernel) != 3
@@ -195,104 +196,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         ):
             raise ConfigError(f"{path} must contain three positive odd integers.")
         return kernel
-
-    require_kernel("tissue.hu_denoise.filter_median_kernel")
-    adaptive_minimum = require_kernel("tissue.hu_denoise.adaptive_median_min_kernel")
-    adaptive_maximum = require_kernel("tissue.hu_denoise.adaptive_median_max_kernel")
-    if any(lower > upper for lower, upper in zip(adaptive_minimum, adaptive_maximum, strict=True)):
-        raise ConfigError(
-            "tissue.hu_denoise adaptive-median minimum kernel must not exceed its maximum."
-        )
-    denoise_method = _value(config, "tissue.hu_denoise.method")
-    if denoise_method not in {
-        "none",
-        "median",
-        "adaptive_median",
-        "curvature_anisotropic_diffusion",
-    }:
-        raise ConfigError("Unknown tissue.hu_denoise.method.")
-    apply_to = _value(config, "tissue.hu_denoise.apply_to")
-    if (
-        not isinstance(apply_to, list)
-        or any(
-            not isinstance(name, str) or name not in {"imat", "sm", "vat", "sat"}
-            for name in apply_to
-        )
-        or len(set(apply_to)) != len(apply_to)
-    ):
-        raise ConfigError(
-            "tissue.hu_denoise.apply_to must be a unique subset of [imat, sm, vat, sat]."
-        )
-    diffusion = _require_mapping(config, "tissue.hu_denoise.anisotropic_diffusion")
-    if diffusion.get("dimensionality") not in {"2D", "3D"}:
-        raise ConfigError(
-            "tissue.hu_denoise.anisotropic_diffusion.dimensionality must be 2D or 3D."
-        )
-    iterations = diffusion.get("iterations")
-    if isinstance(iterations, bool) or not isinstance(iterations, int) or iterations <= 0:
-        raise ConfigError(
-            "tissue.hu_denoise.anisotropic_diffusion.iterations must be a positive integer."
-        )
-    for key in ("time_step", "conductance"):
-        value = diffusion.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise ConfigError(f"tissue.hu_denoise.anisotropic_diffusion.{key} must be positive.")
-    stable_time_step = 0.125 if diffusion["dimensionality"] == "2D" else 0.0625
-    if float(diffusion["time_step"]) > stable_time_step:
-        raise ConfigError(
-            "tissue.hu_denoise.anisotropic_diffusion.time_step exceeds the "
-            f"{diffusion['dimensionality']} stability limit {stable_time_step}."
-        )
-
-    for tissue_name in ("imat", "sm", "vat", "sat"):
-        base = f"tissue.{tissue_name}"
-        _require_bool(config, f"{base}.filter_hu")
-        _require_range(config, f"{base}.filter_hu_range")
-        _require_bool(config, f"{base}.filter_size")
-        version = _value(config, f"{base}.filter_size_version")
-        if version not in {"2D", "3D"}:
-            raise ConfigError(f"Configuration value {base}.filter_size_version must be 2D or 3D.")
-        _require_nonnegative_number(config, f"{base}.filter_size_2D")
-        _require_nonnegative_number(config, f"{base}.filter_size_3D")
-        size_unit = _value(config, f"{base}.filter_size_unit")
-        if size_unit not in {"physical", "voxel"}:
-            raise ConfigError(f"{base}.filter_size_unit must be physical or voxel.")
-        size_connectivity = _value(config, f"{base}.filter_size_connectivity")
-        allowed_connectivity = {4, 8} if version == "2D" else {6, 18, 26}
-        if size_connectivity not in allowed_connectivity:
-            raise ConfigError(
-                f"{base}.filter_size_connectivity must be one of "
-                f"{sorted(allowed_connectivity)} for {version}."
-            )
-        _require_bool(config, f"{base}.fill_holes")
-        holes_version = _value(config, f"{base}.fill_holes_version")
-        if holes_version not in {"2D", "3D"}:
-            raise ConfigError(f"{base}.fill_holes_version must be 2D or 3D.")
-        _require_nonnegative_number(config, f"{base}.fill_holes_2D")
-        _require_nonnegative_number(config, f"{base}.fill_holes_3D")
-        holes_unit = _value(config, f"{base}.fill_holes_unit")
-        if holes_unit not in {"physical", "voxel"}:
-            raise ConfigError(f"{base}.fill_holes_unit must be physical or voxel.")
-        holes_connectivity = _value(config, f"{base}.fill_holes_connectivity")
-        allowed_holes_connectivity = {4, 8} if holes_version == "2D" else {6, 18, 26}
-        if holes_connectivity not in allowed_holes_connectivity:
-            raise ConfigError(
-                f"{base}.fill_holes_connectivity must be one of "
-                f"{sorted(allowed_holes_connectivity)} for {holes_version}."
-            )
-
-    measurement = _require_mapping(config, "measurements")
     definitions = _require_mapping(config, "measurements.tissue_definitions")
-    required_definitions = {
-        "muscle_compartment",
-        "skeletal_muscle_tissue_hu_m29_150",
-        "lama_hu_m29_29",
-        "nama_hu_30_150",
-        "imat_ct_hu_m190_m30",
-        "sat_total_hu_m190_m30",
-        "vat_total_hu_m190_m30",
-        "vat_total_hu_m150_m50",
-    }
     for definition_name, definition in definitions.items():
         if not isinstance(definition_name, str) or not re.fullmatch(
             r"[a-z][a-z0-9_]*",
@@ -302,6 +206,19 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         if not isinstance(definition, Mapping):
             raise ConfigError(
                 f"measurements.tissue_definitions.{definition_name} must be a mapping."
+            )
+        definition_path = f"measurements.tissue_definitions.{definition_name}"
+        allowed_definition_keys = {
+            "enabled",
+            "source_labels",
+            "hu_range",
+            "preprocessing",
+            "cleanup",
+        }
+        unknown_definition_keys = sorted(set(definition) - allowed_definition_keys)
+        if unknown_definition_keys:
+            raise ConfigError(
+                f"{definition_path} has unknown values: {unknown_definition_keys}."
             )
         enabled = definition.get("enabled")
         if not isinstance(enabled, bool):
@@ -331,19 +248,202 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
                 f"measurements.tissue_definitions.{definition_name}.hu_range "
                 "must be null or a two-number list."
             )
-    missing_definitions = sorted(required_definitions - definitions.keys())
-    disabled_required = sorted(
+        preprocessing = definition.get("preprocessing")
+        if preprocessing is not None:
+            if not isinstance(preprocessing, Mapping):
+                raise ConfigError(f"{definition_path}.preprocessing must be a mapping.")
+            method = preprocessing.get("method")
+            allowed_methods = {
+                "none",
+                "median",
+                "adaptive_median",
+                "curvature_anisotropic_diffusion",
+            }
+            if method not in allowed_methods:
+                raise ConfigError(f"{definition_path}.preprocessing.method is unsupported.")
+            method_keys = {
+                "none": set(),
+                "median": {"kernel_zyx"},
+                "adaptive_median": {
+                    "minimum_kernel_zyx",
+                    "maximum_kernel_zyx",
+                },
+                "curvature_anisotropic_diffusion": {
+                    "anisotropic_diffusion",
+                },
+            }[str(method)]
+            allowed_preprocessing_keys = {
+                "method",
+                "clip_hu_range",
+                *method_keys,
+            }
+            unknown_preprocessing = sorted(
+                set(preprocessing) - allowed_preprocessing_keys
+            )
+            missing_preprocessing = sorted(method_keys - set(preprocessing))
+            if unknown_preprocessing or missing_preprocessing:
+                raise ConfigError(
+                    f"{definition_path}.preprocessing has unknown="
+                    f"{unknown_preprocessing}, missing={missing_preprocessing}."
+                )
+            clip_range = preprocessing.get("clip_hu_range")
+            if clip_range is not None and (
+                not isinstance(clip_range, list)
+                or len(clip_range) != 2
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    for value in clip_range
+                )
+                or clip_range[0] > clip_range[1]
+            ):
+                raise ConfigError(
+                    f"{definition_path}.preprocessing.clip_hu_range must be "
+                    "null or an ordered two-number list."
+                )
+            if method == "median":
+                require_kernel(
+                    preprocessing["kernel_zyx"],
+                    f"{definition_path}.preprocessing.kernel_zyx",
+                )
+            elif method == "adaptive_median":
+                minimum = require_kernel(
+                    preprocessing["minimum_kernel_zyx"],
+                    f"{definition_path}.preprocessing.minimum_kernel_zyx",
+                )
+                maximum = require_kernel(
+                    preprocessing["maximum_kernel_zyx"],
+                    f"{definition_path}.preprocessing.maximum_kernel_zyx",
+                )
+                if any(
+                    lower > upper
+                    for lower, upper in zip(minimum, maximum, strict=True)
+                ):
+                    raise ConfigError(
+                        f"{definition_path}.preprocessing minimum kernel must "
+                        "not exceed its maximum."
+                    )
+            elif method == "curvature_anisotropic_diffusion":
+                diffusion = preprocessing["anisotropic_diffusion"]
+                if not isinstance(diffusion, Mapping):
+                    raise ConfigError(
+                        f"{definition_path}.preprocessing.anisotropic_diffusion "
+                        "must be a mapping."
+                    )
+                expected_diffusion = {
+                    "dimensionality",
+                    "iterations",
+                    "time_step",
+                    "conductance",
+                }
+                if set(diffusion) != expected_diffusion:
+                    raise ConfigError(
+                        f"{definition_path}.preprocessing.anisotropic_diffusion "
+                        f"must contain exactly {sorted(expected_diffusion)}."
+                    )
+                dimensionality = diffusion["dimensionality"]
+                if dimensionality not in {"2D", "3D"}:
+                    raise ConfigError(
+                        f"{definition_path}.preprocessing.anisotropic_diffusion."
+                        "dimensionality must be 2D or 3D."
+                    )
+                iterations = diffusion["iterations"]
+                if (
+                    isinstance(iterations, bool)
+                    or not isinstance(iterations, int)
+                    or iterations <= 0
+                ):
+                    raise ConfigError(
+                        f"{definition_path}.preprocessing.anisotropic_diffusion."
+                        "iterations must be positive."
+                    )
+                for key in ("time_step", "conductance"):
+                    value = diffusion[key]
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or value <= 0
+                    ):
+                        raise ConfigError(
+                            f"{definition_path}.preprocessing."
+                            f"anisotropic_diffusion.{key} must be positive."
+                        )
+                stability_limit = 0.125 if dimensionality == "2D" else 0.0625
+                if float(diffusion["time_step"]) > stability_limit:
+                    raise ConfigError(
+                        f"{definition_path}.preprocessing.anisotropic_diffusion."
+                        f"time_step exceeds the {dimensionality} stability limit "
+                        f"{stability_limit}."
+                    )
+
+        cleanup = definition.get("cleanup")
+        if cleanup is not None:
+            if not isinstance(cleanup, Mapping):
+                raise ConfigError(f"{definition_path}.cleanup must be a mapping.")
+            unknown_cleanup = sorted(
+                set(cleanup) - {"fill_small_holes", "remove_small_objects"}
+            )
+            if unknown_cleanup:
+                raise ConfigError(
+                    f"{definition_path}.cleanup has unknown values: "
+                    f"{unknown_cleanup}."
+                )
+            for operation_name, operation in cleanup.items():
+                operation_path = f"{definition_path}.cleanup.{operation_name}"
+                if not isinstance(operation, Mapping):
+                    raise ConfigError(f"{operation_path} must be a mapping.")
+                expected_operation = {
+                    "dimensionality",
+                    "threshold",
+                    "unit",
+                    "connectivity",
+                }
+                if set(operation) != expected_operation:
+                    raise ConfigError(
+                        f"{operation_path} must contain exactly "
+                        f"{sorted(expected_operation)}."
+                    )
+                dimensionality = operation["dimensionality"]
+                if dimensionality not in {"2D", "3D"}:
+                    raise ConfigError(
+                        f"{operation_path}.dimensionality must be 2D or 3D."
+                    )
+                threshold = operation["threshold"]
+                if (
+                    isinstance(threshold, bool)
+                    or not isinstance(threshold, (int, float))
+                    or threshold < 0
+                ):
+                    raise ConfigError(
+                        f"{operation_path}.threshold must be non-negative."
+                    )
+                if operation["unit"] not in {"physical", "voxel"}:
+                    raise ConfigError(
+                        f"{operation_path}.unit must be physical or voxel."
+                    )
+                allowed_connectivity = (
+                    {4, 8} if dimensionality == "2D" else {6, 18, 26}
+                )
+                if operation["connectivity"] not in allowed_connectivity:
+                    raise ConfigError(
+                        f"{operation_path}.connectivity must be one of "
+                        f"{sorted(allowed_connectivity)} for {dimensionality}."
+                    )
+
+    changed_canonical = sorted(
         name
-        for name in required_definitions
-        if name in definitions and not definitions[name]["enabled"]
+        for name, expected in CANONICAL_TISSUE_DEFINITIONS.items()
+        if definitions.get(name) != expected
     )
-    if missing_definitions or disabled_required:
+    if changed_canonical:
         raise ConfigError(
-            "Canonical tissue definitions must remain enabled; "
-            f"missing={missing_definitions}, disabled={disabled_required}."
+            "Canonical consensus tissue definitions are immutable; changed or "
+            f"missing={changed_canonical}."
         )
-    if measurement.get("totalsegmentator_version") != "2.15.0":
-        raise ConfigError("measurements.totalsegmentator_version must be pinned to 2.15.0.")
+    if measurement.get("measurement_support_nnunet_version") != "2.5.2":
+        raise ConfigError(
+            "measurements.measurement_support_nnunet_version must be pinned to 2.5.2."
+        )
     body_backend = _value(config, "measurements.body_surface.backend")
     if body_backend not in {
         "tissue_segmentation_envelope_v1",
@@ -449,7 +549,11 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         ):
             raise ConfigError(f"crop.{crop_name}.margin must contain six numbers.")
 
-    for mapping_name in ("LBL_TISSUE", "LBL_VERTEBRALBODIES"):
+    for mapping_name in (
+        "LBL_TISSUE_COMPARTMENTS",
+        "LBL_TISSUE",
+        "LBL_VERTEBRALBODIES",
+    ):
         mapping = _require_mapping(config, mapping_name)
         if not mapping or any(
             isinstance(label, bool)
@@ -460,5 +564,14 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             for label, name in mapping.items()
         ):
             raise ConfigError(f"{mapping_name} must map positive integers to non-empty names.")
+
+    compartment_labels = _require_mapping(config, "LBL_TISSUE_COMPARTMENTS")
+    tissue_labels = _require_mapping(config, "LBL_TISSUE")
+    if tissue_labels != compartment_labels:
+        raise ConfigError(
+            "LBL_TISSUE must use the same stable labels as "
+            "LBL_TISSUE_COMPARTMENTS; overlapping downstream definitions are "
+            "not encoded in the single-label visualization mask."
+        )
 
     return config

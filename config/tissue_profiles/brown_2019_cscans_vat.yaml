@@ -1,9 +1,7 @@
-tissue:
-  profile_id: brown_2019_cscans_vat_m150_m50_v1
-  vat:
-    filter_hu_range: [-150, -50]
-
 measurements:
+  tissue_profile_id: brown_2019_cscans_vat_m150_m50_v1
   tissue_definitions:
     vat_total_hu_m150_m50:
       enabled: true
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-150, -50]

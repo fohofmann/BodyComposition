@@ -1,19 +1,25 @@
-tissue:
-  profile_id: lee_2018_fat_m274_m49_diffusion_sensitivity_v1
-  hu_denoise:
-    method: curvature_anisotropic_diffusion
-    apply_to: [vat, sat]
-    anisotropic_diffusion:
-      dimensionality: 2D
-      iterations: 5
-      time_step: 0.0625
-      conductance: 3.0
-  vat:
-    filter_hu_range: [-274, -49]
-  sat:
-    filter_hu_range: [-274, -49]
-
 measurements:
+  tissue_profile_id: lee_2018_fat_m274_m49_diffusion_sensitivity_v1
   tissue_definitions:
-    vat_total_hu_m274_m49:
+    sat_total_hu_m274_m49_diffusion_lee_2018:
       enabled: true
+      source_labels: [SAT]
+      hu_range: [-274, -49]
+      preprocessing:
+        method: curvature_anisotropic_diffusion
+        anisotropic_diffusion:
+          dimensionality: 2D
+          iterations: 5
+          time_step: 0.0625
+          conductance: 3.0
+    vat_total_hu_m274_m49_diffusion_lee_2018:
+      enabled: true
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-274, -49]
+      preprocessing:
+        method: curvature_anisotropic_diffusion
+        anisotropic_diffusion:
+          dimensionality: 2D
+          iterations: 5
+          time_step: 0.0625
+          conductance: 3.0

@@ -188,6 +188,7 @@ def test_upstream_wrappers_disable_downloads_and_use_saved_outputs(monkeypatch, 
     assert spineps_call["model_instance"] == "instance"
     assert spineps_call["model_labeling"] == "labeling"
     assert spineps_call["return_output_instead_of_save"] is False
+    assert spineps_call["ignore_compatibility_issues"] is True
     assert spineps_call["save_raw"] is True
     assert spineps_call["save_softmax_logits"] is False
     assert spineps_call["save_debug_data"] is False

@@ -2,24 +2,18 @@
 import logging
 from time import time
 
+import numpy as np
+
+from BodyComposition.config import CANONICAL_TISSUE_DEFINITIONS
+from BodyComposition.measurement.tissues import derive_configured_tissue_masks
 from BodyComposition.pipeline import PipelineAction
-from BodyComposition.tissue import cleanup_tissue_mask, prepare_classification_images
 from BodyComposition.utils.geometry import assert_same_physical_domain
-from BodyComposition.utils.masks import filter_hu
 from BodyComposition.utils.nifti import NiftiDataContainer
 
 
-def _apply_configured_cleanup(mask, settings, spacing_xyz, compartment):
-    return cleanup_tissue_mask(
-        mask,
-        settings,
-        spacing_xyz,
-        support_mask=compartment,
-    )
-
 # action class
 class MasksInternalTissue(PipelineAction):
-    """Action class for postprocessing tissue segmentations derived from internal body composition segmetation."""
+    """Materialize the stable consensus label view from raw compartments."""
 
     def __init__(self, pipeline, image: str):
         super().__init__(pipeline)
@@ -44,8 +38,8 @@ class MasksInternalTissue(PipelineAction):
             self.io_reset_outputs.append(self.input_label_tissue_name)
 
         # overwrite default mappings
-        self.LBL_TISSUE = pipeline.config['LBL_TISSUE']
-        self.LBL_TISSUE_R = {v: k for k, v in self.LBL_TISSUE.items()}
+        self.LBL_COMPARTMENT = pipeline.config['LBL_TISSUE_COMPARTMENTS']
+        self.LBL_COMPARTMENT_R = {v: k for k, v in self.LBL_COMPARTMENT.items()}
 
     def __call__(self, memory):
         """Segment case."""
@@ -82,6 +76,16 @@ class MasksInternalTissue(PipelineAction):
         )
         logging.info(" load tissue segmentation")
         logging.debug(f'  tissue: origin={input_label_tissue.origin}, shape={input_label_tissue.shape}')
+        unknown_labels = sorted(
+            int(label)
+            for label in np.unique(input_label_tissue.data)
+            if int(label) != 0 and int(label) not in self.LBL_COMPARTMENT
+        )
+        if unknown_labels:
+            raise ValueError(
+                "Model-native tissue compartments contain labels outside the "
+                f"0-7 contract: {unknown_labels}."
+            )
         if (
             self.config_tissue['save_compartment_mask']
             and not input_label_tissue.path.exists()
@@ -89,94 +93,47 @@ class MasksInternalTissue(PipelineAction):
             input_label_tissue.save_to_file()
             logging.info(" persisted raw anatomical compartment labels")
 
-        # copy content and header from input
-        output_np = input_label_tissue.data.copy()
+        # The default label view is fixed to the consensus definitions. Named
+        # sensitivity profiles add downstream measurements; they never mutate
+        # this artifact or the model-native source.
+        definitions = {
+            name: self.config["measurements"]["tissue_definitions"][name]
+            for name in (
+                "skeletal_muscle_tissue_hu_m29_150",
+                "sat_total_hu_m190_m30",
+                "vat_total_hu_m190_m30",
+            )
+        }
+        expected = {
+            name: CANONICAL_TISSUE_DEFINITIONS[name]
+            for name in definitions
+        }
+        if definitions != expected:
+            raise ValueError(
+                "Consensus tissue-label materialization requires the immutable "
+                "canonical tissue definitions."
+            )
+        derived = derive_configured_tissue_masks(
+            input_image.data,
+            input_label_tissue.data,
+            self.LBL_COMPARTMENT,
+            definitions,
+            spacing_xyz=tuple(float(value) for value in input_image.spacing),
+        )
+        raw = input_label_tissue.data
+        output_np = raw.copy()
+        consensus_by_label = {
+            self.LBL_COMPARTMENT_R["SM"]: derived[
+                "skeletal_muscle_tissue_hu_m29_150"
+            ],
+            self.LBL_COMPARTMENT_R["SAT"]: derived["sat_total_hu_m190_m30"],
+            self.LBL_COMPARTMENT_R["aVAT"]: derived["vat_total_hu_m190_m30"],
+            self.LBL_COMPARTMENT_R["tVAT"]: derived["vat_total_hu_m190_m30"],
+        }
+        for label, consensus_mask in consensus_by_label.items():
+            compartment = raw == label
+            output_np[compartment & ~consensus_mask] = 0
         output_mask.meta = input_label_tissue.meta
-
-        # if any HU-based filter active:
-        if any([self.config_tissue[tissue]['filter_hu'] for tissue in ['imat', 'sm', 'vat', 'sat']]):
-            
-            # load image np
-            image_by_tissue = prepare_classification_images(
-                input_image.data,
-                input_image.spacing,
-                self.config_tissue['hu_denoise'],
-            )
-            logging.debug('  HU filter(s) active, loaded image')
-            logging.debug(f'   image: origin={input_image.origin}, shape={input_image.shape}')
-
-        # filter: intermuscular adipose tissue IMAT; special case as introducing extra label
-        if self.config_tissue['imat']['filter_hu']:
-            logging.info(" HU filter muscle compartment")
-            compartment = output_np == self.LBL_TISSUE_R['SM']
-            mask_tmp = compartment & filter_hu(
-                image_by_tissue['imat'],
-                self.config_tissue['imat']['filter_hu_range'],
-            )
-            _apply_configured_cleanup(
-                mask_tmp,
-                self.config_tissue['imat'],
-                input_image.spacing,
-                compartment,
-            )
-            output_np[mask_tmp] = self.LBL_TISSUE_R['IMAT']
-            logging.debug(f"  identified everything in IMAT HU-range within label SM as IMAT (={self.LBL_TISSUE_R['IMAT']})")
-
-
-        # filter: skeletal muscle SM
-        if self.config_tissue['sm']['filter_hu']:
-            logging.info(" HU filter muscle compartment(s)")
-            compartment = output_np == self.LBL_TISSUE_R['SM']
-            mask_tmp = compartment & filter_hu(
-                image_by_tissue['sm'],
-                self.config_tissue['sm']['filter_hu_range'],
-            )
-            _apply_configured_cleanup(
-                mask_tmp,
-                self.config_tissue['sm'],
-                input_image.spacing,
-                compartment,
-            )
-            output_np[compartment & ~mask_tmp] = 0
-            logging.debug("  removed everything out of SM HU-range from label SM")
-
-
-        # filter: visceral adipose tissue VAT 
-        if self.config_tissue['vat']['filter_hu']:
-            logging.info(" HU filter visceral compartment(s)")
-            hu_mask = filter_hu(
-                image_by_tissue['vat'],
-                self.config_tissue['vat']['filter_hu_range'],
-            )
-            for label_name in ('aVAT', 'tVAT'):
-                compartment = output_np == self.LBL_TISSUE_R[label_name]
-                mask_tmp = compartment & hu_mask
-                _apply_configured_cleanup(
-                    mask_tmp,
-                    self.config_tissue['vat'],
-                    input_image.spacing,
-                    compartment,
-                )
-                output_np[compartment & ~mask_tmp] = 0
-            logging.debug("  removed everything out of VAT HU-range from label aVAT, tVAT")
-
-
-        # filter: subcutaneous adipose tissue SAT
-        if self.config_tissue['sat']['filter_hu']:
-            logging.info(" HU filter subcutaneous compartment")
-            compartment = output_np == self.LBL_TISSUE_R['SAT']
-            mask_tmp = compartment & filter_hu(
-                image_by_tissue['sat'],
-                self.config_tissue['sat']['filter_hu_range'],
-            )
-            _apply_configured_cleanup(
-                mask_tmp,
-                self.config_tissue['sat'],
-                input_image.spacing,
-                compartment,
-            )
-            output_np[compartment & ~mask_tmp] = 0
-            logging.debug("  removed everything out of SAT HU-range from label SAT")
 
         # logging
         output_mask.data = output_np

@@ -52,7 +52,7 @@ the authoritative reference.
 | `vertebrae.backend` | vertebral-body segmentation and native labeling | `spineps_veridah_ct_v1`, `vertebral_bodies_resenc_l`, `vertebral_bodies_resenc_m` |
 | `tissue.backend` | anatomical body-composition compartments | `bodycomposition_resenc_l_v1`, `bodycomposition_resenc_m_v1` |
 | `body_surface.backend` | measurement support for trunk/body envelope | `tissue_segmentation_envelope_v1`, `totalsegmentator_body_task299_v1`, `deterministic_body_mask_v1` |
-| `measurements` | tissue definitions, physical territory rules, landmarks, QC | canonical schema 2.1 |
+| `measurements` | tissue definitions, physical territories, fixed-mm signature, landmarks, QC | canonical schema 3.0 |
 | `reporting` | derived one-page PDF | disabled, `spine_overview_v1`, or `spine_profile_v2` |
 
 No backend silently falls back to another. Changing a backend or a scientific
@@ -64,6 +64,30 @@ explicitly. SPINEPS/VERIDAH and the overall runtime accept `auto`, `cpu`, or
 `cuda`. `auto` selects an externally visible CUDA device and otherwise CPU.
 Apple MPS is not a released scientific-inference target because the complete
 pinned model stack has not passed a controlled MPS validation gate.
+
+### Optional tissue definitions
+
+The default pipeline does not create an extra fat-in-muscle class. A
+prespecified study can add an explicitly named downstream definition in a
+profile:
+
+```yaml
+measurements:
+  tissue_profile_id: study_specific_muscle_filter_v1
+  tissue_definitions:
+    filter_muscle_hu_m190_m30:
+      enabled: true
+      source_labels: [SM]
+      hu_range: [-190, -30]
+```
+
+The operation adds measurement columns; it does not add a model-native label
+or change the standard visualization mask. Enabled non-default definitions are
+also appended to the fixed-mm signature. A different window or cleanup rule
+must receive a different definition and `tissue_profile_id` so the saved
+column name cannot disagree with the calculation. See
+[tissue definitions](tissue_definitions.md) for the preprocessing and cleanup
+fields.
 
 ## Runtime and output choices
 

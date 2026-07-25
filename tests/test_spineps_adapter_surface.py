@@ -168,6 +168,25 @@ def test_check_reports_missing_bundle_without_creating_or_downloading(
     assert not model_root.exists()
 
 
+def test_check_accepts_a_verified_read_only_model_bundle(tmp_path, monkeypatch):
+    model_root = tmp_path / "read-only-models"
+    model_root.mkdir()
+    model_root.chmod(0o555)
+    monkeypatch.setattr(
+        "BodyComposition.vertebral.spineps_backend.verify_model_bundle",
+        lambda *args, **kwargs: object(),
+    )
+    try:
+        report = SpinepsVeridahAdapter(model_root, device="cpu").check(
+            output_root=tmp_path,
+        )
+    finally:
+        model_root.chmod(0o755)
+
+    assert report.ready
+    assert "model_cache" not in {item.component for item in report.checks}
+
+
 def _image(shape=(7, 9, 11)) -> sitk.Image:
     array = np.linspace(-1000, 500, np.prod(shape), dtype=np.int16).reshape(shape)
     image = sitk.GetImageFromArray(array)

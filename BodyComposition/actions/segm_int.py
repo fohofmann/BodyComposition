@@ -15,7 +15,15 @@ class _SegmInternal(PipelineAction):
     model_title: str
     licenses: list[str]
 
-    def __init__(self, pipeline, image: str, model: str = "ResEncM"):
+    def __init__(
+        self,
+        pipeline,
+        image: str,
+        model: str = "ResEncM",
+        *,
+        model_directory: str | Path | None = None,
+        model_folds: str | list[int] | None = None,
+    ):
         super().__init__(pipeline)
         self.input_image_name = image
         self.io_inputs = [image]
@@ -37,10 +45,19 @@ class _SegmInternal(PipelineAction):
                 [0, 1, 2, 3, 4],
             ),
         }
-        if model not in model_settings:
-            raise ValueError(f"Unknown internal model preset: {model}.")
-        model_directory, self.model_folds = model_settings[model]
-        self.model_path = Path(self.config["paths"]["weights"][self.weight_key]) / model_directory
+        if model_directory is None:
+            if model not in model_settings:
+                raise ValueError(f"Unknown internal model preset: {model}.")
+            preset_directory, self.model_folds = model_settings[model]
+            self.model_path = (
+                Path(self.config["paths"]["weights"][self.weight_key])
+                / preset_directory
+            )
+        else:
+            if model_folds is None:
+                raise ValueError("Explicit nnUNet model directories require model_folds.")
+            self.model_path = Path(model_directory)
+            self.model_folds = model_folds
         logging.info(" using %s model preset %s", self.model_title, model)
 
     def _get_predictor(self):

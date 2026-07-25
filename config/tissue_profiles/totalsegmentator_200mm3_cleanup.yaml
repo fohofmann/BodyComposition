@@ -1,26 +1,33 @@
-tissue:
-  profile_id: totalsegmentator_optional_200mm3_cleanup_v1
-  imat:
-    filter_size: true
-    filter_size_version: 3D
-    filter_size_3D: 200
-    filter_size_unit: physical
-    filter_size_connectivity: 26
-  sm:
-    filter_size: true
-    filter_size_version: 3D
-    filter_size_3D: 200
-    filter_size_unit: physical
-    filter_size_connectivity: 26
-  vat:
-    filter_size: true
-    filter_size_version: 3D
-    filter_size_3D: 200
-    filter_size_unit: physical
-    filter_size_connectivity: 26
-  sat:
-    filter_size: true
-    filter_size_version: 3D
-    filter_size_3D: 200
-    filter_size_unit: physical
-    filter_size_connectivity: 26
+measurements:
+  tissue_profile_id: totalsegmentator_optional_200mm3_cleanup_v1
+  tissue_definitions:
+    skeletal_muscle_tissue_hu_m29_150_min_component_200mm3:
+      enabled: true
+      source_labels: [SM]
+      hu_range: [-29, 150]
+      cleanup:
+        remove_small_objects:
+          dimensionality: 3D
+          threshold: 200
+          unit: physical
+          connectivity: 26
+    sat_total_hu_m190_m30_min_component_200mm3:
+      enabled: true
+      source_labels: [SAT]
+      hu_range: [-190, -30]
+      cleanup:
+        remove_small_objects:
+          dimensionality: 3D
+          threshold: 200
+          unit: physical
+          connectivity: 26
+    vat_total_hu_m190_m30_min_component_200mm3:
+      enabled: true
+      source_labels: [aVAT, tVAT, VAT]
+      hu_range: [-190, -30]
+      cleanup:
+        remove_small_objects:
+          dimensionality: 3D
+          threshold: 200
+          unit: physical
+          connectivity: 26

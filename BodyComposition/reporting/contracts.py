@@ -53,12 +53,34 @@ MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
         "source": "sm_mean_hu",
         "weight_source": "sm_mean_csa_cm2",
     },
-    "imat_mean_csa_cm2": {
-        "label": "IMAT area",
-        "short_label": "IMAT",
+    "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2": {
+        "label": "Skeletal muscle tissue area",
+        "short_label": "Muscle",
         "unit": "cm2",
         "kind": "area",
-        "source": "imat_mean_csa_cm2",
+        "source": "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
+    },
+    "skeletal_muscle_tissue_hu_m29_150_mean_hu": {
+        "label": "Skeletal muscle tissue attenuation",
+        "short_label": "Muscle HU",
+        "unit": "HU",
+        "kind": "hu",
+        "source": "skeletal_muscle_tissue_hu_m29_150_mean_hu",
+        "weight_source": "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
+    },
+    "vat_total_hu_m190_m30_mean_csa_cm2": {
+        "label": "VAT area (-190 to -30 HU)",
+        "short_label": "VAT",
+        "unit": "cm2",
+        "kind": "area",
+        "source": "vat_total_hu_m190_m30_mean_csa_cm2",
+    },
+    "sat_total_hu_m190_m30_mean_csa_cm2": {
+        "label": "SAT area (-190 to -30 HU)",
+        "short_label": "SAT",
+        "unit": "cm2",
+        "kind": "area",
+        "source": "sat_total_hu_m190_m30_mean_csa_cm2",
     },
     "total_vat_mean_csa_cm2": {
         "label": "Total VAT area",
@@ -82,7 +104,13 @@ MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
         "source": "trunk_mean_circumference_cm",
     },
 }
-DEFAULT_MEASUREMENT_COLUMNS = tuple(MEASUREMENT_DEFINITIONS)
+DEFAULT_MEASUREMENT_COLUMNS = (
+    "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
+    "sm_mean_hu",
+    "vat_total_hu_m190_m30_mean_csa_cm2",
+    "sat_total_hu_m190_m30_mean_csa_cm2",
+    "trunk_mean_circumference_cm",
+)
 
 _CASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 

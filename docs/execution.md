@@ -120,7 +120,11 @@ automatically enables its simple low-memory strategy:
 
 Thus only the currently active segmentation bundle is retained. There is no
 CPU offload/eviction scheduler and no public model-order option. Normal runs
-keep models resident so later patients avoid repeated loading.
+use a stage-aware cache: compatible models remain resident, but prior
+segmentation bundles are released before the memory-intensive task-297/299
+measurement-support predictor is loaded, and that support predictor is
+released immediately after use. This prevents the standard pipeline from
+requiring all model families to fit in accelerator memory simultaneously.
 
 ## Device fallback
 
@@ -131,6 +135,6 @@ keep models resident so later patients avoid repeated loading.
 
 Apple MPS is intentionally not exposed as a released inference target because
 the complete pinned CTDeepRot, SPINEPS/VERIDAH, tissue, and optional
-TotalSegmentator stack has not passed a controlled MPS validation gate.
+measurement-support stack has not passed a controlled MPS validation gate.
 Explicit `cuda` fails clearly when CUDA is unavailable; `auto` is the portable
 default.

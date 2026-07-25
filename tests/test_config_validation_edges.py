@@ -40,25 +40,8 @@ def _set_path(config: dict[str, Any], path: str, value: Any) -> None:
         ("vertebrae.spineps.device", "mps"),
         ("paths.weights.spineps", 1),
         ("vertebrae.deprioritize_anatomical", [""]),
-        ("tissue.profile_id", "Not Canonical"),
-        ("tissue.hu_denoise.filter_outliers_range", [1]),
-        ("tissue.hu_denoise.filter_outliers_range", [1, -1]),
-        ("tissue.hu_denoise.filter_median_kernel", [2, 3, 3]),
-        ("tissue.hu_denoise.method", "unknown"),
-        ("tissue.hu_denoise.apply_to", ["sm", "sm"]),
-        ("tissue.hu_denoise.apply_to", [["sm"]]),
-        ("tissue.hu_denoise.anisotropic_diffusion.dimensionality", "4D"),
-        ("tissue.hu_denoise.anisotropic_diffusion.iterations", 0),
-        ("tissue.hu_denoise.anisotropic_diffusion.conductance", 0),
-        ("tissue.hu_denoise.anisotropic_diffusion.time_step", 1.0),
-        ("tissue.sm.filter_size", "true"),
-        ("tissue.sm.filter_size_version", "4D"),
-        ("tissue.sm.filter_size_unit", "pixels"),
-        ("tissue.sm.filter_size_connectivity", 4),
-        ("tissue.sm.fill_holes_version", "4D"),
-        ("tissue.sm.fill_holes_unit", "pixels"),
-        ("tissue.sm.fill_holes_connectivity", 26),
-        ("measurements.totalsegmentator_version", "latest"),
+        ("measurements.tissue_profile_id", "Not Canonical"),
+        ("measurements.measurement_support_nnunet_version", "latest"),
         ("measurements.body_surface.backend", "unknown"),
         ("measurements.landmarks.backend", "unknown"),
         ("measurements.body_surface.min_component_volume_mm3", 0),
@@ -70,6 +53,7 @@ def _set_path(config: dict[str, Any], path: str, value: Any) -> None:
         ("measurements.body_surface.threshold_hu", True),
         ("measurements.export.parquet", False),
         ("measurements.export.csv", True),
+        ("LBL_TISSUE_COMPARTMENTS", {}),
         ("LBL_TISSUE", {}),
         ("LBL_VERTEBRALBODIES", {0: "invalid"}),
     ],
@@ -98,38 +82,63 @@ def test_runtime_configuration_rejects_missing_and_non_mapping_sections(base_con
 
 
 def test_runtime_configuration_checks_cross_field_constraints(base_config):
-    kernels = deepcopy(base_config)
-    kernels["tissue"]["hu_denoise"]["adaptive_median_min_kernel"] = [5, 5, 5]
-    kernels["tissue"]["hu_denoise"]["adaptive_median_max_kernel"] = [3, 3, 3]
-    with pytest.raises(ConfigError, match="minimum kernel"):
-        validate_config(kernels)
-
     reporting = deepcopy(base_config)
     reporting["reporting"]["enabled"] = True
     reporting["measurements"]["enabled"] = False
     with pytest.raises(ConfigError, match="reporting.enabled requires"):
         validate_config(reporting)
 
+    unexpected_filter_label = deepcopy(base_config)
+    unexpected_filter_label["LBL_TISSUE"][8] = "overlapping_definition"
+    with pytest.raises(ConfigError, match="same stable labels"):
+        validate_config(unexpected_filter_label)
+
 
 @pytest.mark.parametrize(
     "definition",
     [
         {"Bad-Name": {"enabled": True, "source_labels": ["SM"], "hu_range": None}},
-        {"muscle_compartment": "not-a-mapping"},
-        {"muscle_compartment": {"enabled": "true", "source_labels": ["SM"]}},
-        {"muscle_compartment": {"enabled": True, "source_labels": []}},
+        {"custom_definition": "not-a-mapping"},
+        {"custom_definition": {"enabled": "true", "source_labels": ["SM"]}},
+        {"custom_definition": {"enabled": True, "source_labels": []}},
         {
-            "muscle_compartment": {
+            "custom_definition": {
                 "enabled": True,
                 "source_labels": ["SM"],
                 "hu_range": [1],
             }
         },
         {
-            "muscle_compartment": {
+            "custom_definition": {
                 "enabled": True,
                 "source_labels": ["SM"],
                 "hu_range": [1, -1],
+            }
+        },
+        {
+            "custom": {
+                "enabled": True,
+                "source_labels": ["SM"],
+                "hu_range": [-29, 150],
+                "preprocessing": {
+                    "method": "median",
+                    "kernel_zyx": [2, 3, 3],
+                },
+            }
+        },
+        {
+            "custom": {
+                "enabled": True,
+                "source_labels": ["SM"],
+                "hu_range": [-29, 150],
+                "cleanup": {
+                    "remove_small_objects": {
+                        "dimensionality": "3D",
+                        "threshold": 20,
+                        "unit": "physical",
+                        "connectivity": 8,
+                    }
+                },
             }
         },
     ],
@@ -157,13 +166,17 @@ def test_reporting_requires_persisted_tissue_labels_for_regeneration():
 
 def test_runtime_configuration_keeps_canonical_tissue_definitions_enabled(base_config):
     missing = deepcopy(base_config)
-    del missing["measurements"]["tissue_definitions"]["muscle_compartment"]
-    with pytest.raises(ConfigError, match="must remain enabled"):
+    del missing["measurements"]["tissue_definitions"][
+        "skeletal_muscle_tissue_hu_m29_150"
+    ]
+    with pytest.raises(ConfigError, match="immutable"):
         validate_config(missing)
 
     disabled = deepcopy(base_config)
-    disabled["measurements"]["tissue_definitions"]["muscle_compartment"]["enabled"] = False
-    with pytest.raises(ConfigError, match="must remain enabled"):
+    disabled["measurements"]["tissue_definitions"][
+        "skeletal_muscle_tissue_hu_m29_150"
+    ]["enabled"] = False
+    with pytest.raises(ConfigError, match="immutable"):
         validate_config(disabled)
 
 

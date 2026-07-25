@@ -21,6 +21,20 @@ RUN --mount=type=cache,target=/var/cache/uv \
     uv sync --frozen --no-dev --no-editable --compile-bytecode \
     --reinstall-package BodyComposition
 
+# Some frozen dependencies bundle unused image-quality checkpoints and test
+# scans. Remove those assets in the builder so they never enter a runtime-image
+# layer, then make that policy a build-time invariant. SPINEPS 2.0.0 creates
+# its package-local fallback directory at import even when explicit model paths
+# are supplied, so provide that empty directory without making site-packages
+# writable.
+RUN mkdir -p /opt/bodycomposition/lib/python3.11/site-packages/spineps/models \
+    && find /opt/bodycomposition -type f \( -name '*.pt' -o -name '*.ckpt' -o -name '*.onnx' \) -delete \
+    && find /opt/bodycomposition -type f -path '*/torchmetrics/functional/image/lpips_models/*.pth' -delete \
+    && find /opt/bodycomposition -type f \( -name '*.nii' -o -name '*.nii.gz' -o -name '*.nrrd' -o -name '*.dcm' \) -delete \
+    && test -z "$(find /opt/bodycomposition -type f \( -name '*.pt' -o -name '*.ckpt' -o -name '*.onnx' \) -print -quit)" \
+    && test -z "$(find /opt/bodycomposition -type f -name '*.pth' -size +1024c -print -quit)" \
+    && test -z "$(find /opt/bodycomposition -type f \( -name '*.nii' -o -name '*.nii.gz' -o -name '*.nrrd' -o -name '*.dcm' \) -print -quit)"
+
 FROM ${PYTHON_IMAGE} AS runtime
 ARG VERSION=1.0.0rc1
 ARG GIT_SHA=unknown
@@ -50,8 +64,8 @@ ENV PATH=/opt/bodycomposition/bin:/usr/local/bin:/usr/bin:/bin \
     BODYCOMPOSITION_UV_LOCK_SHA256=${LOCK_SHA256} \
     BODYCOMPOSITION_SOURCE_SHA256=${SOURCE_SHA256} \
     BODYCOMPOSITION_SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
-    TOTALSEG_HOME_DIR=/models/totalsegmentator_config \
-    TOTALSEG_WEIGHTS_PATH=/models \
+    HF_HUB_DISABLE_XET=1 \
+    HF_HUB_DOWNLOAD_TIMEOUT=600 \
     XDG_CACHE_HOME=/tmp/bodycomposition-cache \
     MPLCONFIGDIR=/tmp/bodycomposition-matplotlib \
     SKIMAGE_DATADIR=/tmp/bodycomposition-skimage
@@ -59,15 +73,6 @@ ENV PATH=/opt/bodycomposition/bin:/usr/local/bin:/usr/bin:/bin \
 COPY --from=builder /opt/bodycomposition /opt/bodycomposition
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/licenses/bodycomposition/
 COPY CITATION.cff CHANGELOG.md SECURITY.md /usr/share/doc/bodycomposition/
-
-# torchmetrics bundles an optional DISTS checkpoint that this pipeline never
-# uses. Remove it so the runtime image contains no model weights of any kind,
-# then make that policy a build-time invariant. SPINEPS 2.0.0 creates its
-# package-local fallback directory at import even when explicit model paths are
-# supplied, so provide that empty directory without making site-packages writable.
-RUN mkdir -p /opt/bodycomposition/lib/python3.11/site-packages/spineps/models \
-    && find /opt/bodycomposition -path '*/torchmetrics/functional/image/dists_models/weights.pt' -delete \
-    && test -z "$(find /opt/bodycomposition -type f \( -name '*.pt' -o -name 'checkpoint*.pth' -o -name '*.ckpt' -o -name '*.onnx' \) -print -quit)"
 
 RUN mkdir -p /home/bodycomposition /input /output /models /tmp/bodycomposition-cache /tmp/bodycomposition-matplotlib /tmp/bodycomposition-skimage \
     && chown -R 10001:10001 /home/bodycomposition /input /output /models /tmp/bodycomposition-*

@@ -95,12 +95,11 @@ vendored. Analyses using these models should cite:
 
 The VertebralBodiesCT ResEncL and ResEncM weights are published under
 CC-BY-SA-4.0 at immutable Hugging Face revisions recorded by the model manager.
-The BodyCompositionCT ResEncL and ResEncM weights are also declared
-CC-BY-SA-4.0 locally, but their intended original repositories are not yet
-public at immutable revisions. This is an explicit release blocker: the model
-manager may verify an exact local cache but refuses to synchronize these
-assets until the original repositories, license/model cards, and revisions are
-frozen.
+The BodyCompositionCT ResEncL and ResEncM weights, documentation, metadata, and
+included training/evaluation records are published under CC-BY-4.0 in their
+original Hugging Face repositories. The model manager records immutable
+revisions, exact inference-file sizes, and SHA-256 digests and downloads those
+assets only through explicit user model synchronization.
 
 No BodyCompositionCT or VertebralBodiesCT weight is stored in this repository,
 wheel, source distribution, or container. Weight licenses remain with their
@@ -224,22 +223,21 @@ SHA-256 digests in each report identity/manifest.
 
 ## TotalSegmentator
 
-BodyComposition pins `TotalSegmentator==2.15.0` and can call its upstream
-Python API narrowly for optional canonical measurement support masks:
+BodyComposition uses two official TotalSegmentator model archives for optional
+canonical measurement support masks:
 
 - the 1.5-mm `body` model (task 299), when explicitly selected instead of the
   default tissue-derived envelope, supplies `body_trunc` and
   `body_extremities`; and
-- the 3-mm `total` model (task 297) runs once through the upstream fast API;
-  the BodyComposition landmark adapter consumes only its bilateral hip and rib
-  labels for anatomical mid-waist landmarks.
+- the 3-mm `total` model (task 297) supplies the bilateral hip and rib labels
+  consumed by the BodyComposition anatomical mid-waist adapter.
 
-The upstream project and installed 2.15.0 distribution carry the Apache
-License 2.0. TotalSegmentator's official task documentation lists `total` and
-`body` as openly available for any usage under Apache-2.0. These are distinct
-from TotalSegmentator subtasks such as `tissue_types` and `vertebrae_body`,
-which the upstream project places under separate licensed/non-commercial
-terms and which are not used for body-surface or landmark inference.
+The upstream project carries the Apache License 2.0. TotalSegmentator's
+official task documentation lists `total` and `body` as openly available for
+any usage under Apache-2.0. These are distinct from TotalSegmentator subtasks
+such as `tissue_types` and `vertebrae_body`, which the upstream project places
+under separate licensed/non-commercial terms and which are not used for
+body-surface or landmark inference.
 
 BodyComposition does not vendor TotalSegmentator source or models and does not
 place model weights in its repository, wheel, source distribution, or public
@@ -251,10 +249,18 @@ configured mounted model directory. This narrow transfer/extraction boundary is
 implemented locally because the upstream downloader extracts directly into its
 final directory, cannot verify the archive against a published pin before
 extraction, and treats a partial existing directory as already downloaded. No
-segmentation or labeling code is copied. Before inference, the adapter requires
-the exact task-299 or task-297 model directory and checkpoint to exist; it does
-not permit the upstream API's normal inference-time download behavior to satisfy
-a missing asset.
+segmentation or labeling code is copied.
+
+The verified archives are native nnUNet result directories. BodyComposition
+pins `nnUNetv2==2.5.2` and invokes its upstream `nnUNetPredictor` directly with
+the official task plans, fold 0, and `checkpoint_final.pth`; the label schema is
+read from the verified upstream `dataset.json`. The high-level TotalSegmentator
+Python distribution is not an inference dependency. This boundary avoids its
+mutable configuration and downloader and keeps one dependency set compatible
+with the pinned SPINEPS environment. Before predictor initialization, the
+adapter requires the exact task-299 or task-297 asset to pass all pinned file
+checks. The mounted model directory can remain read-only and inference cannot
+download a missing asset.
 
 Analyses using these masks must acknowledge TotalSegmentator and nnU-Net and
 cite:

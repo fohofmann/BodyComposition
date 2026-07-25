@@ -26,6 +26,7 @@ VIBESEG_CROP_RELEASE = "v1.0.0"
 MODEL_BUNDLE_VERSION = "spineps-veridah-ct-v1"
 
 VERTEBRA_CORPUS_SEMANTIC_LABEL = 49
+SACRUM_BODY_SEMANTIC_LABEL = 73
 
 SPINEPS_NATIVE_LABELS: dict[int, str] = {
     1: "C1",
@@ -61,6 +62,15 @@ SPINEPS_CRANIO_CAUDAL_ORDER = (
     *range(1, 20),
     28,
     *range(20, 27),
+)
+
+# SPINEPS 2.0.0 stores derived IVD and endplate instances in the same output
+# array as vertebrae using label+100 and label+200. Importing seg_pipeline just
+# for these constants also imports the model runtime, so this narrow adapter
+# mirrors the two ranges from upstream commit SPINEPS_SOURCE_COMMIT. A focused
+# equivalence test compares them with the pinned upstream package.
+SPINEPS_AUXILIARY_INSTANCE_LABELS = frozenset(
+    (*range(100, 134), *range(200, 234))
 )
 
 

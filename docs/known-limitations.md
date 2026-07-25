@@ -50,17 +50,23 @@ coverage and remain research phenotypes.
 ## Longitudinal measurements
 
 The package preserves physical superior position and native vertebral
-territories. It does not normalize patient height, stretch anatomy, impute
-unscanned regions, or ship a learned longitudinal signature. Comparisons must
-model scan coverage and anatomical missingness explicitly.
+territories and exports a versioned fixed-mm signature. Alignment is
+translation-only: direct L3 when available, otherwise an explicitly
+confidence-scored estimate from visible vertebral centroids. It does not
+normalize patient height, stretch anatomy, or impute unscanned regions.
+Comparisons must retain coverage, reference confidence, variants, and
+anatomical missingness. A single-anchor inferred origin is low confidence.
 
 ## Tissue interpretation
 
 HU windows are named compatibility definitions, not universal biological
 boundaries. Contrast, scanner, reconstruction, and calibration affect
-attenuation. LAMA/NAMA, CT-visible IMAT, SAT, and VAT are continuous research
-measurements. Whole-bone area/HU is not BMD or a validated trabecular ROI.
-Sarcopenia, myosteatosis, and outcome cutpoints are deliberately absent.
+attenuation. Complete muscle-compartment mean HU is a continuous measurement.
+The default does not calculate IMAT, LAMA, NAMA, or binary muscle-quality
+phenotypes. Any study-specific HU filter is a separately named technical
+partition, not a biological diagnosis. Whole-bone area/HU is not BMD or a
+validated trabecular ROI. Sarcopenia, myosteatosis, and outcome cutpoints are
+deliberately absent.
 
 ## Fairness and validation
 

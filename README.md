@@ -18,11 +18,10 @@ Version `1.0.0rc1` is a deliberate breaking release. Legacy named pipelines,
 working-directory configuration, the old bulk DICOM converter, mutable-memory
 Python results, and the old command collection have been removed.
 
-The release candidate is not yet publishable: the default ResEncL tissue model
-has exact local file hashes but its intended original model repository is not
-yet public at an immutable revision. The model manager reports this separately
-from local cache readiness. No model weights are included in Git, the wheel,
-the source archive, or the container.
+The default ResEncL and selectable ResEncM tissue models are synchronized from
+their original public Hugging Face repositories at immutable revisions. Every
+required file has a pinned byte size and SHA-256 digest. No model weights are
+included in Git, the wheel, the source archive, or the container.
 
 ## Local installation
 
@@ -187,7 +186,9 @@ separately. Canonical tables are:
 - `tables/slices.parquet`: one row per physical CT slice;
 - `tables/vertebrae.parquet`: native vertebral territories with three physical
   bins per detected vertebra, including T13, L6, and sacrum when present; and
-- `tables/summaries.parquet`: established case-level summaries.
+- `tables/summaries.parquet`: established case-level summaries; and
+- `tables/signature.parquet`: 100 fixed 20-mm bins with CSA, mean HU,
+  vertebral anchoring, coverage, and alignment confidence.
 
 Only vertebral-body masks feed downstream measurement and reporting. Full
 vertebra/posterior-element masks are retained only as optional upstream/QC

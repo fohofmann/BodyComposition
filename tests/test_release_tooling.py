@@ -55,15 +55,37 @@ def test_container_definition_is_weight_free_pinned_and_non_root():
     assert dockerfile.count("@sha256:") >= 2
     assert "USER 10001:10001" in dockerfile
     assert 'BODYCOMPOSITION_MODEL_ROOT=/models' in dockerfile
+    assert 'HF_HUB_DISABLE_XET=1' in dockerfile
+    assert 'HF_HUB_DOWNLOAD_TIMEOUT=600' in dockerfile
+    assert "TOTALSEG_HOME_DIR=/models" not in dockerfile
+    assert "TOTALSEG_WEIGHTS_PATH=/models" not in dockerfile
     assert 'BODYCOMPOSITION_OUTPUT_ROOT=/output' in dockerfile
     assert 'VOLUME ["/input", "/output", "/models"]' in dockerfile
     assert "models sync" not in dockerfile
-    assert "dists_models/weights.pt" in dockerfile
+    assert "-name '*.pt'" in dockerfile
+    assert "lpips_models/*.pth" in dockerfile
+    assert "-name '*.nii.gz'" in dockerfile
+    assert "-name '*.dcm'" in dockerfile
+    assert "-size +1024c" in dockerfile
+    assert dockerfile.index("lpips_models/*.pth") < dockerfile.index(
+        "FROM ${PYTHON_IMAGE} AS runtime"
+    )
     assert "site-packages/spineps/models" in dockerfile
     assert "-name '*.onnx'" in dockerfile
     assert "--reinstall-package BodyComposition" in dockerfile
     assert "*.pth" in dockerignore and "*.pt" in dockerignore
     assert "output/" in dockerignore
+
+
+def test_measurement_support_uses_the_pinned_nnunet_engine_directly():
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = project["project"]["dependencies"]
+
+    assert "nnunetv2==2.5.2" in dependencies
+    assert not any(
+        dependency.lower().startswith("totalsegmentator")
+        for dependency in dependencies
+    )
 
 
 def test_ci_and_release_gate_pin_tools_and_run_supply_chain_checks():

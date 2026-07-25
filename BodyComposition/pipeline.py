@@ -165,6 +165,7 @@ class InternalPipeline:
 
         self.actions = [AssessOrientation(self), *canonical_actions(self)]
         self.low_memory_mode = False
+        self.execution_strategy = "stage_aware_model_cache"
         if self.config["reporting"]["enabled"] and not any(
             action.__class__.__name__ == "RenderCaseReport" for action in self.actions
         ):
@@ -215,6 +216,14 @@ class InternalPipeline:
     def release_models(self) -> None:
         for action in self.actions:
             self._release_action_model(action)
+        release_accelerator_cache(self.device)
+
+    def prepare_exclusive_model(self, requesting_action: PipelineAction) -> None:
+        """Release other model bundles before a memory-intensive support stage."""
+
+        for action in self.actions:
+            if action is not requesting_action:
+                self._release_action_model(action)
         release_accelerator_cache(self.device)
 
 

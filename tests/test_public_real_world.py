@@ -23,7 +23,7 @@ MANIFEST_PATH = REPOSITORY_ROOT / "tests/fixtures/public_ct/ct_org_volume_0.json
 RUN_ENVIRONMENT_VARIABLE = "BODYCOMPOSITION_RUN_REAL_WORLD_TEST"
 
 TISSUE_MODEL_ASSETS = {
-    "dataset.json": "9841afba9b5f2180d870f68e12eb3e5695c5c0e4f64b91dabc52d849d67c340c",
+    "dataset.json": "8de2ff6b2b4229312517acf9bfd3dd4d23cc7ebedc48c0ad8e36bd3ba10e7f1d",
     "plans.json": "1790c1825529e29de536c73f66f5fd8ee12b9812271e93434e76a000c1e7cae0",
     "fold_0/checkpoint_final.pth": "d4eb90614fef10c2eb9aad574d4cb3517511d224f2f2da897fe4e4618513cd77",
     "fold_1/checkpoint_final.pth": "f520d3293d667986dd89fae115e3602af9f40c98413a08808d1cbb0ce08e074c",
@@ -45,6 +45,7 @@ EXPECTED_OUTPUTS = (
     "tables/slices.parquet",
     "tables/vertebrae.parquet",
     "tables/summaries.parquet",
+    "tables/signature.parquet",
     "qc/vertebral_result.json",
     "qc/spine_review.png",
     "qc/qc.json",
@@ -289,6 +290,7 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     slices = pd.read_parquet(bundle / "tables/slices.parquet")
     vertebrae = pd.read_parquet(bundle / "tables/vertebrae.parquet")
     summaries = pd.read_parquet(bundle / "tables/summaries.parquet")
+    signature = pd.read_parquet(bundle / "tables/signature.parquet")
     assert len(slices) == ct_image.GetSize()[2]
     assert slices["slice_id"].is_unique
     assert np.all(np.diff(slices["position_superior_mm"].to_numpy()) > 0)
@@ -296,6 +298,9 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     l3 = vertebrae.loc[vertebrae["vertebral_level"].eq("L3")]
     assert l3["territory_bin"].tolist() == [1, 2, 3]
     assert len(summaries) == 1
+    assert len(signature) == 100
+    assert signature["bin_width_mm"].eq(20.0).all()
+    assert signature["signature_bin"].tolist() == list(range(100))
     assert summaries.loc[0, "case_id"] == manifest["asset_id"]
 
     inspected = inspect_result(bundle)

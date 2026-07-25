@@ -16,13 +16,15 @@ from BodyComposition.measurement.aggregation import (
 from BodyComposition.measurement.contracts import (
     BINS_PER_VERTEBRAL_TERRITORY,
     MEASUREMENT_SCHEMA_VERSION,
+    SIGNATURE_REQUIRED_COLUMNS,
     SLICE_REQUIRED_COLUMNS,
     SUMMARY_REQUIRED_COLUMNS,
     VERTEBRA_REQUIRED_COLUMNS,
     canonical_arrow_schema,
+    validate_signature_contract,
 )
 
-TABLE_NAMES = ("slices", "vertebrae", "summaries")
+TABLE_NAMES = ("slices", "vertebrae", "summaries", "signature")
 IDENTITY_COLUMNS = ("schema_version", "run_id", "analysis_id", "case_id")
 
 
@@ -89,7 +91,6 @@ def _add_range_volume_indices(
     output["height_source"] = "caller_supplied_measured_height"
     for prefix in (
         "skeletal_muscle_tissue_hu_m29_150",
-        "imat_ct_hu_m190_m30",
         "sat_total_hu_m190_m30",
         "vat_total_hu_m190_m30",
     ):
@@ -149,6 +150,7 @@ def load_measurement_tables(directory: str | Path) -> dict[str, pd.DataFrame]:
         "slices": SLICE_REQUIRED_COLUMNS,
         "vertebrae": VERTEBRA_REQUIRED_COLUMNS,
         "summaries": SUMMARY_REQUIRED_COLUMNS,
+        "signature": SIGNATURE_REQUIRED_COLUMNS,
     }
     for name, table in tables.items():
         missing = sorted(required[name] - set(table.columns))
@@ -226,7 +228,15 @@ def load_measurement_tables(directory: str | Path) -> dict[str, pd.DataFrame]:
             raise ValueError(
                 f"vertebrae.parquet has unstable bins for {level!r}: {observed}."
             )
+    signature = tables["signature"]
+    validate_signature_contract(signature, table_name="signature.parquet")
     return tables
+
+
+def signature_measurements(directory: str | Path) -> pd.DataFrame:
+    """Load the validated fixed-mm longitudinal signature for one case."""
+
+    return load_measurement_tables(directory)["signature"].copy()
 
 
 def l3_measurements(

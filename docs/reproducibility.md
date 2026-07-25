@@ -55,13 +55,17 @@ support POSIX advisory locks and atomic same-filesystem directory rename. See
 Before clinical analysis, summarize CT coverage, detected vertebral variants,
 QC flags, and missingness by cohort/year/site/protocol without looking at
 outcomes. The canonical longitudinal source is `slices.parquet` with physical
-millimetres and native vertebral assignments. Scans are not stretched and
-missing anatomy is not imputed.
+millimetres, native vertebral assignments, per-tissue cross-sectional area,
+and per-tissue mean HU. Scans are not stretched and missing anatomy is not
+imputed. Absolute scanner coordinates must not be treated as cross-patient
+registration without their anatomical assignment and coverage context.
 
 Use the three-bin `vertebrae.parquet` for compact anatomical summaries and
-`summaries.parquet` for prespecified established views. Any later functional
-or signature representation must declare alignment, coverage, smoothing, and
-missing-data handling as a separate analysis contract.
+`summaries.parquet` for prespecified established views. The default
+`signature.parquet` provides a frozen 100-by-20-mm translation-only comparison
+grid. Retain its alignment method/confidence, coverage, variants, and
+missingness in every cohort analysis. Alternative functional representations
+or added tissue profiles remain separate versioned analysis contracts.
 
 ## Acceptance archive
 

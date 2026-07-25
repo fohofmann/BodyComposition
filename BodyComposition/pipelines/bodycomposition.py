@@ -29,11 +29,10 @@ def canonical_actions(pipeline):
     except KeyError as error:
         raise ValueError(f"Unknown tissue backend {tissue_backend!r}.") from error
     vertebral_actions, vertebral_body_source = vertebral_backend_actions(pipeline)
-    tissue_mask = "masks/tissue_labels.nii.gz"
     compartment_mask = "masks/tissue_compartments.nii.gz"
     measurement_actions = measurement_support_actions(
         pipeline,
-        tissue_mask=tissue_mask,
+        compartment_mask=compartment_mask,
     )
     actions = [
         *vertebral_actions,
@@ -42,10 +41,9 @@ def canonical_actions(pipeline):
         *measurement_actions,
         MeasureCanonicalBodyComposition(
             pipeline,
-            tissue_mask=tissue_mask,
+            compartment_mask=compartment_mask,
             tissue_backend_id=tissue_backend,
             vertebral_body_source=vertebral_body_source,
-            compartment_mask=compartment_mask,
         ),
     ]
     if pipeline.config["measurements"]["review"]["enabled"]:

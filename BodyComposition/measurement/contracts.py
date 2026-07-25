@@ -14,9 +14,27 @@ import pyarrow as pa
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCStatus
 
-MEASUREMENT_SCHEMA_VERSION = "2.1.0"
+MEASUREMENT_SCHEMA_VERSION = "3.0.0"
 VERTEBRAL_TERRITORY_SCHEMA_VERSION = "native-physical-territories-v1-bins3"
 BINS_PER_VERTEBRAL_TERRITORY = 3
+SIGNATURE_SCHEMA_VERSION = "vertebral-reference-fixed-mm-v1"
+REFERENCE_ALIGNMENT_VERSION = "robust-vertebral-linear-reference-v1"
+SIGNATURE_BIN_COUNT = 100
+SIGNATURE_BIN_WIDTH_MM = 20.0
+SIGNATURE_REFERENCE_LEVEL = "L3"
+SIGNATURE_CORE_CHANNELS: tuple[tuple[str, str], ...] = (
+    ("sm", "sm"),
+    (
+        "skeletal_muscle_tissue_hu_m29_150",
+        "skeletal_muscle_tissue_hu_m29_150",
+    ),
+    ("sat_total_hu_m190_m30", "sat_total_hu_m190_m30"),
+    ("avat_hu_m190_m30", "avat_hu_m190_m30"),
+    ("tvat_hu_m190_m30", "tvat_hu_m190_m30"),
+    ("bone", "bone"),
+    ("heart", "heart"),
+    ("lung", "lung"),
+)
 
 SLICE_REQUIRED_COLUMNS = {
     "schema_version",
@@ -111,6 +129,66 @@ SUMMARY_REQUIRED_COLUMNS = {
     "ct_midwaist_to_pelvic_ratio_valid",
     "ct_midwaist_to_pelvic_ratio_reason",
 }
+SIGNATURE_REQUIRED_COLUMNS = {
+    "schema_version",
+    "signature_schema_version",
+    "signature_profile_id",
+    "reference_alignment_version",
+    "run_id",
+    "analysis_id",
+    "case_id",
+    "signature_bin",
+    "relative_bin_index",
+    "reference_inferior_mm",
+    "reference_center_mm",
+    "reference_superior_mm",
+    "bin_width_mm",
+    "physical_inferior_position_superior_mm",
+    "physical_superior_position_superior_mm",
+    "coverage_fraction",
+    "contributing_slice_count",
+    "bin_valid",
+    "bin_reason",
+    "dominant_vertebral_level",
+    "dominant_vertebral_fraction",
+    "vertebral_assignment_status",
+    "reference_level",
+    "reference_origin_position_superior_mm",
+    "reference_alignment_valid",
+    "reference_alignment_method",
+    "reference_alignment_confidence",
+    "reference_alignment_anchor_count",
+    "reference_alignment_anchor_levels",
+    "reference_alignment_slope_mm_per_level",
+    "reference_alignment_residual_mm",
+    "reference_alignment_review_required",
+    "reference_variant_sequence",
+    "trunk_mean_csa_cm2",
+    "trunk_mean_csa_cm2_valid",
+    "trunk_mean_csa_cm2_reason",
+    "trunk_mean_csa_cm2_coverage_fraction",
+    "trunk_mean_circumference_cm",
+    "trunk_mean_circumference_cm_valid",
+    "trunk_mean_circumference_cm_reason",
+    "trunk_mean_circumference_cm_coverage_fraction",
+}
+for _destination, _source in SIGNATURE_CORE_CHANNELS:
+    del _source
+    SIGNATURE_REQUIRED_COLUMNS.update(
+        {
+            f"{_destination}_mean_csa_cm2",
+            f"{_destination}_mean_csa_cm2_valid",
+            f"{_destination}_mean_csa_cm2_reason",
+            f"{_destination}_mean_csa_cm2_coverage_fraction",
+            f"{_destination}_mean_hu",
+            f"{_destination}_mean_hu_valid",
+            f"{_destination}_mean_hu_reason",
+            f"{_destination}_mean_hu_coverage_fraction",
+            f"{_destination}_mean_csa_fraction_of_trunk",
+            f"{_destination}_mean_csa_fraction_of_trunk_valid",
+            f"{_destination}_mean_csa_fraction_of_trunk_reason",
+        }
+    )
 MISSING_REASONS = {
     "outside_fov",
     "partial_fov",
@@ -138,6 +216,9 @@ MISSING_REASONS = {
 _STRING_COLUMNS = {
     "schema_version",
     "vertebral_territory_schema_version",
+    "signature_schema_version",
+    "signature_profile_id",
+    "reference_alignment_version",
     "run_id",
     "analysis_id",
     "case_id",
@@ -152,6 +233,12 @@ _STRING_COLUMNS = {
     "orientation_state",
     "orientation_qc_status",
     "territory_qc_status",
+    "reference_level",
+    "reference_alignment_method",
+    "reference_alignment_confidence",
+    "reference_alignment_anchor_levels",
+    "reference_variant_sequence",
+    "dominant_vertebral_level",
 }
 _BOOLEAN_COLUMNS = {
     "allow_partial",
@@ -163,6 +250,9 @@ _BOOLEAN_COLUMNS = {
     "body_surface_invalid",
     "trunk_surface_invalid",
     "territory_complete",
+    "reference_alignment_valid",
+    "reference_alignment_review_required",
+    "bin_valid",
     "sequence_gap_cranial",
     "sequence_gap_caudal",
 }
@@ -176,6 +266,9 @@ _INTEGER_COLUMNS = {
     "bins_per_territory",
     "vertebral_territory_bin",
     "contributing_slice_count",
+    "signature_bin",
+    "relative_bin_index",
+    "reference_alignment_anchor_count",
 }
 
 
@@ -300,6 +393,186 @@ def canonical_arrow_schema(table: pd.DataFrame) -> pa.Schema:
             )
         },
     )
+
+
+def validate_signature_contract(
+    table: pd.DataFrame,
+    *,
+    table_name: str = "signature",
+) -> None:
+    """Validate the immutable fixed-mm signature identity and alignment fields."""
+
+    if len(table) != SIGNATURE_BIN_COUNT:
+        raise ValueError(
+            f"{table_name} must contain exactly {SIGNATURE_BIN_COUNT} fixed physical bins."
+        )
+    expected_bins = np.arange(SIGNATURE_BIN_COUNT, dtype=np.int64)
+    expected_relative = expected_bins - (SIGNATURE_BIN_COUNT // 2)
+    expected_centres = expected_relative.astype(float) * SIGNATURE_BIN_WIDTH_MM
+    expected_inferior = expected_centres - SIGNATURE_BIN_WIDTH_MM / 2.0
+    expected_superior = expected_centres + SIGNATURE_BIN_WIDTH_MM / 2.0
+
+    if not np.array_equal(
+        table["signature_bin"].to_numpy(dtype=np.int64),
+        expected_bins,
+    ):
+        raise ValueError(f"{table_name} must contain ordered bin identities 0..99.")
+    if not np.array_equal(
+        table["relative_bin_index"].to_numpy(dtype=np.int64),
+        expected_relative,
+    ):
+        raise ValueError(
+            f"{table_name} relative_bin_index differs from the fixed L3 grid."
+        )
+    for column, expected in (
+        ("reference_inferior_mm", expected_inferior),
+        ("reference_center_mm", expected_centres),
+        ("reference_superior_mm", expected_superior),
+        (
+            "bin_width_mm",
+            np.full(SIGNATURE_BIN_COUNT, SIGNATURE_BIN_WIDTH_MM, dtype=float),
+        ),
+    ):
+        if not np.allclose(
+            table[column].to_numpy(dtype=float),
+            expected,
+            rtol=0.0,
+            atol=1e-9,
+        ):
+            raise ValueError(
+                f"{table_name} {column} differs from the fixed L3-centred grid."
+            )
+    if not table["signature_schema_version"].eq(SIGNATURE_SCHEMA_VERSION).all():
+        raise ValueError(
+            f"{table_name} has an unsupported signature_schema_version."
+        )
+    if not table["reference_alignment_version"].eq(
+        REFERENCE_ALIGNMENT_VERSION
+    ).all():
+        raise ValueError(
+            f"{table_name} has an unsupported reference_alignment_version."
+        )
+    if not table["reference_level"].eq(SIGNATURE_REFERENCE_LEVEL).all():
+        raise ValueError(
+            f"{table_name} reference_level must be {SIGNATURE_REFERENCE_LEVEL}."
+        )
+    profile_ids = table["signature_profile_id"].dropna().astype(str).unique()
+    if len(profile_ids) != 1 or not table["signature_profile_id"].notna().all():
+        raise ValueError(f"{table_name} must contain one signature_profile_id.")
+    for column in (
+        "reference_alignment_valid",
+        "reference_alignment_method",
+        "reference_alignment_confidence",
+        "reference_alignment_anchor_count",
+        "reference_alignment_anchor_levels",
+        "reference_origin_position_superior_mm",
+        "reference_alignment_slope_mm_per_level",
+        "reference_alignment_residual_mm",
+        "reference_alignment_review_required",
+        "reference_variant_sequence",
+    ):
+        if table[column].nunique(dropna=False) != 1:
+            raise ValueError(
+                f"{table_name} has inconsistent {column} across fixed bins."
+            )
+
+    anchor_count = int(table["reference_alignment_anchor_count"].iloc[0])
+    anchor_levels = str(table["reference_alignment_anchor_levels"].iloc[0])
+    observed_anchor_count = len(
+        [level for level in anchor_levels.split(",") if level]
+    )
+    if anchor_count < 0 or observed_anchor_count != anchor_count:
+        raise ValueError(
+            f"{table_name} has inconsistent reference alignment anchors."
+        )
+
+    alignment_valid = bool(table["reference_alignment_valid"].iloc[0])
+    origin = pd.to_numeric(
+        table["reference_origin_position_superior_mm"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    physical_inferior = pd.to_numeric(
+        table["physical_inferior_position_superior_mm"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    physical_superior = pd.to_numeric(
+        table["physical_superior_position_superior_mm"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    coverage = pd.to_numeric(
+        table["coverage_fraction"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    contributing_slices = pd.to_numeric(
+        table["contributing_slice_count"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    if not np.all(np.isfinite(contributing_slices)) or np.any(
+        contributing_slices < 0
+    ):
+        raise ValueError(
+            f"{table_name} has invalid contributing_slice_count values."
+        )
+
+    if alignment_valid:
+        if not np.all(np.isfinite(origin)):
+            raise ValueError(
+                f"{table_name} has a valid alignment without a finite origin."
+            )
+        if not np.allclose(
+            physical_inferior,
+            origin + expected_inferior,
+            rtol=0.0,
+            atol=1e-9,
+        ) or not np.allclose(
+            physical_superior,
+            origin + expected_superior,
+            rtol=0.0,
+            atol=1e-9,
+        ):
+            raise ValueError(
+                f"{table_name} physical bounds do not match its translation-only reference."
+            )
+        if not np.all(np.isfinite(coverage)) or np.any(
+            (coverage < 0.0) | (coverage > 1.0)
+        ):
+            raise ValueError(
+                f"{table_name} coverage_fraction must be finite and within [0, 1]."
+            )
+        bin_valid = table["bin_valid"].fillna(False).to_numpy(dtype=bool)
+        if not np.array_equal(bin_valid, coverage > 0.0):
+            raise ValueError(
+                f"{table_name} bin_valid does not match acquired coverage."
+            )
+        outside_fov = coverage == 0.0
+        if np.any(contributing_slices[outside_fov] != 0):
+            raise ValueError(
+                f"{table_name} has contributing slices outside the acquired FOV."
+            )
+        if not table.loc[outside_fov, "bin_reason"].eq("outside_fov").all():
+            raise ValueError(
+                f"{table_name} must mark zero-coverage bins as outside_fov."
+            )
+    else:
+        if (
+            np.any(np.isfinite(origin))
+            or np.any(np.isfinite(physical_inferior))
+            or np.any(np.isfinite(physical_superior))
+            or np.any(np.isfinite(coverage))
+        ):
+            raise ValueError(
+                f"{table_name} has physical coordinates despite unresolved alignment."
+            )
+        if table["bin_valid"].fillna(False).any() or np.any(
+            contributing_slices != 0
+        ):
+            raise ValueError(
+                f"{table_name} has acquired bins despite unresolved alignment."
+            )
+        if not bool(table["reference_alignment_review_required"].iloc[0]):
+            raise ValueError(
+                f"{table_name} unresolved alignment must require review."
+            )
 
 
 def _validate_mask(mask_zyx: np.ndarray, geometry: ImageGeometry, name: str) -> np.ndarray:
@@ -489,6 +762,7 @@ class MeasurementBundle:
     slices: pd.DataFrame
     vertebrae: pd.DataFrame
     summaries: pd.DataFrame
+    signature: pd.DataFrame
     body_surface: BodySurfaceResult
     vertebral_extents: Mapping[str, VertebralExtent]
     vertebral_territories: Mapping[str, VertebralTerritory]
@@ -498,7 +772,7 @@ class MeasurementBundle:
     paths: Mapping[str, Path] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        for name in ("slices", "vertebrae", "summaries"):
+        for name in ("slices", "vertebrae", "summaries", "signature"):
             value = getattr(self, name)
             if not isinstance(value, pd.DataFrame):
                 raise TypeError(f"Measurement bundle {name} must be a pandas DataFrame.")
@@ -513,6 +787,7 @@ class MeasurementBundle:
             "slices": SLICE_REQUIRED_COLUMNS,
             "vertebrae": VERTEBRA_REQUIRED_COLUMNS,
             "summaries": SUMMARY_REQUIRED_COLUMNS,
+            "signature": SIGNATURE_REQUIRED_COLUMNS,
         }
         for name, required in required_by_table.items():
             missing = sorted(required - set(getattr(self, name).columns))
@@ -520,6 +795,7 @@ class MeasurementBundle:
                 raise ValueError(f"Measurement table {name} is missing columns: {missing}.")
         if self.slices.empty:
             raise ValueError("slices must retain every acquired CT slice and cannot be empty.")
+        validate_signature_contract(self.signature)
         if self.slices["slice_id"].duplicated().any():
             raise ValueError("slice_id must be unique within a case.")
         position = self.slices["position_superior_mm"].to_numpy(dtype=float)
@@ -537,7 +813,7 @@ class MeasurementBundle:
             if observed != expected:
                 raise ValueError(f"Vertebral territory {level!r} has unstable bin identities.")
         expected_identity = self.identity.as_columns()
-        for name in ("slices", "vertebrae", "summaries"):
+        for name in ("slices", "vertebrae", "summaries", "signature"):
             table = getattr(self, name)
             for column, expected in expected_identity.items():
                 if not table[column].eq(expected).all():

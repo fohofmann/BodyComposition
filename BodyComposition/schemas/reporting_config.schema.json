@@ -40,7 +40,10 @@
         "enum": [
           "sm_mean_csa_cm2",
           "sm_mean_hu",
-          "imat_mean_csa_cm2",
+          "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
+          "skeletal_muscle_tissue_hu_m29_150_mean_hu",
+          "vat_total_hu_m190_m30_mean_csa_cm2",
+          "sat_total_hu_m190_m30_mean_csa_cm2",
           "total_vat_mean_csa_cm2",
           "sat_mean_csa_cm2",
           "trunk_mean_circumference_cm"

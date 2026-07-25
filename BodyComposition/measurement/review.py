@@ -166,12 +166,26 @@ def _tissue_curve_panel(bundle: MeasurementBundle, width: int, height: int) -> n
     table = bundle.slices
     position = table["position_superior_mm"].to_numpy(dtype=float)
     curves = (
-        ("sm_area_cm2", "SM", (80, 180, 255)),
-        ("imat_area_cm2", "IMAT", (180, 120, 255)),
-        ("sat_area_cm2", "SAT", (80, 220, 220)),
-        ("total_vat_area_cm2", "total VAT", (40, 80, 230)),
-        ("avat_area_cm2", "aVAT", (80, 80, 180)),
-        ("tvat_area_cm2", "tVAT", (140, 70, 220)),
+        (
+            "skeletal_muscle_tissue_hu_m29_150_area_cm2",
+            "muscle (-29..150 HU)",
+            (80, 180, 255),
+        ),
+        (
+            "sat_total_hu_m190_m30_area_cm2",
+            "SAT (-190..-30 HU)",
+            (80, 220, 220),
+        ),
+        (
+            "avat_hu_m190_m30_area_cm2",
+            "aVAT (-190..-30 HU)",
+            (40, 80, 230),
+        ),
+        (
+            "tvat_hu_m190_m30_area_cm2",
+            "tVAT (-190..-30 HU)",
+            (120, 80, 230),
+        ),
     )
     available = [
         (column, label, color)

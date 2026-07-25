@@ -60,11 +60,11 @@ INTERNAL_MODELS: Mapping[str, dict[str, Any]] = {
         "trainer": "nnUNetTrainer__nnUNetResEncUNetLPlans__3d_fullres",
         "repository": "https://huggingface.co/fhofmann/BodyCompositionCT-ResEncL",
         "repo_id": "fhofmann/BodyCompositionCT-ResEncL",
-        "revision": None,
-        "license": "CC-BY-SA-4.0",
-        "weight_license_status": "declared_locally_but_original_repository_not_public",
+        "revision": "b355aa7254f5307b6d18005dfbabae8c439d24fb",
+        "license": "CC-BY-4.0",
+        "weight_license_status": "published_with_model_card_and_license",
         "files": {
-            "dataset.json": _file("9841afba9b5f2180d870f68e12eb3e5695c5c0e4f64b91dabc52d849d67c340c", 786),
+            "dataset.json": _file("8de2ff6b2b4229312517acf9bfd3dd4d23cc7ebedc48c0ad8e36bd3ba10e7f1d", 844),
             "plans.json": _file("1790c1825529e29de536c73f66f5fd8ee12b9812271e93434e76a000c1e7cae0", 10757),
             "fold_0/checkpoint_final.pth": _file("d4eb90614fef10c2eb9aad574d4cb3517511d224f2f2da897fe4e4618513cd77", 819931462),
             "fold_1/checkpoint_final.pth": _file("f520d3293d667986dd89fae115e3602af9f40c98413a08808d1cbb0ce08e074c", 819931142),
@@ -79,11 +79,11 @@ INTERNAL_MODELS: Mapping[str, dict[str, Any]] = {
         "trainer": "nnUNetTrainer__nnUNetResEncUNetMPlans__3d_fullres",
         "repository": "https://huggingface.co/fhofmann/BodyCompositionCT-ResEncM",
         "repo_id": "fhofmann/BodyCompositionCT-ResEncM",
-        "revision": None,
-        "license": "CC-BY-SA-4.0",
-        "weight_license_status": "declared_locally_but_original_repository_not_public",
+        "revision": "9c60c8f59a99442b9b8cc1a45abf6c4d81690c0d",
+        "license": "CC-BY-4.0",
+        "weight_license_status": "published_with_model_card_and_license",
         "files": {
-            "dataset.json": _file("9841afba9b5f2180d870f68e12eb3e5695c5c0e4f64b91dabc52d849d67c340c", 786),
+            "dataset.json": _file("8de2ff6b2b4229312517acf9bfd3dd4d23cc7ebedc48c0ad8e36bd3ba10e7f1d", 844),
             "plans.json": _file("d80992884b678fae2e6e09ad4147a30a59bcf39d6fd75f40da6a6bb57ef09afd", 15985),
             "fold_all/checkpoint_final.pth": _file("91ca20c9bd2674cbc0c25a5e56c70e3285b8e8f6bdf064430ad4a1d76de65f90", 819932358),
         },
@@ -147,6 +147,7 @@ def _sha256(path: Path) -> str:
 
 def _internal_asset(model_id: str) -> dict[str, Any]:
     model = INTERNAL_MODELS[model_id]
+    revision = model["revision"]
     files = [
         {"relative_path": relative, **expected}
         for relative, expected in model["files"].items()
@@ -156,9 +157,13 @@ def _internal_asset(model_id: str) -> dict[str, Any]:
         "name": model["name"],
         "upstream_project": model["repository"],
         "upstream_repository": model["repository"],
-        "upstream_revision": model["revision"],
+        "upstream_revision": revision,
         "citation": "BodyComposition model card and associated validation report",
-        "download_url": model["repository"],
+        "download_url": (
+            f"{model['repository']}/tree/{revision}"
+            if revision is not None
+            else model["repository"]
+        ),
         "expected_files": files,
         "code_license": "Apache-2.0 (nnU-Net)",
         "weight_license": model["license"],
@@ -447,7 +452,10 @@ def _sync_internal(model_id: str, root: Path) -> ModelStatus:
             repo_id=model["repo_id"],
             revision=revision,
             local_dir=staged_dataset,
-            allow_patterns=[f"{trainer}/**"],
+            allow_patterns=[
+                f"{trainer}/{relative}"
+                for relative in model["files"]
+            ],
         )
         staged = _check_internal(model_id, staged_root)
         if not staged.ready:
