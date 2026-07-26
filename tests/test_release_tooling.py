@@ -17,6 +17,7 @@ from scripts.audit_distribution import audit
 from scripts.generate_sbom import generate
 from scripts.release_checks import (
     _clear_stale_outputs,
+    _git_commit,
     _normalize_sdist,
     _prepare_release_gate,
 )
@@ -158,6 +159,15 @@ def test_dirty_release_attempt_invalidates_an_older_passing_receipt(tmp_path, mo
         _prepare_release_gate(tmp_path, allow_dirty=False)
 
     assert not stale_receipt.exists()
+
+
+def test_release_receipt_commit_is_a_full_lowercase_revision(monkeypatch):
+    monkeypatch.setattr(
+        "scripts.release_checks.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=("A" * 40) + "\n"),
+    )
+
+    assert _git_commit() == "a" * 40
 
 
 def test_array_digest_matches_c_order_bytes_for_empty_and_fortran_arrays():

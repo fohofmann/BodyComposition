@@ -91,6 +91,23 @@ def _source_date_epoch() -> int:
     return epoch
 
 
+def _git_commit() -> str:
+    """Return the exact committed source revision covered by the receipt."""
+
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if len(commit) not in {40, 64} or any(
+        character not in "0123456789abcdef" for character in commit.lower()
+    ):
+        raise SystemExit("git returned an invalid release commit")
+    return commit.lower()
+
+
 def _normalize_sdist(path: Path, *, epoch: int) -> None:
     """Rewrite an sdist with stable ordering, ownership, and timestamps."""
 
@@ -156,6 +173,7 @@ def main() -> int:
     args = parser.parse_args()
     _prepare_release_gate(ROOT, allow_dirty=args.allow_dirty)
     source_date_epoch = _source_date_epoch()
+    git_commit = _git_commit()
 
     _run(["uv", "lock", "--check"])
     _run(["uv", "sync", "--frozen", "--extra", "test", "--extra", "release"])
@@ -335,8 +353,10 @@ def main() -> int:
             {
                 "schema_version": "1.0.0",
                 "passed": True,
+                "git_commit": git_commit,
                 "source_cleanliness_enforced": not args.allow_dirty,
                 "source_date_epoch": source_date_epoch,
+                "package_lock_sha256": _sha256(ROOT / "uv.lock"),
                 "reproducible_builds": True,
                 "artifact_checksums": checksums,
                 "clean_install_expected_operational_errors": doctor_payload[
