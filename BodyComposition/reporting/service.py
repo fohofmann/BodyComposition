@@ -54,6 +54,7 @@ from BodyComposition.reporting.render import (
     render_failure_page,
     render_review_summary_page,
 )
+from BodyComposition.utils.digests import array_sha256
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 from BodyComposition.vertebral.contracts import VertebralResult
 
@@ -103,24 +104,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _array_digest(array: np.ndarray) -> str:
-    value = np.ascontiguousarray(array)
-    digest = hashlib.sha256()
-    digest.update(str(value.dtype).encode("ascii"))
-    digest.update(np.asarray(value.shape, dtype=np.int64).tobytes())
-    digest.update(value.tobytes())
-    return digest.hexdigest()
-
-
 def _sitk_pixel_digest(image: sitk.Image) -> str:
     """Match the canonical orientation-stage digest over a SimpleITK array_zyx."""
 
-    array_zyx = np.ascontiguousarray(sitk.GetArrayViewFromImage(image))
-    digest = hashlib.sha256()
-    digest.update(str(array_zyx.dtype).encode("ascii"))
-    digest.update(np.asarray(array_zyx.shape, dtype=np.int64).tobytes())
-    digest.update(array_zyx.tobytes())
-    return digest.hexdigest()
+    return array_sha256(sitk.GetArrayViewFromImage(image))
 
 
 def _table_digest(table: pd.DataFrame) -> str:
@@ -165,7 +152,7 @@ def _validate_orientation_link(
 
 def _validate_slice_geometry(case: CaseReportInput, geometry: ImageGeometry) -> None:
     observed = case.measurement_bundle.slices.reset_index(drop=True)
-    expected = slice_geometry_table(geometry).drop(columns=["original_storage_index"])
+    expected = slice_geometry_table(geometry)
     if len(observed) != len(expected):
         raise ReportValidationError(
             "Measurement slices do not retain exactly one row per orientation-prepared CT slice."
@@ -241,7 +228,7 @@ def _validate_case_sources(case: CaseReportInput) -> None:
         raise ReportValidationError(
             "The measurement bundle lacks the canonical tissue-label digest."
         )
-    if _array_digest(case.tissue_labels_zyx) != expected_tissue_digest:
+    if array_sha256(case.tissue_labels_zyx) != expected_tissue_digest:
         raise ReportValidationError(
             "The report tissue labels disagree with the supplied measurement bundle."
         )
@@ -377,7 +364,7 @@ def _partial_failure_overview(
             },
             {
                 "name": "vertebral_body_labels",
-                "sha256": _array_digest(vertebral_result.vertebral_body_labels),
+                "sha256": array_sha256(vertebral_result.vertebral_body_labels),
             },
             {
                 "name": "vertebral_display_metadata",
@@ -433,11 +420,11 @@ def _source_artifacts(case: CaseReportInput) -> list[dict[str, str]]:
         {"name": "prepared_ct_pixels_and_geometry", "sha256": _prepared_digest(case)},
         {
             "name": "vertebral_body_labels",
-            "sha256": _array_digest(case.vertebral_result.vertebral_body_labels),
+            "sha256": array_sha256(case.vertebral_result.vertebral_body_labels),
         },
         {
             "name": "tissue_labels",
-            "sha256": _array_digest(case.tissue_labels_zyx),
+            "sha256": array_sha256(case.tissue_labels_zyx),
         },
         {"name": "slices.parquet_content", "sha256": _table_digest(bundle.slices)},
         {"name": "vertebrae.parquet_content", "sha256": _table_digest(bundle.vertebrae)},

@@ -100,9 +100,9 @@ def tissue_segmentation_envelope(
             qualifier = "non-negative" if allow_zero else "positive"
             raise ValueError(f"{name} must be finite and {qualifier}.")
 
-    foreground = labels != 0
-    body = foreground.copy()
-    trunk = np.zeros_like(foreground)
+    body = labels != 0
+    input_empty = not body.any()
+    trunk = np.zeros_like(body)
     pixel_area_mm2 = float(geometry.in_plane_area_mm2)
     minimum_pixels = max(1, int(np.ceil(minimum_component_area_mm2 / pixel_area_mm2)))
     spacing_yx_mm = (float(geometry.spacing_xyz[1]), float(geometry.spacing_xyz[0]))
@@ -110,7 +110,7 @@ def tissue_segmentation_envelope(
     discarded_components = 0
     multi_component_slices = 0
 
-    for slice_index_z, foreground_yx in enumerate(foreground):
+    for slice_index_z, foreground_yx in enumerate(body):
         component_labels, component_count = ndimage.label(
             foreground_yx,
             structure=ndimage.generate_binary_structure(2, 2),
@@ -141,9 +141,8 @@ def tissue_segmentation_envelope(
             if component_label == largest:
                 trunk[slice_index_z] = envelope
 
-    body |= trunk
     flags: list[QCFlag] = []
-    if not foreground.any():
+    if input_empty:
         flags.append(
             QCFlag(
                 code="tissue_envelope_empty_input",

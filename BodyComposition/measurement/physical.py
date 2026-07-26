@@ -37,7 +37,11 @@ def validate_array_zyx(
     expected_shape = tuple(reversed(geometry.size_xyz))
     if array.ndim != 3 or array.shape != expected_shape:
         raise ValueError(f"{name} must have array_zyx shape {expected_shape}, got {array.shape}.")
-    if finite and not np.all(np.isfinite(array)):
+    intrinsically_finite = np.issubdtype(array.dtype, np.integer) or np.issubdtype(
+        array.dtype,
+        np.bool_,
+    )
+    if finite and not intrinsically_finite and not np.all(np.isfinite(array)):
         raise ValueError(f"{name} contains non-finite values.")
     return array
 
@@ -95,7 +99,6 @@ def slice_geometry_table(geometry: ImageGeometry) -> pd.DataFrame:
     table = pd.DataFrame(
         {
             "slice_index_zyx_z": storage_indices,
-            "original_storage_index": storage_indices,
             "position_superior_mm": position_superior_mm,
             "slice_center_lps_x_mm": centers_lps[:, 0],
             "slice_center_lps_y_mm": centers_lps[:, 1],
@@ -196,7 +199,10 @@ def mask_physical_extent(
 ) -> tuple[float, float, tuple[float, float, float], float]:
     """Project the complete voxel-cell extent and centroid onto patient superior."""
 
-    mask = validate_array_zyx(mask_zyx, geometry, "mask_zyx", finite=False).astype(bool)
+    mask = validate_array_zyx(mask_zyx, geometry, "mask_zyx", finite=False).astype(
+        bool,
+        copy=False,
+    )
     indices_zyx = np.argwhere(mask)
     if indices_zyx.size == 0:
         raise ValueError("A physical mask extent requires at least one voxel.")

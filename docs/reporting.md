@@ -224,11 +224,11 @@ The Python equivalents are `render_report`, `collate_report_export`, and
 
 ## Privacy and interpretation
 
-Reports use only path-safe pseudonymous case IDs. Manifests/PDF metadata do not
-include source paths, usernames, hostnames, MRNs, accession numbers, or dates
-of birth. Acquisition and study dates are not displayed. The supplied pixels
-may still contain burned-in identifiers; input de-identification remains
-mandatory.
+Pipeline-derived case IDs are content-based and pseudonymous. Caller-supplied
+case IDs, metadata, attribution, and review text must already be deidentified.
+Path filtering and field allowlisting are not PHI detection. Source paths,
+usernames, and hostnames are not included in report metadata, but input
+deidentification and burned-in-text review remain the caller's responsibility.
 
 The sagittal projection is a deterministic technical overview, not a
 diagnostic image or clinical report. Use canonical images and review JSON for

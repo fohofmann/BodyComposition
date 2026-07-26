@@ -189,8 +189,7 @@ SIGNATURE_REQUIRED_COLUMNS = {
     "trunk_mean_circumference_cm_reason",
     "trunk_mean_circumference_cm_coverage_fraction",
 }
-for _destination, _source in SIGNATURE_CORE_CHANNELS:
-    del _source
+for _destination, _ in SIGNATURE_CORE_CHANNELS:
     SIGNATURE_REQUIRED_COLUMNS.update(
         {
             f"{_destination}_mean_csa_cm2",
@@ -279,7 +278,6 @@ _INTEGER_COLUMNS = {
     "slice_id",
     "longitudinal_order",
     "slice_index_zyx_z",
-    "original_storage_index",
     "native_label",
     "territory_bin",
     "bins_per_territory",

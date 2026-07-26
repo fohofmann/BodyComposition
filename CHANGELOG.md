@@ -45,8 +45,8 @@ This is a deliberate breaking release candidate.
 - nnU-Net v1 trainers and obsolete crop/postprocess/action layers; and
 - backward-compatibility aliases.
 
-### Open release gate
+### Remaining release validation
 
-- The default ResEncL and optional ResEncM tissue model repositories still
-  require public immutable revisions and complete model cards before a final
-  public release can pass.
+- Rebuild the publication artifacts and container from the approved release
+  tag, and complete the deferred Linux x86-64 and scientific/cohort validation
+  gates before making platform-performance or clinical-validity claims.

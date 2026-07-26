@@ -52,8 +52,8 @@ the authoritative reference.
 | `vertebrae.backend` | vertebral-body segmentation and native labeling | `spineps_veridah_ct_v1`, `vertebral_bodies_resenc_l`, `vertebral_bodies_resenc_m` |
 | `tissue.backend` | anatomical body-composition compartments | `bodycomposition_resenc_l_v1`, `bodycomposition_resenc_m_v1` |
 | `body_surface.backend` | measurement support for trunk/body envelope | `tissue_segmentation_envelope_v1`, `totalsegmentator_body_task299_v1`, `deterministic_body_mask_v1` |
-| `measurements` | tissue definitions, physical territories, fixed-mm signature, landmarks, QC | canonical schema 3.0 |
-| `reporting` | derived one-page PDF | disabled, `spine_overview_v1`, or `spine_profile_v2` |
+| `measurements` | tissue definitions, physical territories, fixed-mm signature, landmarks, QC | canonical schema 3.1 |
+| `reporting` | derived one-page PDF | disabled by default; enabled default `spine_profile_v2`; optional `spine_overview_v1` |
 
 No backend silently falls back to another. Changing a backend or a scientific
 threshold changes the scientific configuration digest and `analysis_id`.

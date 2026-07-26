@@ -144,7 +144,6 @@ def _report_case(config, case_id="case-001", *, orientation=None):
             identity=identity,
             landmarks=None,
             settings=config["measurements"],
-            orientation_changed=bool(orientation["orientation_changed"]),
             orientation_provenance=orientation,
         )
     # Keep this synthetic PDF fixture free of unrelated anthropometric-search

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 import numpy as np
@@ -120,15 +120,15 @@ def canonical_tissue_name(name: str) -> str:
     return TISSUE_NAME_ALIASES.get(normalized, normalized)
 
 
-def derive_configured_tissue_masks(
+def iter_configured_tissue_masks(
     image_zyx: np.ndarray,
     compartment_labels_zyx: np.ndarray,
     compartment_label_schema: Mapping[int, str],
     definitions: Mapping[str, Mapping[str, Any]],
     *,
     spacing_xyz: tuple[float, float, float] | None = None,
-) -> dict[str, np.ndarray]:
-    """Apply named downstream definitions to immutable compartment labels.
+) -> Iterator[tuple[str, np.ndarray]]:
+    """Yield named downstream masks without retaining every full volume.
 
     Each definition owns its optional classification preprocessing and
     morphology. Mean-HU measurements are calculated later from ``image_zyx``
@@ -165,7 +165,6 @@ def derive_configured_tissue_masks(
             f"{unknown_labels}."
         )
 
-    output: dict[str, np.ndarray] = {}
     classification_cache: dict[str, np.ndarray] = {}
     for definition_name, definition in definitions.items():
         if not bool(definition["enabled"]):
@@ -184,7 +183,8 @@ def derive_configured_tissue_masks(
                 f"label in the compartment schema; requested {source_names}."
             )
         support = np.isin(labels, source_labels)
-        mask = support.copy()
+        cleanup = definition.get("cleanup")
+        mask = support.copy() if cleanup else support
         hu_range = definition.get("hu_range")
         if hu_range is not None:
             preprocessing = definition.get("preprocessing")
@@ -211,7 +211,6 @@ def derive_configured_tissue_masks(
             classification_image = classification_cache[cache_key]
             mask &= classification_image >= min(hu_range)
             mask &= classification_image <= max(hu_range)
-        cleanup = definition.get("cleanup")
         if cleanup:
             if spacing_xyz is None:
                 raise ValueError(
@@ -224,5 +223,25 @@ def derive_configured_tissue_masks(
                 spacing_xyz,
                 support_mask=support,
             )
-        output[str(definition_name)] = mask
-    return output
+        yield str(definition_name), mask
+
+
+def derive_configured_tissue_masks(
+    image_zyx: np.ndarray,
+    compartment_labels_zyx: np.ndarray,
+    compartment_label_schema: Mapping[int, str],
+    definitions: Mapping[str, Mapping[str, Any]],
+    *,
+    spacing_xyz: tuple[float, float, float] | None = None,
+) -> dict[str, np.ndarray]:
+    """Return all configured masks for callers that need materialized volumes."""
+
+    return dict(
+        iter_configured_tissue_masks(
+            image_zyx,
+            compartment_labels_zyx,
+            compartment_label_schema,
+            definitions,
+            spacing_xyz=spacing_xyz,
+        )
+    )

@@ -14,7 +14,7 @@ from BodyComposition.measurement.physical import slice_geometry_table, validate_
 from BodyComposition.measurement.tissues import (
     DERIVED_RATIO_DEFINITIONS,
     canonical_tissue_name,
-    derive_configured_tissue_masks,
+    iter_configured_tissue_masks,
 )
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 
@@ -56,13 +56,20 @@ def _tissue_measurement_columns(
     pixel_area_cm2: float,
 ) -> dict[str, Any]:
     counts = np.count_nonzero(tissue_mask_zyx, axis=(1, 2)).astype(np.int64)
-    inside_body = np.count_nonzero(
-        tissue_mask_zyx & body_mask_zyx,
+    inside_body = np.sum(
+        body_mask_zyx,
         axis=(1, 2),
-    ).astype(np.int64)
+        dtype=np.int64,
+        where=tissue_mask_zyx,
+    )
     outside_body = counts - inside_body
     area_valid = outside_body == 0
-    hu_sum = np.where(tissue_mask_zyx, image_zyx, 0.0).sum(axis=(1, 2), dtype=float)
+    hu_sum = np.sum(
+        image_zyx,
+        axis=(1, 2),
+        dtype=float,
+        where=tissue_mask_zyx,
+    )
     mean_hu = np.full(counts.size, np.nan, dtype=float)
     nonempty = counts > 0
     mean_hu[nonempty] = hu_sum[nonempty] / counts[nonempty]
@@ -143,20 +150,12 @@ def calculate_canonical_slice_measurements(
     body_surface: BodySurfaceResult,
     identity: MeasurementIdentity,
     *,
-    tissue_backend_id: str,
     compartment_labels_zyx: np.ndarray,
     compartment_label_schema: Mapping[int, str],
-    tissue_preprocessing: Mapping[str, Any] | None = None,
     tissue_definitions: Mapping[str, Mapping[str, Any]] | None = None,
-    orientation_changed: bool = False,
 ) -> pd.DataFrame:
-    """Calculate physical CSA, pooled-HU primitives, and trunk contour per slice.
+    """Calculate physical CSA, pooled-HU primitives, and trunk contour per slice."""
 
-    Backend and preprocessing provenance are accepted for analysis identity and
-    QC, but are intentionally not repeated in every Parquet row.
-    """
-
-    del tissue_backend_id, tissue_preprocessing
     image = validate_array_zyx(image_zyx, geometry, "image_zyx")
     labels = validate_array_zyx(tissue_labels_zyx, geometry, "tissue_labels_zyx")
     if not np.issubdtype(labels.dtype, np.integer):
@@ -194,8 +193,7 @@ def calculate_canonical_slice_measurements(
             f"{unknown_compartments}."
         )
 
-    table = slice_geometry_table(geometry).drop(columns=["original_storage_index"])
-    del orientation_changed
+    table = slice_geometry_table(geometry)
     for column, value in identity.as_columns().items():
         table[column] = value
 
@@ -266,11 +264,14 @@ def calculate_canonical_slice_measurements(
     table["trunk_touching_fov"] = touching
     table["trunk_mask_fragmented"] = fragmented
 
-    tissue_masks: dict[str, np.ndarray] = {}
+    compartment_names: set[str] = set()
+    vat_masks: dict[str, np.ndarray] = {}
     tissue_columns: dict[str, Any] = {}
     for label, name in compartment_schema.items():
         tissue_mask = compartment_labels == label
-        tissue_masks[name] = tissue_mask
+        compartment_names.add(name)
+        if name in {"avat", "tvat", "vat"}:
+            vat_masks[name] = tissue_mask
         tissue_columns.update(_tissue_measurement_columns(
             name=name,
             tissue_mask_zyx=tissue_mask,
@@ -280,11 +281,11 @@ def calculate_canonical_slice_measurements(
             pixel_area_cm2=pixel_area_cm2,
         ))
 
-    if "avat" in tissue_masks and "tvat" in tissue_masks:
-        total_vat_mask = tissue_masks["avat"] | tissue_masks["tvat"]
+    if "avat" in vat_masks and "tvat" in vat_masks:
+        total_vat_mask = vat_masks["avat"] | vat_masks["tvat"]
         tissue_columns["total_vat_source"] = ["avat_plus_tvat"] * len(table)
-    elif "vat" in tissue_masks:
-        total_vat_mask = tissue_masks["vat"]
+    elif "vat" in vat_masks:
+        total_vat_mask = vat_masks["vat"]
         tissue_columns["total_vat_source"] = ["native_vat"] * len(table)
     else:
         total_vat_mask = None
@@ -315,20 +316,23 @@ def calculate_canonical_slice_measurements(
         )
 
     if tissue_definitions:
-        derived_masks = derive_configured_tissue_masks(
+        derived_names = {
+            str(name)
+            for name, definition in tissue_definitions.items()
+            if bool(definition["enabled"])
+        }
+        collisions = sorted({*compartment_names, "total_vat"}.intersection(derived_names))
+        if collisions:
+            raise ValueError(
+                f"Derived tissue definitions collide with native outputs: {collisions}."
+            )
+        for name, tissue_mask in iter_configured_tissue_masks(
             image,
             compartment_labels,
             compartment_schema,
             tissue_definitions,
             spacing_xyz=geometry.spacing_xyz,
-        )
-        reserved_names = {*tissue_masks, "total_vat"}
-        collisions = sorted(reserved_names.intersection(derived_masks))
-        if collisions:
-            raise ValueError(
-                f"Derived tissue definitions collide with native outputs: {collisions}."
-            )
-        for name, tissue_mask in derived_masks.items():
+        ):
             tissue_columns.update(_tissue_measurement_columns(
                 name=name,
                 tissue_mask_zyx=tissue_mask,
@@ -360,10 +364,13 @@ def calculate_canonical_slice_measurements(
         compartment_labels,
         axis=(1, 2),
     ).astype(np.int64)
-    tissue_outside_body = (
-        (compartment_labels != 0) & ~body_surface.body_mask_zyx
+    inside_body_counts = np.sum(
+        body_surface.body_mask_zyx,
+        axis=(1, 2),
+        dtype=np.int64,
+        where=compartment_labels != 0,
     )
-    outside_counts = np.count_nonzero(tissue_outside_body, axis=(1, 2)).astype(np.int64)
+    outside_counts = segmented_counts - inside_body_counts
     total_valid = outside_counts[storage] == 0
     table["total_segmented_tissue_voxel_count"] = segmented_counts[storage]
     table["total_segmented_tissue_area_cm2"] = (
@@ -381,7 +388,7 @@ def calculate_canonical_slice_measurements(
     table["trunk_surface_invalid"] = ~area_valid | ~contour_valid
     table["slice_measurement_valid"] = ~(~total_valid | table["trunk_surface_invalid"])
     table["slice_qc_status"] = np.where(table["slice_measurement_valid"], "pass", "review")
-    return table.copy()
+    return table
 
 
 def annotate_longitudinal_circumference_qc(

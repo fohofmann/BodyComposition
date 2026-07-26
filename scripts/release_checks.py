@@ -16,6 +16,16 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_OUTPUT_NAMES = {
+    "artifact-checksums.json",
+    "clean-install-doctor.json",
+    "coverage.xml",
+    "distribution-audit.json",
+    "release-checks.json",
+    "reproducibility-report.json",
+    "runtime-requirements.txt",
+    "vulnerability-report.json",
+}
 
 
 def _run(command: list[str]) -> None:
@@ -28,6 +38,35 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _clear_stale_outputs(output: Path) -> None:
+    """Remove prior release evidence before starting a new gate."""
+
+    output.mkdir(parents=True, exist_ok=True)
+    candidates = {output / name for name in RELEASE_OUTPUT_NAMES}
+    candidates.update(output.glob("bodycomposition-1.0.0rc1*"))
+    for path in candidates:
+        if path.is_file():
+            path.unlink()
+
+
+def _prepare_release_gate(root: Path, *, allow_dirty: bool) -> None:
+    """Invalidate prior evidence, then enforce committed source when requested."""
+
+    _clear_stale_outputs(root / "dist")
+    (root / "coverage.xml").unlink(missing_ok=True)
+    if allow_dirty:
+        return
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if status.strip():
+        raise SystemExit("release gate requires a clean reviewed source tree")
 
 
 def _source_date_epoch() -> int:
@@ -115,17 +154,7 @@ def main() -> int:
         help="run development checks but record that the release cleanliness gate was skipped",
     )
     args = parser.parse_args()
-    if not args.allow_dirty:
-        status = subprocess.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-        if status.strip():
-            raise SystemExit("release gate requires a clean reviewed source tree")
-
+    _prepare_release_gate(ROOT, allow_dirty=args.allow_dirty)
     source_date_epoch = _source_date_epoch()
 
     _run(["uv", "lock", "--check"])
@@ -143,9 +172,6 @@ def main() -> int:
             "--cov-report=xml",
         ]
     )
-    for stale in (ROOT / "dist").glob("bodycomposition-1.0.0rc1*"):
-        if stale.is_file():
-            stale.unlink()
     built = _build_distributions(ROOT / "dist", epoch=source_date_epoch)
     with tempfile.TemporaryDirectory(prefix="bodycomposition-rebuild-") as temporary:
         rebuilt = _build_distributions(Path(temporary), epoch=source_date_epoch)

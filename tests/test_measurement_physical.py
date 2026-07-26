@@ -88,6 +88,18 @@ def test_xyz_shaped_array_is_rejected_at_the_simpleitk_zyx_boundary():
         validate_array_zyx(np.zeros((4, 3, 2)), geometry, "input")
 
 
+def test_array_validation_rejects_nonfinite_floats_without_scanning_integer_labels():
+    geometry = make_geometry((2, 3, 4))
+    floats = np.zeros((2, 3, 4), dtype=np.float32)
+    floats[0, 0, 0] = np.nan
+
+    with pytest.raises(ValueError, match="non-finite"):
+        validate_array_zyx(floats, geometry, "input")
+
+    labels = np.zeros((2, 3, 4), dtype=np.uint8)
+    assert validate_array_zyx(labels, geometry, "labels") is labels
+
+
 def test_prepared_slice_ids_do_not_claim_an_original_axis_after_orientation_repair():
     shape = (3, 8, 10)
     geometry = make_geometry(shape)
@@ -104,10 +116,8 @@ def test_prepared_slice_ids_do_not_claim_an_original_axis_after_orientation_repa
         {1: "SM"},
         body,
         MeasurementIdentity("case", "run", "analysis"),
-        tissue_backend_id="synthetic",
         compartment_labels_zyx=tissue,
         compartment_label_schema={1: "SM"},
-        orientation_changed=True,
     )
 
     assert "original_storage_index" not in table
@@ -217,7 +227,6 @@ def test_oblique_anisotropic_elliptical_solid_matches_voxel_volume_reference():
         {1: "SM"},
         body,
         MeasurementIdentity("case", "run", "analysis"),
-        tissue_backend_id="synthetic",
         compartment_labels_zyx=labels,
         compartment_label_schema={1: "SM"},
     )
@@ -274,7 +283,6 @@ def test_slice_measurements_are_concise_and_preserve_native_and_total_vat_areas(
         },
         body,
         MeasurementIdentity("case", "run", "analysis"),
-        tissue_backend_id="synthetic",
         compartment_labels_zyx=labels,
         compartment_label_schema={
             1: "SM",
@@ -337,6 +345,17 @@ def test_body_surface_backends_are_explicit_and_never_substitute_each_other():
         flag.code == "deterministic_body_surface_selected"
         for flag in deterministic.qc_flags
     )
+
+    empty = tissue_segmentation_envelope(
+        np.zeros_like(labels),
+        geometry,
+        minimum_component_area_mm2=1,
+        closing_radius_mm=2,
+        smoothing_sigma_mm=1,
+    )
+    assert not empty.body_mask_zyx.any()
+    assert not empty.trunk_mask_zyx.any()
+    assert any(flag.code == "tissue_envelope_empty_input" for flag in empty.qc_flags)
 
 
 def test_exact_range_overlap_weights_area_volume_and_hu_with_variable_thickness():
@@ -480,7 +499,6 @@ def test_fragmented_trunk_is_observed_but_ineligible_for_canonical_summaries():
         {1: "SM"},
         body,
         MeasurementIdentity("case", "run", "analysis"),
-        tissue_backend_id="synthetic",
         compartment_labels_zyx=labels,
         compartment_label_schema={1: "SM"},
     )
@@ -514,7 +532,6 @@ def test_internal_body_surface_gap_and_empty_end_slices_are_explicitly_invalid()
         {1: "SM"},
         body,
         MeasurementIdentity("case", "run", "analysis"),
-        tissue_backend_id="synthetic",
         compartment_labels_zyx=labels,
         compartment_label_schema={1: "SM"},
     ).set_index("slice_id")

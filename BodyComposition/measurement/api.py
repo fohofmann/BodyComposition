@@ -236,7 +236,7 @@ def load_measurement_tables(directory: str | Path) -> dict[str, pd.DataFrame]:
 def signature_measurements(directory: str | Path) -> pd.DataFrame:
     """Load the validated fixed-mm longitudinal signature for one case."""
 
-    return load_measurement_tables(directory)["signature"].copy()
+    return load_measurement_tables(directory)["signature"]
 
 
 def l3_measurements(

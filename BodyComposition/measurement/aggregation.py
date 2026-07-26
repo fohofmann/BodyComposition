@@ -45,11 +45,6 @@ def anatomical_rank(label: str) -> int:
     return 1000
 
 
-def is_thoracic_or_lumbar(label: str) -> bool:
-    normalized = label.upper().replace(" ", "")
-    return len(normalized) >= 2 and normalized[0] in {"T", "L"} and normalized[1:].isdigit()
-
-
 def is_vertebral_territory_label(label: str) -> bool:
     normalized = label.upper().replace(" ", "")
     return normalized == "SACRUM" or (
@@ -439,13 +434,11 @@ def aggregate_physical_range(
     }
     strict_range_valid = physically_complete or allow_partial
 
-    def metric_reason(*, invalid: bool = False, empty: bool = False) -> str:
+    def metric_reason(*, empty: bool = False) -> str:
         if not physically_complete and not allow_partial:
             return str(output["range_missing_reason"] or "invalid_measurement")
         if empty:
             return "empty_tissue"
-        if invalid:
-            return "invalid_measurement"
         return "invalid_measurement"
 
     area_columns = [column for column in slices if column.endswith(AREA_SUFFIX)]
@@ -472,7 +465,7 @@ def aggregate_physical_range(
             volume_cm3 = float(np.sum(values[value_valid] * weights) / 10.0)
         else:
             mean_csa = volume_cm3 = None
-        reason = metric_reason(invalid=observed_length_mm > 0)
+        reason = metric_reason()
         _set_metric(
             output,
             f"{prefix}_mean_csa_cm2",
@@ -519,7 +512,7 @@ def aggregate_physical_range(
             "trunk_mean_circumference_cm",
             value,
             metric_valid,
-            metric_reason(invalid=observed_length_mm > 0),
+            metric_reason(),
             metric_coverage,
         )
 
@@ -568,10 +561,7 @@ def aggregate_physical_range(
             column,
             value,
             metric_valid,
-            metric_reason(
-                invalid=bool(np.any(invalid_nonempty)),
-                empty=denominator == 0,
-            ),
+            metric_reason(empty=denominator == 0),
             metric_coverage,
         )
     _add_aggregate_composition_ratios(output)

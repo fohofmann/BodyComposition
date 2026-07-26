@@ -35,17 +35,9 @@ from BodyComposition.measurement.slices import (
     annotate_longitudinal_circumference_qc,
     calculate_canonical_slice_measurements,
 )
+from BodyComposition.utils.digests import array_sha256
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 from BodyComposition.vertebral.contracts import QCFlag, QCSeverity, VertebralResult
-
-
-def _array_digest(array: np.ndarray) -> str:
-    contiguous = np.ascontiguousarray(array)
-    digest = hashlib.sha256()
-    digest.update(str(contiguous.dtype).encode("ascii"))
-    digest.update(np.asarray(contiguous.shape, dtype=np.int64).tobytes())
-    digest.update(contiguous.tobytes())
-    return digest.hexdigest()
 
 
 def measurement_analysis_id(
@@ -62,12 +54,7 @@ def measurement_analysis_id(
     compartment_label_schema: Mapping[int, str] | None = None,
     orientation_provenance: Mapping[str, Any] | None = None,
 ) -> str:
-    """Return the deterministic measurement-stage identity.
-
-    The release service may supply a broader analysis identity containing the container digest
-    and all stage manifests. Until then, this digest covers every scientific
-    array and setting consumed by the measurement stage.
-    """
+    """Return an identity covering every measurement input and setting."""
 
     if vertebral_result.vertebral_body_labels is None:
         raise ValueError("Vertebral body labels are required for measurement identity.")
@@ -75,14 +62,14 @@ def measurement_analysis_id(
         "schema": f"bodycomposition-measurement-analysis-v{MEASUREMENT_SCHEMA_VERSION}",
         "bodycomposition_version": __version__,
         "geometry_sha256": geometry_digest(body_surface.geometry),
-        "image_sha256": _array_digest(image_zyx),
-        "tissue_sha256": _array_digest(tissue_labels_zyx),
+        "image_sha256": array_sha256(image_zyx),
+        "tissue_sha256": array_sha256(tissue_labels_zyx),
         "compartment_sha256": (
-            _array_digest(compartment_labels_zyx) if compartment_labels_zyx is not None else None
+            array_sha256(compartment_labels_zyx) if compartment_labels_zyx is not None else None
         ),
-        "body_sha256": _array_digest(body_surface.body_mask_zyx),
-        "trunk_sha256": _array_digest(body_surface.trunk_mask_zyx),
-        "vertebral_body_sha256": _array_digest(vertebral_result.vertebral_body_labels),
+        "body_sha256": array_sha256(body_surface.body_mask_zyx),
+        "trunk_sha256": array_sha256(body_surface.trunk_mask_zyx),
+        "vertebral_body_sha256": array_sha256(vertebral_result.vertebral_body_labels),
         "body_surface_backend": body_surface.backend_id,
         "body_surface_provenance": dict(body_surface.provenance),
         "vertebral_backend": vertebral_result.backend_id,
@@ -146,7 +133,6 @@ def build_measurement_bundle(
     identity: MeasurementIdentity,
     landmarks: LandmarkSet | None,
     settings: Mapping[str, Any],
-    orientation_changed: bool = False,
     orientation_provenance: Mapping[str, Any] | None = None,
 ) -> MeasurementBundle:
     """Build all canonical tables from one immutable set of prepared inputs."""
@@ -180,18 +166,11 @@ def build_measurement_bundle(
         tissue_label_schema,
         body_surface,
         identity,
-        tissue_backend_id=tissue_backend_id,
         compartment_labels_zyx=compartment_labels_zyx,
         compartment_label_schema=compartment_label_schema,
-        tissue_preprocessing=tissue_preprocessing,
         tissue_definitions=settings.get("tissue_definitions"),
-        orientation_changed=orientation_changed,
     )
     orientation = dict(orientation_provenance or {})
-    if "orientation_changed" in orientation and bool(orientation["orientation_changed"]) != bool(
-        orientation_changed
-    ):
-        raise ValueError("orientation_changed contradicts the supplied orientation provenance.")
     slices["full_coverage_tolerance"] = full_coverage_tolerance
     circumference_qc = settings["qc"]["circumference_jump"]
     slices = annotate_longitudinal_circumference_qc(
@@ -680,12 +659,12 @@ def build_measurement_bundle(
             },
             "tissue": {
                 "backend_id": tissue_backend_id,
-                "label_sha256": _array_digest(tissue_labels_zyx),
+                "label_sha256": array_sha256(tissue_labels_zyx),
                 "label_schema": {
                     str(label): name for label, name in sorted(tissue_label_schema.items())
                 },
                 "preprocessing": dict(tissue_preprocessing),
-                "compartment_sha256": _array_digest(compartment_labels_zyx),
+                "compartment_sha256": array_sha256(compartment_labels_zyx),
                 "compartment_schema": {
                     str(label): name for label, name in sorted(compartment_label_schema.items())
                 },

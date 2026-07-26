@@ -193,7 +193,7 @@ separately. Canonical tables are:
 Only vertebral-body masks feed downstream measurement and reporting. Full
 vertebra/posterior-element masks are retained only as optional upstream/QC
 artifacts. Manual-review cases appear in `aggregate/review_queue.parquet` and
-in optional PDF warnings and batch review summaries.
+in optional PDF Notes/QC annotations and batch review summaries.
 
 See the [output schema](docs/output-schema.md), [measurement definitions](docs/measurements.md),
 [QC guide](docs/qc-review.md), and [reporting guide](docs/reporting.md).

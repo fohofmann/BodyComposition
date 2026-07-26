@@ -123,7 +123,6 @@ def make_bundle(config, *, empty_vertebrae=False):
         identity=identity,
         landmarks=None,
         settings=config["measurements"],
-        orientation_changed=False,
         orientation_provenance={
             "state": "PASS_METADATA_MATCH",
             "qc_status": "pass",
@@ -717,6 +716,22 @@ def test_measurement_analysis_identity_is_order_stable_and_content_sensitive(bas
         vertebral_result,
         {"beta": 2, "alpha": 1},
     )
+    fortran_ordered = measurement_analysis_id(
+        np.asfortranarray(image),
+        np.asfortranarray(tissues),
+        replace(
+            body_surface,
+            body_mask_zyx=np.asfortranarray(body_surface.body_mask_zyx),
+            trunk_mask_zyx=np.asfortranarray(body_surface.trunk_mask_zyx),
+        ),
+        replace(
+            vertebral_result,
+            vertebral_body_labels=np.asfortranarray(
+                vertebral_result.vertebral_body_labels
+            ),
+        ),
+        {"alpha": 1, "beta": 2},
+    )
     changed_tissues = tissues.copy()
     changed_tissues[0, 0, 0] = 1
     changed = measurement_analysis_id(
@@ -788,6 +803,7 @@ def test_measurement_analysis_identity_is_order_stable_and_content_sensitive(bas
     )
 
     assert first == reordered
+    assert first == fortran_ordered
     assert first.startswith("analysis-")
     assert first != changed
     assert first != changed_provenance

@@ -376,7 +376,6 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             identity=identity,
             landmarks=memory.get("tmp/measurement_landmarks"),
             settings=self.settings,
-            orientation_changed=bool(orientation_result.orientation_changed),
             orientation_provenance=orientation_result.to_dict(),
         )
         memory["analysis_id"] = identity.analysis_id

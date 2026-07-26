@@ -34,6 +34,7 @@ from BodyComposition.orientation.rotations import (
     signed_permutation_matrix,
     sitk_transform_spec,
 )
+from BodyComposition.utils.digests import array_sha256
 from BodyComposition.utils.geometry import ImageGeometry
 
 ORIENTATION_SCHEMA_VERSION = "1.1.0"
@@ -294,12 +295,7 @@ def _geometry_dict(image: sitk.Image) -> dict[str, Any]:
 
 
 def _pixel_digest(image: sitk.Image) -> str:
-    array_zyx = np.ascontiguousarray(sitk.GetArrayViewFromImage(image))
-    digest = hashlib.sha256()
-    digest.update(str(array_zyx.dtype).encode("ascii"))
-    digest.update(np.asarray(array_zyx.shape, dtype=np.int64).tobytes())
-    digest.update(array_zyx.tobytes())
-    return digest.hexdigest()
+    return array_sha256(sitk.GetArrayViewFromImage(image))
 
 
 def _affine_digest(image: sitk.Image) -> str:

@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import tarfile
 import tomllib
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
+import pytest
+
+from BodyComposition.utils.digests import array_sha256
 from scripts.audit_distribution import audit
 from scripts.generate_sbom import generate
-from scripts.release_checks import _normalize_sdist
+from scripts.release_checks import (
+    _clear_stale_outputs,
+    _normalize_sdist,
+    _prepare_release_gate,
+)
 
 
 def _wheel(path: Path, *, include_weights: bool = False) -> Path:
@@ -119,6 +129,49 @@ def test_release_coverage_gate_measures_the_complete_package():
     assert coverage["run"]["source"] == ["BodyComposition"]
     assert "omit" not in coverage["run"]
     assert coverage["report"]["fail_under"] >= 80
+
+
+def test_release_gate_removes_only_known_stale_evidence(tmp_path):
+    stale_receipt = tmp_path / "release-checks.json"
+    stale_wheel = tmp_path / "bodycomposition-1.0.0rc1-py3-none-any.whl"
+    unrelated = tmp_path / "keep-me.txt"
+    for path in (stale_receipt, stale_wheel, unrelated):
+        path.write_text("old\n", encoding="utf-8")
+
+    _clear_stale_outputs(tmp_path)
+
+    assert not stale_receipt.exists()
+    assert not stale_wheel.exists()
+    assert unrelated.read_text(encoding="utf-8") == "old\n"
+
+
+def test_dirty_release_attempt_invalidates_an_older_passing_receipt(tmp_path, monkeypatch):
+    stale_receipt = tmp_path / "dist/release-checks.json"
+    stale_receipt.parent.mkdir()
+    stale_receipt.write_text('{"passed": true}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "scripts.release_checks.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=" M BodyComposition/example.py\n"),
+    )
+
+    with pytest.raises(SystemExit, match="clean reviewed source tree"):
+        _prepare_release_gate(tmp_path, allow_dirty=False)
+
+    assert not stale_receipt.exists()
+
+
+def test_array_digest_matches_c_order_bytes_for_empty_and_fortran_arrays():
+    arrays = (
+        np.empty((0, 2), dtype=np.int16),
+        np.asfortranarray(np.arange(24, dtype=np.float32).reshape(2, 3, 4)),
+    )
+    for array in arrays:
+        contiguous = np.ascontiguousarray(array)
+        expected = hashlib.sha256()
+        expected.update(str(contiguous.dtype).encode("ascii"))
+        expected.update(np.asarray(contiguous.shape, dtype=np.int64).tobytes())
+        expected.update(contiguous.tobytes())
+        assert array_sha256(array) == expected.hexdigest()
 
 
 def test_public_product_surface_does_not_expose_internal_development_stages_labels():

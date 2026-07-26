@@ -15,7 +15,10 @@ from BodyComposition.measurement.contracts import (
     MeasurementIdentity,
 )
 from BodyComposition.measurement.slices import calculate_canonical_slice_measurements
-from BodyComposition.measurement.tissues import derive_configured_tissue_masks
+from BodyComposition.measurement.tissues import (
+    derive_configured_tissue_masks,
+    iter_configured_tissue_masks,
+)
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.utils.masks import fill_small_holes, remove_small_objects
 
@@ -246,7 +249,6 @@ def test_consensus_phenotypes_use_raw_compartments_and_raw_hu(base_config):
         base_config["LBL_TISSUE_COMPARTMENTS"],
         body_surface,
         MeasurementIdentity("case", "run", "analysis"),
-        tissue_backend_id="synthetic",
         compartment_labels_zyx=compartments,
         compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
         tissue_definitions=base_config["measurements"]["tissue_definitions"],
@@ -290,6 +292,17 @@ def test_literature_window_profile_adds_a_named_definition(base_config):
 
     assert masks["vat_total_hu_m190_m30"].sum() == 3
     assert masks["vat_total_hu_m150_m50"].sum() == 1
+    streamed = dict(
+        iter_configured_tissue_masks(
+            image,
+            labels,
+            base_config["LBL_TISSUE_COMPARTMENTS"],
+            optional["measurements"]["tissue_definitions"],
+            spacing_xyz=(1.0, 1.0, 1.0),
+        )
+    )
+    assert streamed.keys() == masks.keys()
+    assert all(np.array_equal(streamed[name], masks[name]) for name in masks)
 
 
 def test_generic_derivation_accepts_validated_anatomical_subcompartments():
