@@ -17,6 +17,7 @@ from BodyComposition.measurement.contours import external_contour_measurement
 from BodyComposition.measurement.contracts import MeasurementIdentity
 from BodyComposition.measurement.landmarks import landmarks_from_totalsegmentator
 from BodyComposition.measurement.physical import (
+    in_plane_superior_span_mm,
     slice_geometry_table,
     validate_array_zyx,
 )
@@ -77,6 +78,8 @@ def test_oblique_slice_geometry_uses_full_affine_and_projected_thickness():
     assert np.diff(table["position_superior_mm"]).tolist() == pytest.approx(
         [4.0 * cosine, 4.0 * cosine]
     )
+    assert in_plane_superior_span_mm(geometry) == pytest.approx(8 * 1.3 * sine)
+    assert in_plane_superior_span_mm(make_geometry((3, 8, 9))) == pytest.approx(0.0)
 
 
 def test_xyz_shaped_array_is_rejected_at_the_simpleitk_zyx_boundary():

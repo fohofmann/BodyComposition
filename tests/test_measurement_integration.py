@@ -160,6 +160,97 @@ def test_complete_bundle_validates_three_native_territory_bins(base_config):
     assert set(TABLE_NAMES) == {"slices", "vertebrae", "summaries", "signature"}
 
 
+def test_oblique_longitudinal_allocation_is_recorded_and_flagged(base_config):
+    axial, image, geometry, tissues, vertebral_result = make_bundle(base_config)
+    assert not any(
+        flag.code == "oblique_longitudinal_allocation_approximate"
+        for flag in axial.qc_flags
+    )
+    assert axial.provenance["measurement"]["longitudinal_allocation"] == {
+        "method": "native_slice_center_v1",
+        "in_plane_superior_span_mm": 0.0,
+        "maximum_unflagged_in_plane_superior_span_mm": 10.0,
+        "review_required": False,
+    }
+
+    angle = np.deg2rad(30.0)
+    cosine = float(np.cos(angle))
+    sine = float(np.sin(angle))
+    oblique_geometry = replace(
+        geometry,
+        direction_lps=(1.0, 0.0, 0.0, 0.0, cosine, -sine, 0.0, sine, cosine),
+    )
+    body_surface = replace(axial.body_surface, geometry=oblique_geometry)
+    oblique_vertebral = replace(vertebral_result, geometry=oblique_geometry)
+    oblique = build_measurement_bundle(
+        image_zyx=image,
+        tissue_labels_zyx=tissues,
+        geometry=oblique_geometry,
+        tissue_label_schema=base_config["LBL_TISSUE"],
+        tissue_backend_id="synthetic",
+        tissue_preprocessing={"hu_denoise": False},
+        compartment_labels_zyx=tissues,
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
+        body_surface=body_surface,
+        vertebral_result=oblique_vertebral,
+        identity=MeasurementIdentity("case-001", "run-001", "analysis-oblique"),
+        landmarks=None,
+        settings=base_config["measurements"],
+    )
+
+    assert any(
+        flag.code == "oblique_longitudinal_allocation_approximate"
+        for flag in oblique.qc_flags
+    )
+    allocation = oblique.provenance["measurement"]["longitudinal_allocation"]
+    assert allocation["in_plane_superior_span_mm"] == pytest.approx(
+        geometry.size_xyz[1] * geometry.spacing_xyz[1] * sine
+    )
+    assert allocation["review_required"]
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        "l3_territory_valid",
+        "l3_territory_complete",
+        "l3_territory_reason",
+        "l3_territory_coverage_fraction",
+        "ct_min_trunk_circumference_t10_l5_position_superior_mm",
+        "ct_min_trunk_circumference_t10_l5_slice_id",
+        "ct_min_trunk_circumference_t10_l5_search_acquisition_coverage_fraction",
+        "ct_min_trunk_circumference_t10_l5_search_anatomically_complete",
+        "ct_min_trunk_circumference_t10_l5_at_search_boundary",
+        "ct_max_pelvic_circumference_position_superior_mm",
+        "ct_max_pelvic_circumference_slice_id",
+        "ct_max_pelvic_circumference_search_acquisition_coverage_fraction",
+        "ct_max_pelvic_circumference_search_anatomically_complete",
+        "ct_max_pelvic_circumference_at_search_boundary",
+        "ct_max_pelvic_search_definition",
+    ],
+)
+def test_summary_contract_rejects_missing_safety_fields(base_config, column):
+    bundle, *_ = make_bundle(base_config)
+
+    with pytest.raises(ValueError, match="summaries is missing columns"):
+        replace(bundle, summaries=bundle.summaries.drop(columns=[column]))
+
+
+def test_summary_contract_rejects_eligibility_that_contradicts_qc(base_config):
+    bundle, *_ = make_bundle(base_config)
+    summaries = bundle.summaries.copy()
+    prefix = "ct_min_trunk_circumference_t10_l5"
+    summaries.loc[0, f"{prefix}_valid"] = True
+    summaries.loc[0, f"{prefix}_eligible"] = True
+    summaries.loc[0, f"{prefix}_search_anatomically_complete"] = True
+    summaries.loc[0, f"{prefix}_search_acquisition_coverage_fraction"] = 1.0
+    summaries.loc[0, f"{prefix}_search_valid_contour_coverage_fraction"] = 1.0
+    summaries.loc[0, f"{prefix}_at_search_boundary"] = True
+
+    with pytest.raises(ValueError, match="eligibility contradicts"):
+        replace(bundle, summaries=summaries)
+
+
 def test_slice_table_is_the_longitudinal_csa_and_hu_feature_source(base_config):
     bundle, _, _, _, _ = make_bundle(base_config)
     slices = bundle.slices
@@ -354,6 +445,8 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
         end_level="L5",
     )
     assert named.iloc[0]["range_valid"]
+    assert not named.iloc[0]["range_eligible"]
+    assert named.iloc[0]["range_eligibility_reason"] == "sequence_gap"
     assert named.iloc[0]["analysis_id"] == bundle.identity.analysis_id
     assert named.iloc[0]["aggregation"] == "physical_range"
     indexed_range = range_measurements(

@@ -53,6 +53,16 @@ def geometry_digest(geometry: ImageGeometry) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def in_plane_superior_span_mm(geometry: ImageGeometry) -> float:
+    """Return the superior-axis span across one complete native slice plane."""
+
+    basis = geometry.basis_lps
+    return float(
+        abs(np.dot(basis[:, 0], SUPERIOR_LPS)) * geometry.size_xyz[0]
+        + abs(np.dot(basis[:, 1], SUPERIOR_LPS)) * geometry.size_xyz[1]
+    )
+
+
 def slice_geometry_table(geometry: ImageGeometry) -> pd.DataFrame:
     """Return one row per prepared array-z slice, ordered inferior to superior."""
 

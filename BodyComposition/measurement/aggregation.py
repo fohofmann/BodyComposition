@@ -47,19 +47,13 @@ def anatomical_rank(label: str) -> int:
 
 def is_thoracic_or_lumbar(label: str) -> bool:
     normalized = label.upper().replace(" ", "")
-    return (
-        len(normalized) >= 2
-        and normalized[0] in {"T", "L"}
-        and normalized[1:].isdigit()
-    )
+    return len(normalized) >= 2 and normalized[0] in {"T", "L"} and normalized[1:].isdigit()
 
 
 def is_vertebral_territory_label(label: str) -> bool:
     normalized = label.upper().replace(" ", "")
     return normalized == "SACRUM" or (
-        len(normalized) >= 2
-        and normalized[0] in {"C", "T", "L"}
-        and normalized[1:].isdigit()
+        len(normalized) >= 2 and normalized[0] in {"C", "T", "L"} and normalized[1:].isdigit()
     )
 
 
@@ -106,9 +100,7 @@ def derive_vertebral_extents(
             raise ValueError(
                 f"Vertebral schema contains duplicate anatomical label {anatomical_label!r}."
             )
-        component = clean_largest_component(
-            result.vertebral_body_labels == native_label
-        )
+        component = clean_largest_component(result.vertebral_body_labels == native_label)
         retained_enough = component.retained_voxel_count >= minimum_component_voxels
         fragmentation_acceptable = component.removed_fraction <= maximum_removed_fraction
         if retained_enough:
@@ -181,9 +173,7 @@ def derive_vertebral_territories(
         ),
         key=lambda extent: -float(extent.centroid_superior_mm),
     )
-    index_by_level = {
-        extent.anatomical_label: index for index, extent in enumerate(ordered)
-    }
+    index_by_level = {extent.anatomical_label: index for index, extent in enumerate(ordered)}
     territories: dict[str, VertebralTerritory] = {}
     for extent in supported:
         index = index_by_level.get(extent.anatomical_label)
@@ -203,14 +193,12 @@ def derive_vertebral_territories(
         cranial = ordered[index - 1] if index > 0 else None
         caudal = ordered[index + 1] if index + 1 < len(ordered) else None
         superior_mm = (
-            (float(cranial.centroid_superior_mm) + float(extent.centroid_superior_mm))
-            / 2.0
+            (float(cranial.centroid_superior_mm) + float(extent.centroid_superior_mm)) / 2.0
             if cranial is not None
             else extent.superior_mm
         )
         inferior_mm = (
-            (float(extent.centroid_superior_mm) + float(caudal.centroid_superior_mm))
-            / 2.0
+            (float(extent.centroid_superior_mm) + float(caudal.centroid_superior_mm)) / 2.0
             if caudal is not None
             else extent.inferior_mm
         )
@@ -291,16 +279,13 @@ def annotate_slice_anatomy(
             statuses.append("assigned_sequence_gap_review")
         else:
             statuses.append("assigned")
-        relative_from_superior = (
-            float(territory.superior_mm) - position
-        ) / float(territory.height_mm)
+        relative_from_superior = (float(territory.superior_mm) - position) / float(
+            territory.height_mm
+        )
         bins.append(
             int(
                 np.clip(
-                    np.floor(
-                        relative_from_superior * BINS_PER_VERTEBRAL_TERRITORY
-                    )
-                    + 1,
+                    np.floor(relative_from_superior * BINS_PER_VERTEBRAL_TERRITORY) + 1,
                     1,
                     BINS_PER_VERTEBRAL_TERRITORY,
                 )
@@ -349,30 +334,27 @@ def _add_aggregate_composition_ratios(output: dict[str, Any]) -> None:
         if any(key not in output for key in value_keys):
             continue
         components_valid = all(
-            bool(output.get(f"{prefix}_volume_cm3_valid", False))
-            for prefix in required
+            bool(output.get(f"{prefix}_volume_cm3_valid", False)) for prefix in required
         )
         numerator_value = output[f"{numerator}_volume_cm3"]
-        denominator_values = [
-            output[f"{prefix}_volume_cm3"] for prefix in denominator
-        ]
+        denominator_values = [output[f"{prefix}_volume_cm3"] for prefix in denominator]
         finite = bool(
-            np.isfinite(numerator_value)
-            and all(np.isfinite(value) for value in denominator_values)
+            np.isfinite(numerator_value) and all(np.isfinite(value) for value in denominator_values)
         )
-        denominator_value = (
-            float(np.sum(denominator_values)) if finite else np.nan
-        )
+        denominator_value = float(np.sum(denominator_values)) if finite else np.nan
         valid = bool(components_valid and finite and denominator_value > 0)
         value = float(numerator_value / denominator_value) if valid else None
         coverage = min(
-            float(output.get(f"{prefix}_volume_cm3_coverage_fraction", 0.0))
-            for prefix in required
+            float(output.get(f"{prefix}_volume_cm3_coverage_fraction", 0.0)) for prefix in required
         )
-        reason = None if valid else (
-            "zero_denominator"
-            if components_valid and finite and denominator_value <= 0
-            else "invalid_measurement"
+        reason = (
+            None
+            if valid
+            else (
+                "zero_denominator"
+                if components_valid and finite and denominator_value <= 0
+                else "invalid_measurement"
+            )
         )
         _set_metric(output, name, value, valid, reason, coverage)
 
@@ -417,9 +399,9 @@ def aggregate_physical_range(
         superior_mm,
     )
     contributing = overlap_superior_mm > 0
-    normal_overlap_mm = overlap_superior_mm * slices[
-        "normal_mm_per_superior_mm"
-    ].to_numpy(dtype=float)
+    normal_overlap_mm = overlap_superior_mm * slices["normal_mm_per_superior_mm"].to_numpy(
+        dtype=float
+    )
     target_length_mm = superior_mm - inferior_mm
     normal_scale = slices["normal_mm_per_superior_mm"].to_numpy(dtype=float)
     if not np.allclose(normal_scale, normal_scale[0], rtol=0.0, atol=1e-9):
@@ -440,15 +422,11 @@ def aggregate_physical_range(
         "target_length_mm": float(target_length_mm),
         "observed_length_mm": float(observed_length_mm),
         "target_integration_length_mm": float(target_length_mm * normal_scale[0]),
-        "observed_integration_length_mm": float(
-            observed_length_mm * normal_scale[0]
-        ),
+        "observed_integration_length_mm": float(observed_length_mm * normal_scale[0]),
         "coverage_fraction": float(coverage),
         "full_coverage_tolerance": float(full_coverage_tolerance),
         "allow_partial": bool(allow_partial),
-        "range_valid": bool(
-            physically_complete or (allow_partial and observed_length_mm > 0)
-        ),
+        "range_valid": bool(physically_complete or (allow_partial and observed_length_mm > 0)),
         "range_missing_reason": (
             None
             if physically_complete
@@ -456,8 +434,7 @@ def aggregate_physical_range(
         ),
         "contributing_slice_count": int(np.count_nonzero(contributing)),
         "contributing_slice_ids": [
-            int(value)
-            for value in slices.loc[contributing, "slice_id"].to_numpy(dtype=int)
+            int(value) for value in slices.loc[contributing, "slice_id"].to_numpy(dtype=int)
         ],
     }
     strict_range_valid = physically_complete or allow_partial
@@ -476,9 +453,7 @@ def aggregate_physical_range(
         prefix = column.removesuffix(AREA_SUFFIX)
         values = pd.to_numeric(slices[column], errors="coerce").to_numpy(dtype=float)
         value_valid = (
-            contributing
-            & np.isfinite(values)
-            & _validity_column(slices, f"{prefix}_area_valid")
+            contributing & np.isfinite(values) & _validity_column(slices, f"{prefix}_area_valid")
         )
         metric_coverage = _metric_coverage(
             slices,
@@ -521,9 +496,7 @@ def aggregate_physical_range(
             errors="coerce",
         ).to_numpy(dtype=float)
         value_valid = (
-            contributing
-            & np.isfinite(values)
-            & _validity_column(slices, "trunk_contour_valid")
+            contributing & np.isfinite(values) & _validity_column(slices, "trunk_contour_valid")
         )
         metric_coverage = _metric_coverage(
             slices,
@@ -550,9 +523,7 @@ def aggregate_physical_range(
             metric_coverage,
         )
 
-    slice_thickness_normal_mm = slices["slice_thickness_normal_mm"].to_numpy(
-        dtype=float
-    )
+    slice_thickness_normal_mm = slices["slice_thickness_normal_mm"].to_numpy(dtype=float)
     overlap_fraction = np.divide(
         normal_overlap_mm,
         slice_thickness_normal_mm,
@@ -565,9 +536,7 @@ def aggregate_physical_range(
         if voxel_column not in slices:
             continue
         values = pd.to_numeric(slices[column], errors="coerce").to_numpy(dtype=float)
-        counts = pd.to_numeric(slices[voxel_column], errors="coerce").to_numpy(
-            dtype=float
-        )
+        counts = pd.to_numeric(slices[voxel_column], errors="coerce").to_numpy(dtype=float)
         value_valid = (
             contributing
             & np.isfinite(values)
@@ -575,9 +544,7 @@ def aggregate_physical_range(
             & (counts > 0)
             & _validity_column(slices, f"{prefix}_hu_valid")
         )
-        invalid_nonempty = contributing & (
-            ~np.isfinite(counts) | ((counts > 0) & ~value_valid)
-        )
+        invalid_nonempty = contributing & (~np.isfinite(counts) | ((counts > 0) & ~value_valid))
         weights = counts * overlap_fraction
         denominator = float(np.sum(weights[value_valid]))
         metric_coverage = _metric_coverage(
@@ -672,9 +639,7 @@ def empty_physical_range_aggregate(
         {
             "range_inferior_mm": float(inferior_mm) if has_bounds else np.nan,
             "range_superior_mm": float(superior_mm) if has_bounds else np.nan,
-            "target_length_mm": (
-                float(superior_mm - inferior_mm) if has_bounds else np.nan
-            ),
+            "target_length_mm": (float(superior_mm - inferior_mm) if has_bounds else np.nan),
             "observed_length_mm": 0.0 if has_bounds else np.nan,
             "target_integration_length_mm": (
                 float(superior_mm - inferior_mm)
@@ -708,6 +673,12 @@ def aggregate_named_range(
     full_coverage_tolerance: float = DEFAULT_FULL_COVERAGE_TOLERANCE,
 ) -> dict[str, Any]:
     anchors = [territories.get(start_level), territories.get(end_level)]
+    has_bounds = all(
+        anchor is not None
+        and anchor.inferior_mm is not None
+        and anchor.superior_mm is not None
+        for anchor in anchors
+    )
     valid_anchors = all(
         anchor is not None
         and anchor.inferior_mm is not None
@@ -722,6 +693,7 @@ def aggregate_named_range(
             allow_partial=allow_partial,
             full_coverage_tolerance=full_coverage_tolerance,
         )
+        anatomical_reason = "missing_anchor"
     else:
         inferior_mm = min(float(anchor.inferior_mm) for anchor in anchors)
         superior_mm = max(float(anchor.superior_mm) for anchor in anchors)
@@ -732,11 +704,32 @@ def aggregate_named_range(
             allow_partial=allow_partial,
             full_coverage_tolerance=full_coverage_tolerance,
         )
+        incomplete_anchor = next(
+            (
+                anchor.missing_reason or "missing_anchor"
+                for anchor in anchors
+                if anchor is not None and not anchor.complete
+            ),
+            None,
+        )
+        if incomplete_anchor is not None:
+            anatomical_reason = incomplete_anchor
+        elif _interval_has_sequence_gap(territories, inferior_mm, superior_mm):
+            anatomical_reason = "sequence_gap"
+        else:
+            anatomical_reason = None
     output.update(
         {
             "range_name": f"{start_level}_{end_level}",
             "start_level": start_level,
             "end_level": end_level,
+            "range_anatomically_complete": bool(
+                has_bounds and anatomical_reason is None
+            ),
+            "range_eligible": bool(
+                output.get("range_valid", False) and anatomical_reason is None
+            ),
+            "range_eligibility_reason": anatomical_reason,
         }
     )
     return output
@@ -766,9 +759,7 @@ def build_vertebra_table(
     )
     for territory in ordered:
         extent = extents[territory.anatomical_label]
-        territory_review = (
-            territory.sequence_gap_cranial or territory.sequence_gap_caudal
-        )
+        territory_review = territory.sequence_gap_cranial or territory.sequence_gap_caudal
         territory_reason = (
             territory.missing_reason
             if not territory.complete
@@ -783,9 +774,7 @@ def build_vertebra_table(
         for bin_index in range(1, BINS_PER_VERTEBRAL_TERRITORY + 1):
             base: dict[str, Any] = {
                 **identity.as_columns(),
-                "vertebral_territory_schema_version": (
-                    VERTEBRAL_TERRITORY_SCHEMA_VERSION
-                ),
+                "vertebral_territory_schema_version": (VERTEBRAL_TERRITORY_SCHEMA_VERSION),
                 "native_label": territory.native_label,
                 "vertebral_level": territory.anatomical_label,
                 "vertebral_extent_valid": territory.extent_valid,
@@ -827,23 +816,15 @@ def build_vertebra_table(
                 "aggregation": "vertebral_territory_third_mean",
             }
             if territory_height is not None and bin_height is not None:
-                bin_superior = float(
-                    territory.superior_mm - (bin_index - 1) * bin_height
-                )
-                bin_inferior = float(
-                    territory.superior_mm - bin_index * bin_height
-                )
+                bin_superior = float(territory.superior_mm - (bin_index - 1) * bin_height)
+                bin_inferior = float(territory.superior_mm - bin_index * bin_height)
                 aggregate = aggregate_physical_range(
                     slices,
                     bin_inferior,
                     bin_superior,
+                    allow_partial=not territory.complete,
                     full_coverage_tolerance=full_coverage_tolerance,
                 )
-                if not territory.complete:
-                    aggregate = _null_aggregate_values(
-                        aggregate,
-                        territory.missing_reason or "invalid_measurement",
-                    )
                 base.update(
                     {
                         "bin_inferior_mm": bin_inferior,
@@ -868,15 +849,13 @@ def build_vertebra_table(
                 "target_integration_length_mm",
                 np.nan,
             )
-            base["bin_valid"] = bool(
-                territory.complete and aggregate.get("range_valid", False)
-            )
+            base["bin_valid"] = bool(aggregate.get("range_valid", False))
             base["bin_missing_reason"] = (
                 None
                 if base["bin_valid"]
                 else (
-                    territory.missing_reason
-                    or aggregate.get("range_missing_reason")
+                    aggregate.get("range_missing_reason")
+                    or territory.missing_reason
                     or "invalid_measurement"
                 )
             )
@@ -962,10 +941,27 @@ def _nearest_level(
         return None
     return min(
         candidates,
-        key=lambda territory: abs(
-            position_superior_mm - float(territory.centroid_superior_mm)
-        ),
+        key=lambda territory: abs(position_superior_mm - float(territory.centroid_superior_mm)),
     ).anatomical_label
+
+
+def _interval_has_sequence_gap(
+    territories: Mapping[str, VertebralTerritory],
+    inferior_mm: float,
+    superior_mm: float,
+) -> bool:
+    """Return whether a detected enumeration gap lies inside an anatomical range."""
+
+    for territory in territories.values():
+        if territory.inferior_mm is None or territory.superior_mm is None:
+            continue
+        territory_inferior = float(territory.inferior_mm)
+        territory_superior = float(territory.superior_mm)
+        if territory_superior <= inferior_mm or territory_inferior >= superior_mm:
+            continue
+        if territory.sequence_gap_cranial or territory.sequence_gap_caudal:
+            return True
+    return False
 
 
 def _extremum(
@@ -975,6 +971,7 @@ def _extremum(
     *,
     kind: str,
     full_coverage_tolerance: float,
+    anatomical_eligibility_reason: str | None = None,
 ) -> dict[str, Any]:
     if kind not in {"minimum", "maximum"}:
         raise ValueError("Extremum kind must be minimum or maximum.")
@@ -985,13 +982,12 @@ def _extremum(
         superior_mm,
     )
     contributing = overlap > 0
-    contour_valid = (
-        slices["trunk_contour_valid"].fillna(False).to_numpy(dtype=bool)
-        & pd.to_numeric(
-            slices["trunk_circumference_cm"],
-            errors="coerce",
-        ).notna().to_numpy(dtype=bool)
-    )
+    contour_valid = slices["trunk_contour_valid"].fillna(False).to_numpy(
+        dtype=bool
+    ) & pd.to_numeric(
+        slices["trunk_circumference_cm"],
+        errors="coerce",
+    ).notna().to_numpy(dtype=bool)
     valid_contributing = contributing & contour_valid
     acquisition_coverage = _metric_coverage(
         slices,
@@ -1013,15 +1009,16 @@ def _extremum(
         "search_valid_contour_coverage_fraction": float(valid_coverage),
         "search_slice_count": int(np.count_nonzero(contributing)),
         "search_valid_slice_count": int(np.count_nonzero(valid_contributing)),
+        "search_anatomically_complete": anatomical_eligibility_reason is None,
     }
-    if acquisition_coverage < full_coverage_tolerance:
+    if acquisition_coverage <= 0:
         return {
             **common,
             "valid": False,
             "eligible": False,
-            "reason": "partial_fov" if acquisition_coverage > 0 else "outside_fov",
+            "reason": "outside_fov",
         }
-    if valid_coverage < full_coverage_tolerance:
+    if not np.any(valid_contributing):
         return {
             **common,
             "valid": False,
@@ -1029,22 +1026,43 @@ def _extremum(
             "reason": "invalid_measurement",
         }
     candidates = slices.loc[valid_contributing]
+    positions = candidates["position_superior_mm"].to_numpy(dtype=float)
+    values = candidates["trunk_circumference_cm"].to_numpy(dtype=float)
+    extreme = float(np.min(values) if kind == "minimum" else np.max(values))
+    tied = candidates.loc[np.isclose(values, extreme, rtol=1e-9, atol=1e-9)].copy()
+    tied_positions = tied["position_superior_mm"].to_numpy(dtype=float)
+    tied["_at_candidate_boundary"] = np.isclose(
+        tied_positions,
+        positions.min(),
+    ) | np.isclose(tied_positions, positions.max())
+    interior = tied.loc[~tied["_at_candidate_boundary"]]
+    selectable = interior if not interior.empty else tied
+    search_midpoint = (inferior_mm + superior_mm) / 2.0
     index = (
-        candidates["trunk_circumference_cm"].idxmin()
-        if kind == "minimum"
-        else candidates["trunk_circumference_cm"].idxmax()
+        selectable["position_superior_mm"].sub(search_midpoint).abs().sort_values(
+            kind="stable"
+        ).index[0]
     )
     selected = slices.loc[index]
-    positions = candidates["position_superior_mm"].to_numpy(dtype=float)
     boundary = bool(
         np.isclose(selected["position_superior_mm"], positions.min())
         or np.isclose(selected["position_superior_mm"], positions.max())
     )
+    if anatomical_eligibility_reason is not None:
+        reason = anatomical_eligibility_reason
+    elif acquisition_coverage < full_coverage_tolerance:
+        reason = "partial_fov"
+    elif valid_coverage < full_coverage_tolerance:
+        reason = "partial_contour_coverage"
+    elif boundary:
+        reason = "boundary_extremum"
+    else:
+        reason = None
     return {
         **common,
         "valid": True,
-        "eligible": not boundary,
-        "reason": "boundary_extremum" if boundary else None,
+        "eligible": reason is None,
+        "reason": reason,
         "boundary": boundary,
         "value_cm": float(selected["trunk_circumference_cm"]),
         "position_superior_mm": float(selected["position_superior_mm"]),
@@ -1092,37 +1110,68 @@ def build_case_summaries(
         row[f"l3_200mm_{key}"] = value
 
     l3_territory = territories.get("L3")
-    if l3_territory is not None and l3_territory.complete:
+    if (
+        l3_territory is not None
+        and l3_territory.inferior_mm is not None
+        and l3_territory.superior_mm is not None
+    ):
         l3_summary = aggregate_physical_range(
             slices,
             float(l3_territory.inferior_mm),
             float(l3_territory.superior_mm),
+            allow_partial=not l3_territory.complete,
             full_coverage_tolerance=full_coverage_tolerance,
         )
     else:
         l3_summary = empty_physical_range_aggregate(
             slices,
-            reason=(
-                l3_territory.missing_reason
-                if l3_territory is not None
-                else "missing_anchor"
-            ),
+            reason=(l3_territory.missing_reason if l3_territory is not None else "missing_anchor"),
             full_coverage_tolerance=full_coverage_tolerance,
         )
     row["l3_territory_valid"] = bool(l3_summary["range_valid"])
-    row["l3_territory_reason"] = l3_summary["range_missing_reason"]
+    row["l3_territory_complete"] = bool(l3_territory is not None and l3_territory.complete)
+    row["l3_territory_reason"] = (
+        l3_territory.missing_reason
+        if l3_territory is not None
+        and not l3_territory.complete
+        and bool(l3_summary["range_valid"])
+        else l3_summary["range_missing_reason"]
+    )
     for key, value in l3_summary.items():
         row[f"l3_territory_{key}"] = value
 
     t10 = territories.get("T10")
     l5 = territories.get("L5")
-    if t10 is not None and l5 is not None and t10.complete and l5.complete:
+    waist_has_bounds = all(
+        territory is not None
+        and territory.inferior_mm is not None
+        and territory.superior_mm is not None
+        for territory in (t10, l5)
+    )
+    if waist_has_bounds:
+        assert t10 is not None and t10.superior_mm is not None
+        assert l5 is not None and l5.inferior_mm is not None
+        waist_anatomical_reason = next(
+            (
+                territory.missing_reason or "missing_anchor"
+                for territory in (t10, l5)
+                if territory is not None and not territory.complete
+            ),
+            None,
+        )
+        if waist_anatomical_reason is None and _interval_has_sequence_gap(
+            territories,
+            float(l5.inferior_mm),
+            float(t10.superior_mm),
+        ):
+            waist_anatomical_reason = "sequence_gap"
         waist = _extremum(
             slices,
             float(l5.inferior_mm),
             float(t10.superior_mm),
             kind="minimum",
             full_coverage_tolerance=full_coverage_tolerance,
+            anatomical_eligibility_reason=waist_anatomical_reason,
         )
     else:
         waist = {"valid": False, "reason": "missing_anchor", "eligible": False}
@@ -1142,6 +1191,7 @@ def build_case_summaries(
         "search_valid_contour_coverage_fraction",
         "search_slice_count",
         "search_valid_slice_count",
+        "search_anatomically_complete",
     ):
         row[f"{prefix}_{key}"] = waist.get(
             key,
@@ -1181,19 +1231,13 @@ def build_case_summaries(
                 else "invalid_measurement"
             )
         else:
-            selected_index = (
-                valid_slices["position_superior_mm"] - target
-            ).abs().idxmin()
+            selected_index = (valid_slices["position_superior_mm"] - target).abs().idxmin()
             selected = slices.loc[selected_index]
             midwaist_valid = True
             midwaist_reason = None
-            row["ct_midwaist_circumference_cm"] = float(
-                selected["trunk_circumference_cm"]
-            )
+            row["ct_midwaist_circumference_cm"] = float(selected["trunk_circumference_cm"])
             row["ct_midwaist_position_superior_mm"] = target
-            row["ct_midwaist_slice_position_superior_mm"] = float(
-                selected["position_superior_mm"]
-            )
+            row["ct_midwaist_slice_position_superior_mm"] = float(selected["position_superior_mm"])
             row["ct_midwaist_slice_plane_distance_mm"] = abs(
                 float(selected["position_superior_mm"]) - target
             )
@@ -1208,9 +1252,7 @@ def build_case_summaries(
                 landmarks.iliac_crest_superior.reason,
             }
             midwaist_reason = (
-                "uncertain_landmark"
-                if "uncertain_landmark" in reasons
-                else "missing_landmark"
+                "uncertain_landmark" if "uncertain_landmark" in reasons else "missing_landmark"
             )
     if not midwaist_valid:
         row["ct_midwaist_circumference_cm"] = np.nan
@@ -1243,24 +1285,30 @@ def build_case_summaries(
             landmark.reason if landmark is not None else "missing_landmark"
         )
     row["ct_midwaist_lowest_rib_uncertainty_mm"] = (
-        landmarks.lowest_rib_inferior.uncertainty_mm
-        if landmarks is not None
-        else np.nan
+        landmarks.lowest_rib_inferior.uncertainty_mm if landmarks is not None else np.nan
     )
     row["ct_midwaist_iliac_crest_uncertainty_mm"] = (
-        landmarks.iliac_crest_superior.uncertainty_mm
-        if landmarks is not None
-        else np.nan
+        landmarks.iliac_crest_superior.uncertainty_mm if landmarks is not None else np.nan
     )
 
     sacrum = territories.get("SACRUM")
-    if sacrum is not None and sacrum.complete:
+    if sacrum is not None and sacrum.inferior_mm is not None and sacrum.superior_mm is not None:
+        pelvic_anatomical_reason = (
+            None if sacrum.complete else (sacrum.missing_reason or "missing_anchor")
+        )
+        if pelvic_anatomical_reason is None and _interval_has_sequence_gap(
+            territories,
+            float(sacrum.inferior_mm),
+            float(sacrum.superior_mm),
+        ):
+            pelvic_anatomical_reason = "sequence_gap"
         pelvic = _extremum(
             slices,
             float(sacrum.inferior_mm),
             float(sacrum.superior_mm),
             kind="maximum",
             full_coverage_tolerance=full_coverage_tolerance,
+            anatomical_eligibility_reason=pelvic_anatomical_reason,
         )
     else:
         pelvic = {"valid": False, "reason": "missing_anchor", "eligible": False}
@@ -1280,6 +1328,7 @@ def build_case_summaries(
         "search_valid_contour_coverage_fraction",
         "search_slice_count",
         "search_valid_slice_count",
+        "search_anatomically_complete",
     ):
         row[f"{prefix}_{key}"] = pelvic.get(
             key,
@@ -1287,37 +1336,49 @@ def build_case_summaries(
         )
     row["ct_max_pelvic_search_definition"] = "sacral_territory_v1"
 
-    min_ratio_valid = bool(waist.get("eligible", False) and pelvic.get("eligible", False))
-    mid_ratio_valid = bool(midwaist_valid and pelvic.get("eligible", False))
-    if min_ratio_valid:
-        min_ratio_reason = None
-    elif not waist.get("valid", False):
+    pelvic_value = float(pelvic.get("value_cm", np.nan))
+    pelvic_denominator_valid = bool(
+        pelvic.get("valid", False) and np.isfinite(pelvic_value) and pelvic_value > 0
+    )
+    min_ratio_valid = bool(waist.get("valid", False) and pelvic_denominator_valid)
+    min_ratio_eligible = bool(
+        min_ratio_valid and waist.get("eligible", False) and pelvic.get("eligible", False)
+    )
+    mid_ratio_valid = bool(midwaist_valid and pelvic_denominator_valid)
+    mid_ratio_eligible = bool(mid_ratio_valid and pelvic.get("eligible", False))
+    if not waist.get("valid", False):
         min_ratio_reason = waist.get("reason") or "invalid_measurement"
-    elif not waist.get("eligible", False):
-        min_ratio_reason = waist.get("reason") or "boundary_extremum"
     elif not pelvic.get("valid", False):
         min_ratio_reason = pelvic.get("reason") or "invalid_measurement"
+    elif not pelvic_denominator_valid:
+        min_ratio_reason = "zero_denominator"
+    elif not waist.get("eligible", False):
+        min_ratio_reason = waist.get("reason") or "invalid_measurement"
+    elif not pelvic.get("eligible", False):
+        min_ratio_reason = pelvic.get("reason") or "invalid_measurement"
     else:
-        min_ratio_reason = pelvic.get("reason") or "boundary_extremum"
-    if mid_ratio_valid:
-        mid_ratio_reason = None
-    elif not midwaist_valid:
+        min_ratio_reason = None
+    if not midwaist_valid:
         mid_ratio_reason = midwaist_reason or "invalid_measurement"
     elif not pelvic.get("valid", False):
         mid_ratio_reason = pelvic.get("reason") or "invalid_measurement"
+    elif not pelvic_denominator_valid:
+        mid_ratio_reason = "zero_denominator"
+    elif not pelvic.get("eligible", False):
+        mid_ratio_reason = pelvic.get("reason") or "invalid_measurement"
     else:
-        mid_ratio_reason = pelvic.get("reason") or "boundary_extremum"
+        mid_ratio_reason = None
     row["ct_min_waist_to_pelvic_ratio"] = (
-        waist["value_cm"] / pelvic["value_cm"] if min_ratio_valid else np.nan
+        waist["value_cm"] / pelvic_value if min_ratio_valid else np.nan
     )
     row["ct_min_waist_to_pelvic_ratio_valid"] = min_ratio_valid
+    row["ct_min_waist_to_pelvic_ratio_eligible"] = min_ratio_eligible
     row["ct_min_waist_to_pelvic_ratio_reason"] = min_ratio_reason
     row["ct_midwaist_to_pelvic_ratio"] = (
-        row["ct_midwaist_circumference_cm"] / pelvic["value_cm"]
-        if mid_ratio_valid
-        else np.nan
+        row["ct_midwaist_circumference_cm"] / pelvic_value if mid_ratio_valid else np.nan
     )
     row["ct_midwaist_to_pelvic_ratio_valid"] = mid_ratio_valid
+    row["ct_midwaist_to_pelvic_ratio_eligible"] = mid_ratio_eligible
     row["ct_midwaist_to_pelvic_ratio_reason"] = mid_ratio_reason
     return pd.DataFrame([row])
 
@@ -1333,9 +1394,9 @@ def _centroid_slice_plane_distances_mm(
             "slice_center_lps_z_mm",
         ]
     ].to_numpy(dtype=float)
-    normals = slices[
-        ["slice_normal_lps_x", "slice_normal_lps_y", "slice_normal_lps_z"]
-    ].to_numpy(dtype=float)
+    normals = slices[["slice_normal_lps_x", "slice_normal_lps_y", "slice_normal_lps_z"]].to_numpy(
+        dtype=float
+    )
     centroid = np.asarray(centroid_lps_xyz, dtype=float)
     return np.abs(np.einsum("ij,ij->i", centroid - centers, normals))
 
@@ -1369,7 +1430,13 @@ def select_l3_view(
             ]
         )
     first = l3.iloc[0]
-    if not bool(first["territory_complete"]):
+    territory_reason = (
+        str(first["territory_reason"]) if pd.notna(first["territory_reason"]) else None
+    )
+    has_territory_bounds = bool(
+        pd.notna(first["territory_inferior_mm"]) and pd.notna(first["territory_superior_mm"])
+    )
+    if aggregation == "territory_mean" and not has_territory_bounds:
         return pd.DataFrame(
             [
                 {
@@ -1377,7 +1444,8 @@ def select_l3_view(
                     "aggregation": aggregation,
                     "vertebral_level": "L3",
                     "valid": False,
-                    "reason": first["territory_reason"] or "invalid_extent",
+                    "reason": territory_reason or "invalid_extent",
+                    "territory_complete": bool(first["territory_complete"]),
                 }
             ]
         )
@@ -1386,6 +1454,7 @@ def select_l3_view(
             slices,
             float(first["territory_inferior_mm"]),
             float(first["territory_superior_mm"]),
+            allow_partial=not bool(first["territory_complete"]),
             full_coverage_tolerance=full_coverage_tolerance,
         )
         return pd.DataFrame(
@@ -1395,8 +1464,27 @@ def select_l3_view(
                     "vertebral_level": "L3",
                     "aggregation": "territory_mean",
                     "valid": bool(aggregate["range_valid"]),
-                    "reason": aggregate["range_missing_reason"],
+                    "reason": (
+                        territory_reason
+                        if not bool(first["territory_complete"]) and bool(aggregate["range_valid"])
+                        else aggregate["range_missing_reason"]
+                    ),
+                    "territory_complete": bool(first["territory_complete"]),
                     **aggregate,
+                }
+            ]
+        )
+    centroid_columns = ("centroid_lps_x_mm", "centroid_lps_y_mm", "centroid_lps_z_mm")
+    if not all(pd.notna(first[column]) for column in centroid_columns):
+        return pd.DataFrame(
+            [
+                {
+                    **identity,
+                    "aggregation": "slice",
+                    "vertebral_level": "L3",
+                    "valid": False,
+                    "reason": territory_reason or "invalid_extent",
+                    "territory_complete": bool(first["territory_complete"]),
                 }
             ]
         )

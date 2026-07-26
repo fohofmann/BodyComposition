@@ -9,8 +9,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from BodyComposition.measurement.aggregation import (
-    aggregate_physical_range,
-    empty_physical_range_aggregate,
+    aggregate_named_range,
     select_l3_view,
 )
 from BodyComposition.measurement.contracts import (
@@ -20,6 +19,7 @@ from BodyComposition.measurement.contracts import (
     SLICE_REQUIRED_COLUMNS,
     SUMMARY_REQUIRED_COLUMNS,
     VERTEBRA_REQUIRED_COLUMNS,
+    VertebralTerritory,
     canonical_arrow_schema,
     validate_signature_contract,
 )
@@ -255,6 +255,56 @@ def l3_measurements(
     return _add_l3_height_index(selected, height_m)
 
 
+def _territories_from_table(table: pd.DataFrame) -> dict[str, VertebralTerritory]:
+    territories: dict[str, VertebralTerritory] = {}
+    for level, group in table.groupby("vertebral_level", sort=False):
+        row = group.iloc[0]
+        centroid_columns = (
+            "centroid_lps_x_mm",
+            "centroid_lps_y_mm",
+            "centroid_lps_z_mm",
+        )
+        centroid = (
+            None
+            if any(pd.isna(row[column]) for column in centroid_columns)
+            else (
+                float(row["centroid_lps_x_mm"]),
+                float(row["centroid_lps_y_mm"]),
+                float(row["centroid_lps_z_mm"]),
+            )
+        )
+        territories[str(level)] = VertebralTerritory(
+            native_label=int(row["native_label"]),
+            anatomical_label=str(level),
+            inferior_mm=(
+                None
+                if pd.isna(row["territory_inferior_mm"])
+                else float(row["territory_inferior_mm"])
+            ),
+            superior_mm=(
+                None
+                if pd.isna(row["territory_superior_mm"])
+                else float(row["territory_superior_mm"])
+            ),
+            centroid_lps_xyz=centroid,
+            centroid_superior_mm=(
+                None
+                if pd.isna(row["centroid_superior_mm"])
+                else float(row["centroid_superior_mm"])
+            ),
+            extent_valid=bool(row["vertebral_extent_valid"]),
+            complete=bool(row["territory_complete"]),
+            sequence_gap_cranial=bool(row["sequence_gap_cranial"]),
+            sequence_gap_caudal=bool(row["sequence_gap_caudal"]),
+            missing_reason=(
+                None
+                if pd.isna(row["territory_reason"])
+                else str(row["territory_reason"])
+            ),
+        )
+    return territories
+
+
 def range_measurements(
     directory: str | Path,
     *,
@@ -267,44 +317,18 @@ def range_measurements(
     slices = tables["slices"]
     tolerance = _full_coverage_tolerance(slices)
     identity = _identity(slices)
-    anchors = []
-    for level in (start_level, end_level):
-        rows = tables["vertebrae"].loc[
-            tables["vertebrae"]["vertebral_level"].eq(level)
-        ]
-        if rows.empty:
-            anchors = []
-            break
-        row = rows.iloc[0]
-        if (
-            pd.isna(row["territory_inferior_mm"])
-            or pd.isna(row["territory_superior_mm"])
-            or (not allow_partial and not bool(row["territory_complete"]))
-        ):
-            anchors = []
-            break
-        anchors.append(row)
-    if len(anchors) != 2:
-        result = empty_physical_range_aggregate(
-            slices,
-            reason="missing_anchor",
-            allow_partial=allow_partial,
-            full_coverage_tolerance=tolerance,
-        )
-    else:
-        result = aggregate_physical_range(
-            slices,
-            min(float(row["territory_inferior_mm"]) for row in anchors),
-            max(float(row["territory_superior_mm"]) for row in anchors),
-            allow_partial=allow_partial,
-            full_coverage_tolerance=tolerance,
-        )
+    territories = _territories_from_table(tables["vertebrae"])
+    result = aggregate_named_range(
+        slices,
+        territories,
+        start_level,
+        end_level,
+        allow_partial=allow_partial,
+        full_coverage_tolerance=tolerance,
+    )
     result.update(
         {
             **identity,
-            "range_name": f"{start_level}_{end_level}",
-            "start_level": start_level,
-            "end_level": end_level,
             "aggregation": "physical_range",
         }
     )

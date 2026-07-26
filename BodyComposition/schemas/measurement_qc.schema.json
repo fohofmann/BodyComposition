@@ -17,7 +17,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "3.0.0"
+      "const": "3.1.0"
     },
     "run_id": {
       "type": "string",

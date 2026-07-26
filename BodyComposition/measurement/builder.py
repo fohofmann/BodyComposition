@@ -22,13 +22,14 @@ from BodyComposition.measurement.aggregation import (
 )
 from BodyComposition.measurement.contracts import (
     MEASUREMENT_SCHEMA_VERSION,
+    SIGNATURE_BIN_WIDTH_MM,
     VERTEBRAL_TERRITORY_SCHEMA_VERSION,
     BodySurfaceResult,
     LandmarkSet,
     MeasurementBundle,
     MeasurementIdentity,
 )
-from BodyComposition.measurement.physical import geometry_digest
+from BodyComposition.measurement.physical import geometry_digest, in_plane_superior_span_mm
 from BodyComposition.measurement.signature import build_longitudinal_signature
 from BodyComposition.measurement.slices import (
     annotate_longitudinal_circumference_qc,
@@ -71,7 +72,7 @@ def measurement_analysis_id(
     if vertebral_result.vertebral_body_labels is None:
         raise ValueError("Vertebral body labels are required for measurement identity.")
     payload = {
-        "schema": "bodycomposition-measurement-analysis-v3",
+        "schema": f"bodycomposition-measurement-analysis-v{MEASUREMENT_SCHEMA_VERSION}",
         "bodycomposition_version": __version__,
         "geometry_sha256": geometry_digest(body_surface.geometry),
         "image_sha256": _array_digest(image_zyx),
@@ -220,8 +221,7 @@ def build_measurement_bundle(
     extra_signature_definitions = tuple(
         name
         for name, definition in definitions.items()
-        if bool(definition.get("enabled", False))
-        and name not in CANONICAL_TISSUE_DEFINITIONS
+        if bool(definition.get("enabled", False)) and name not in CANONICAL_TISSUE_DEFINITIONS
     )
     signature, signature_alignment = build_longitudinal_signature(
         slices,
@@ -234,6 +234,30 @@ def build_measurement_bundle(
     )
 
     flags: list[QCFlag] = [*body_surface.qc_flags, *vertebral_result.qc_flags]
+    in_plane_span_mm = in_plane_superior_span_mm(geometry)
+    maximum_unflagged_span_mm = SIGNATURE_BIN_WIDTH_MM / 2.0
+    if in_plane_span_mm > maximum_unflagged_span_mm:
+        flags.append(
+            QCFlag(
+                code="oblique_longitudinal_allocation_approximate",
+                stage="measurement",
+                severity=QCSeverity.WARNING,
+                reason=(
+                    "A native slice spans a material distance along the patient superior "
+                    "axis; slice-centre longitudinal allocation is approximate."
+                ),
+                observed={"in_plane_superior_span_mm": in_plane_span_mm},
+                thresholds={
+                    "maximum_unflagged_in_plane_superior_span_mm": (
+                        maximum_unflagged_span_mm
+                    )
+                },
+                suggested_review_action=(
+                    "Review fixed-mm and vertebral-bin profiles before comparison, or "
+                    "resample the CT and all masks together onto a validated axial grid."
+                ),
+            )
+        )
     if not extents:
         flags.append(
             QCFlag(
@@ -257,9 +281,7 @@ def build_measurement_bundle(
                     "method": signature_alignment.method,
                     "reason": signature_alignment.reason,
                     "anchor_levels": list(signature_alignment.anchor_levels),
-                    "slope_mm_per_level": (
-                        signature_alignment.slope_mm_per_level
-                    ),
+                    "slope_mm_per_level": (signature_alignment.slope_mm_per_level),
                 },
                 suggested_review_action=(
                     "Review vertebral enumeration and centroids before using "
@@ -280,9 +302,7 @@ def build_measurement_bundle(
                 observed={
                     "method": signature_alignment.method,
                     "anchor_levels": list(signature_alignment.anchor_levels),
-                    "slope_mm_per_level": (
-                        signature_alignment.slope_mm_per_level
-                    ),
+                    "slope_mm_per_level": (signature_alignment.slope_mm_per_level),
                     "residual_mm": signature_alignment.residual_mm,
                 },
                 suggested_review_action=(
@@ -451,13 +471,58 @@ def build_measurement_bundle(
     for prefix, code, description in (
         (
             "ct_min_trunk_circumference_t10_l5",
+            "minimum_waist_observed_ineligible",
+            (
+                "An observed T10-L5 minimum circumference is available, but its "
+                "search is not eligible for unqualified comparison."
+            ),
+        ),
+        (
+            "ct_max_pelvic_circumference",
+            "pelvic_maximum_observed_ineligible",
+            (
+                "An observed sacral pelvic maximum is available, but its search "
+                "is not eligible for unqualified comparison."
+            ),
+        ),
+    ):
+        if (
+            not bool(summary.get(f"{prefix}_valid", False))
+            or bool(summary.get(f"{prefix}_eligible", False))
+            or bool(summary.get(f"{prefix}_at_search_boundary", False))
+        ):
+            continue
+        flags.append(
+            QCFlag(
+                code=code,
+                stage="measurement",
+                severity=QCSeverity.INFO,
+                reason=description,
+                observed={
+                    "reason": summary.get(f"{prefix}_reason"),
+                    "acquisition_coverage_fraction": summary.get(
+                        f"{prefix}_search_acquisition_coverage_fraction"
+                    ),
+                    "valid_contour_coverage_fraction": summary.get(
+                        f"{prefix}_search_valid_contour_coverage_fraction"
+                    ),
+                },
+                suggested_review_action=(
+                    "Retain the eligibility flag and review anatomy, coverage, and "
+                    "contours before using this observed extremum."
+                ),
+            )
+        )
+    for prefix, code, description in (
+        (
+            "ct_min_trunk_circumference_t10_l5",
             "minimum_waist_unavailable",
-            "The complete T10-L5 minimum-waist search could not be measured.",
+            "No valid observed T10-L5 minimum circumference could be measured.",
         ),
         (
             "ct_max_pelvic_circumference",
             "pelvic_maximum_unavailable",
-            "The complete sacral pelvic-maximum search could not be measured.",
+            "No valid observed sacral pelvic maximum could be measured.",
         ),
     ):
         if bool(summary.get(f"{prefix}_valid", False)):
@@ -548,8 +613,8 @@ def build_measurement_bundle(
                 ),
                 observed={"vertebral_levels": incomplete_territories},
                 suggested_review_action=(
-                    "Use the per-slice rows at incomplete edges and exclude incomplete "
-                    "territory bins from level-wise comparisons."
+                    "Retain territory completeness and coverage when using observed "
+                    "measurements from incomplete edge levels."
                 ),
             )
         )
@@ -586,16 +651,10 @@ def build_measurement_bundle(
             "measurement": {
                 "schema_version": MEASUREMENT_SCHEMA_VERSION,
                 "vertebral_territory_schema_version": (VERTEBRAL_TERRITORY_SCHEMA_VERSION),
-                "signature_schema_version": str(
-                    signature["signature_schema_version"].iloc[0]
-                ),
-                "signature_profile_id": str(
-                    signature["signature_profile_id"].iloc[0]
-                ),
+                "signature_schema_version": str(signature["signature_schema_version"].iloc[0]),
+                "signature_profile_id": str(signature["signature_profile_id"].iloc[0]),
                 "signature_reference": {
-                    "alignment_version": str(
-                        signature["reference_alignment_version"].iloc[0]
-                    ),
+                    "alignment_version": str(signature["reference_alignment_version"].iloc[0]),
                     "level": str(signature["reference_level"].iloc[0]),
                     "method": signature_alignment.method,
                     "confidence": signature_alignment.confidence,
@@ -603,13 +662,19 @@ def build_measurement_bundle(
                     "origin_position_superior_mm": (
                         signature_alignment.origin_position_superior_mm
                     ),
-                    "slope_mm_per_level": (
-                        signature_alignment.slope_mm_per_level
-                    ),
+                    "slope_mm_per_level": (signature_alignment.slope_mm_per_level),
                     "residual_mm": signature_alignment.residual_mm,
                     "review_required": signature_alignment.review_required,
                     "variant_sequence": signature_alignment.variant_sequence,
                     "reason": signature_alignment.reason,
+                },
+                "longitudinal_allocation": {
+                    "method": "native_slice_center_v1",
+                    "in_plane_superior_span_mm": in_plane_span_mm,
+                    "maximum_unflagged_in_plane_superior_span_mm": (
+                        maximum_unflagged_span_mm
+                    ),
+                    "review_required": in_plane_span_mm > maximum_unflagged_span_mm,
                 },
                 "settings": dict(settings),
             },
@@ -622,8 +687,7 @@ def build_measurement_bundle(
                 "preprocessing": dict(tissue_preprocessing),
                 "compartment_sha256": _array_digest(compartment_labels_zyx),
                 "compartment_schema": {
-                    str(label): name
-                    for label, name in sorted(compartment_label_schema.items())
+                    str(label): name for label, name in sorted(compartment_label_schema.items())
                 },
                 "compartment_source": "raw_model_labels",
                 "definitions": dict(settings.get("tissue_definitions", {})),

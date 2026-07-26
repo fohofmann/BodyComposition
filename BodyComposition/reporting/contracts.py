@@ -55,14 +55,14 @@ MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
     },
     "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2": {
         "label": "Skeletal muscle tissue area",
-        "short_label": "Muscle",
+        "short_label": "SM",
         "unit": "cm2",
         "kind": "area",
         "source": "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
     },
     "skeletal_muscle_tissue_hu_m29_150_mean_hu": {
         "label": "Skeletal muscle tissue attenuation",
-        "short_label": "Muscle HU",
+        "short_label": "SM HU",
         "unit": "HU",
         "kind": "hu",
         "source": "skeletal_muscle_tissue_hu_m29_150_mean_hu",
@@ -106,7 +106,6 @@ MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
 }
 DEFAULT_MEASUREMENT_COLUMNS = (
     "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
-    "sm_mean_hu",
     "vat_total_hu_m190_m30_mean_csa_cm2",
     "sat_total_hu_m190_m30_mean_csa_cm2",
     "trunk_mean_circumference_cm",
@@ -131,7 +130,7 @@ class ReportingSettings:
     """Validated frozen rendering policy for both released layouts."""
 
     enabled: bool = False
-    layout: str = "spine_overview_v1"
+    layout: str = "spine_profile_v2"
     individual_pdf: bool = True
     combined_pdf: bool = True
     page_size: str = PAGE_SIZE

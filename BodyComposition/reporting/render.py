@@ -40,14 +40,54 @@ PAGE_WIDTH, PAGE_HEIGHT = landscape(A4)
 FONT_REGULAR = "BCVera"
 FONT_BOLD = "BCVera-Bold"
 MIN_FONT_SIZE = 8.0
-LAYOUT_REVISION = "scientific_onepager_v6"
+LAYOUT_REVISION = "scientific_onepager_v16"
 _FONT_LOCK = threading.Lock()
-PAGE_BACKGROUND = colors.HexColor("#F4F7F9")
+PAGE_BACKGROUND = colors.white
 CARD_BACKGROUND = colors.white
 INK = colors.HexColor("#1D3343")
 MUTED = colors.HexColor("#5E6E79")
 BORDER = colors.HexColor("#D4DDE3")
-ACCENT = colors.HexColor("#16738A")
+CARD_GAP = 8.0
+CARD_PADDING = 10.0
+CARD_TITLE_OFFSET = 18.0
+CARD_SUBTITLE_OFFSET = 31.0
+CARD_BORDER_WIDTH = 0.6
+CARD_CORNER_RADIUS = 0.0
+MIN_TABLE_ROW_HEIGHT = 9.5
+HU_SCALE_MIN = -190.0
+HU_SCALE_MAX = 150.0
+HU_PALETTE_RGB = (
+    (0x00, 0x20, 0x4C),
+    (0x57, 0x5D, 0x6D),
+    (0xA5, 0x9C, 0x74),
+    (0xFD, 0xE7, 0x37),
+)
+ROUTINE_BOUNDARY_NOTE_CODES = frozenset(
+    {
+        "vertebra_touches_cranial_fov",
+        "vertebra_touches_caudal_fov",
+    }
+)
+NOTE_DOMAIN_LABELS = {
+    "orientation": "Orientation",
+    "vertebral": "Spine segmentation",
+    "measurement": "Measurements",
+    "pipeline": "Processing",
+    "reporting": "Report generation",
+}
+REVIEW_NOTE_LABELS = {
+    "disconnected_vertebral_body": "Disconnected vertebral body segmentation.",
+    "vertebral_body_extent_invalid": "Incomplete or truncated vertebral body extent.",
+    "slice_measurement_invalid": "One or more slice measurements are invalid.",
+    "trunk_contour_touches_fov": "Trunk contour reaches the image boundary.",
+    "pelvic_maximum_unavailable": "Pelvic maximum could not be measured.",
+    "minimum_waist_unavailable": "Minimum waist could not be measured.",
+    "midwaist_measurement_unavailable": "Mid-waist could not be measured.",
+    "severe_misorientation_repaired": (
+        "A substantial orientation mismatch was corrected before analysis."
+    ),
+    "orientation_mismatch_uncertain": "The scan orientation remains uncertain.",
+}
 
 
 @dataclass(frozen=True)
@@ -64,6 +104,20 @@ class ImageBox:
     @property
     def top(self) -> float:
         return self.bottom + self.height
+
+
+@dataclass(frozen=True)
+class _NotesSection:
+    heading: str
+    lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _NotesSummary:
+    sections: tuple[_NotesSection, ...]
+    review_count: int
+    displayed_review_count: int
+    suppressed_review_codes: tuple[str, ...]
 
 
 def _font_paths() -> tuple[Path, Path]:
@@ -148,100 +202,287 @@ def _fit_font_size(text: str, width: float, *, maximum: float, font: str) -> flo
     return size
 
 
+def _draw_metadata_icon(
+    pdf: canvas.Canvas,
+    kind: str,
+    x: float,
+    y: float,
+    *,
+    size: float = 8.0,
+) -> None:
+    """Draw one small, deterministic line icon without relying on a symbol font."""
+    scale = size / 8.0
+
+    def point_x(value: float) -> float:
+        return x + value * scale
+
+    def point_y(value: float) -> float:
+        return y + value * scale
+
+    pdf.saveState()
+    pdf.setStrokeColor(MUTED)
+    pdf.setFillColor(MUTED)
+    pdf.setLineWidth(0.7)
+    pdf.setLineCap(1)
+    pdf.setLineJoin(1)
+
+    if kind == "analysis":
+        pdf.roundRect(
+            point_x(0.5),
+            point_y(0.7),
+            7.0 * scale,
+            6.4 * scale,
+            0.7 * scale,
+            stroke=1,
+            fill=0,
+        )
+        pdf.line(point_x(0.5), point_y(5.2), point_x(7.5), point_y(5.2))
+        pdf.line(point_x(2.0), point_y(6.3), point_x(2.0), point_y(7.7))
+        pdf.line(point_x(6.0), point_y(6.3), point_x(6.0), point_y(7.7))
+        pdf.circle(point_x(2.2), point_y(3.2), 0.45 * scale, stroke=0, fill=1)
+        pdf.circle(point_x(4.0), point_y(3.2), 0.45 * scale, stroke=0, fill=1)
+        pdf.circle(point_x(5.8), point_y(3.2), 0.45 * scale, stroke=0, fill=1)
+    elif kind == "input":
+        page = pdf.beginPath()
+        page.moveTo(point_x(1.4), point_y(0.5))
+        page.lineTo(point_x(7.1), point_y(0.5))
+        page.lineTo(point_x(7.1), point_y(5.6))
+        page.lineTo(point_x(5.5), point_y(7.4))
+        page.lineTo(point_x(1.4), point_y(7.4))
+        page.close()
+        pdf.drawPath(page, stroke=1, fill=0)
+        pdf.line(point_x(5.5), point_y(7.4), point_x(5.5), point_y(5.6))
+        pdf.line(point_x(5.5), point_y(5.6), point_x(7.1), point_y(5.6))
+        pdf.line(point_x(0.2), point_y(3.2), point_x(4.3), point_y(3.2))
+        pdf.line(point_x(3.1), point_y(4.3), point_x(4.3), point_y(3.2))
+        pdf.line(point_x(3.1), point_y(2.1), point_x(4.3), point_y(3.2))
+    elif kind == "pipeline":
+        pdf.line(point_x(1.6), point_y(4.0), point_x(3.1), point_y(4.0))
+        pdf.line(point_x(4.9), point_y(4.0), point_x(6.4), point_y(4.0))
+        for center_x in (0.9, 4.0, 7.1):
+            pdf.circle(
+                point_x(center_x),
+                point_y(4.0),
+                0.8 * scale,
+                stroke=1,
+                fill=0,
+            )
+    elif kind == "runtime":
+        pdf.roundRect(
+            point_x(1.5),
+            point_y(1.5),
+            5.0 * scale,
+            5.0 * scale,
+            0.6 * scale,
+            stroke=1,
+            fill=0,
+        )
+        pdf.rect(
+            point_x(2.8),
+            point_y(2.8),
+            2.4 * scale,
+            2.4 * scale,
+            stroke=1,
+            fill=0,
+        )
+        for offset in (2.6, 5.4):
+            pdf.line(point_x(0.5), point_y(offset), point_x(1.5), point_y(offset))
+            pdf.line(point_x(6.5), point_y(offset), point_x(7.5), point_y(offset))
+            pdf.line(point_x(offset), point_y(0.5), point_x(offset), point_y(1.5))
+            pdf.line(point_x(offset), point_y(6.5), point_x(offset), point_y(7.5))
+    elif kind == "scanner":
+        pdf.roundRect(
+            point_x(0.5),
+            point_y(0.8),
+            7.0 * scale,
+            6.4 * scale,
+            0.8 * scale,
+            stroke=1,
+            fill=0,
+        )
+        pdf.circle(point_x(4.0), point_y(4.0), 2.0 * scale, stroke=1, fill=0)
+        pdf.line(point_x(2.4), point_y(1.0), point_x(5.6), point_y(1.0))
+        pdf.line(point_x(4.0), point_y(1.0), point_x(4.0), point_y(2.0))
+    elif kind == "slice":
+        for index in range(3):
+            inset = index * 0.45
+            pdf.roundRect(
+                point_x(0.8 + inset),
+                point_y(1.0 + index * 2.1),
+                (6.4 - 2 * inset) * scale,
+                1.3 * scale,
+                0.35 * scale,
+                stroke=1,
+                fill=0,
+            )
+    elif kind == "models":
+        pdf.line(point_x(4.0), point_y(4.0), point_x(1.1), point_y(4.0))
+        pdf.line(point_x(4.0), point_y(4.0), point_x(6.8), point_y(6.5))
+        pdf.line(point_x(4.0), point_y(4.0), point_x(6.8), point_y(1.5))
+        for center_x, center_y in ((1.0, 4.0), (4.0, 4.0), (7.0, 6.7), (7.0, 1.3)):
+            pdf.circle(
+                point_x(center_x),
+                point_y(center_y),
+                0.75 * scale,
+                stroke=1,
+                fill=0,
+            )
+    else:
+        pdf.restoreState()
+        raise ValueError(f"Unsupported technical-metadata icon: {kind}")
+    pdf.restoreState()
+
+
+def _metadata_text_widths(
+    values: tuple[str, ...],
+    available_width: float,
+) -> tuple[float, ...]:
+    natural = tuple(pdfmetrics.stringWidth(value, FONT_REGULAR, 8) for value in values)
+    if sum(natural) <= available_width:
+        return natural
+    minimum = tuple(min(width, 42.0) for width in natural)
+    minimum_total = sum(minimum)
+    if minimum_total > available_width:
+        raise ValueError("Technical metadata cannot fit the released header.")
+    flexible = tuple(width - floor for width, floor in zip(natural, minimum, strict=True))
+    flexible_total = sum(flexible)
+    scale = (available_width - minimum_total) / flexible_total if flexible_total else 0.0
+    return tuple(
+        floor + extension * scale
+        for floor, extension in zip(minimum, flexible, strict=True)
+    )
+
+
+def _draw_metadata_row(
+    pdf: canvas.Canvas,
+    row: tuple[tuple[str, str], ...],
+    x: float,
+    y: float,
+    width: float,
+) -> bool:
+    icon_size = 8.0
+    icon_text_gap = 3.5
+    segment_gap = 14.0
+    fixed_width = len(row) * (icon_size + icon_text_gap) + (len(row) - 1) * segment_gap
+    values = tuple(public_text(value, maximum=180) for _kind, value in row)
+    text_widths = _metadata_text_widths(values, width - fixed_width)
+    cursor = x
+    truncated = False
+    for index, ((kind, value), text_width) in enumerate(zip(row, text_widths, strict=True)):
+        if index:
+            divider_x = cursor + segment_gap / 2.0
+            pdf.setStrokeColor(BORDER)
+            pdf.setLineWidth(0.5)
+            pdf.line(divider_x, y - 1.0, divider_x, y + 7.0)
+            cursor += segment_gap
+        _draw_metadata_icon(pdf, kind, cursor, y - 1.0, size=icon_size)
+        cursor += icon_size + icon_text_gap
+        displayed = _truncate_to_width(value, text_width, size=8)
+        truncated |= displayed != value
+        pdf.setFillColor(MUTED)
+        _text(pdf, cursor, y, displayed, size=8)
+        cursor += pdfmetrics.stringWidth(displayed, FONT_REGULAR, 8)
+    return truncated
+
+
 def _header(
     pdf: canvas.Canvas,
     case: CaseReportInput,
     report_id: str,
-    review_entries: tuple[ReviewEntry, ...],
-) -> float:
-    pdf.setFillColor(PAGE_BACKGROUND)
-    pdf.rect(0, PAGE_HEIGHT - 64, PAGE_WIDTH, 64, stroke=0, fill=1)
-    pdf.setFillColor(ACCENT)
-    pdf.rect(0, PAGE_HEIGHT - 4, PAGE_WIDTH, 4, stroke=0, fill=1)
-    pdf.setFillColor(INK)
-    _text(pdf, 28, PAGE_HEIGHT - 27, "Body composition analysis", size=15, bold=True)
-    pdf.setFillColor(MUTED)
-    _text(
-        pdf, 28, PAGE_HEIGHT - 43, "Automated CT segmentation and quantitative QC summary", size=8
-    )
+) -> tuple[float, dict[str, Any]]:
+    box = ImageBox(24, PAGE_HEIGHT - 62, PAGE_WIDTH - 48, 52)
+    _draw_card(pdf, box)
 
-    pdf.setFillColor(MUTED)
-    _text(pdf, 434, PAGE_HEIGHT - 20, "CASE", size=8, bold=True)
+    right_text = f"case page 1 of 1 | report {report_id[:12]}"
+    right_width = pdfmetrics.stringWidth(right_text, FONT_REGULAR, 8)
+    left_text = (
+        f"CASE {public_text(case.case_id, maximum=64)} | "
+        f"analysis {case.measurement_bundle.identity.analysis_id[:12]}"
+    )
     pdf.setFillColor(INK)
-    case_title = public_text(case.case_id, maximum=64)
-    case_size = _fit_font_size(case_title, 205, maximum=13, font=FONT_BOLD)
-    _text(pdf, 434, PAGE_HEIGHT - 38, case_title, size=case_size, bold=True)
-    pdf.setFillColor(MUTED)
     _text(
         pdf,
-        434,
-        PAGE_HEIGHT - 52,
-        f"analysis {case.measurement_bundle.identity.analysis_id[:12]} | report {report_id[:12]}",
-        size=8,
-    )
-
-    pdf.setStrokeColor(BORDER)
-    pdf.line(28, PAGE_HEIGHT - 64, PAGE_WIDTH - 28, PAGE_HEIGHT - 64)
-
-    content_top = PAGE_HEIGHT - 75
-    if review_entries:
-        changed = any(
-            "lossless orientation transform" in entry.automatic_action.lower()
-            for entry in review_entries
-        )
-        unchanged_uncertain = any(
-            "without orientation repair" in entry.automatic_action.lower()
-            for entry in review_entries
-        )
-        pdf.setFillColor(colors.HexColor("#FFF1E8" if changed else "#FFF7DF"))
-        pdf.setStrokeColor(colors.HexColor("#D38143" if changed else "#D2A33C"))
-        pdf.roundRect(28, content_top - 23, PAGE_WIDTH - 56, 22, 4, stroke=1, fill=1)
-        pdf.setFillColor(colors.HexColor("#7B3A13" if changed else "#765400"))
-        domains = ", ".join(f"{entry.domain}:{entry.code}" for entry in review_entries[:4])
-        prefix = (
-            "Manual review required - input CT automatically reoriented before analysis: "
-            if changed
-            else (
-                "Manual review required - processing continued without orientation repair: "
-                if unchanged_uncertain
-                else "Manual review required: "
-            )
-        )
-        text = _truncate_to_width(
-            prefix + domains + " | see canonical QC JSON",
-            PAGE_WIDTH - 82,
+        box.left + CARD_PADDING,
+        box.top - CARD_TITLE_OFFSET,
+        _truncate_to_width(
+            left_text,
+            box.width - 2 * CARD_PADDING - right_width - 18,
             font=FONT_BOLD,
             size=8,
-        )
-        _text(pdf, 39, content_top - 16, text, size=8, bold=True)
-        content_top -= 32
-    return content_top
-
-
-def _footer(pdf: canvas.Canvas, report_id: str, *, position: str = "case page 1 of 1") -> None:
-    pdf.setStrokeColor(BORDER)
-    pdf.line(28, 31, PAGE_WIDTH - 28, 31)
-    pdf.setFillColor(MUTED)
-    _text(
-        pdf,
-        28,
-        17,
-        "Automated research/QC report. Canonical machine-readable outputs are authoritative. Flagged results require review.",
+        ),
         size=8,
+        bold=True,
     )
+    pdf.setFillColor(MUTED)
     pdf.setFont(FONT_REGULAR, 8)
     pdf.drawRightString(
-        PAGE_WIDTH - 28,
-        17,
-        f"{position} | report {report_id[:16]}",
+        box.right - CARD_PADDING,
+        box.top - CARD_TITLE_OFFSET,
+        right_text,
     )
+    pdf.setStrokeColor(BORDER)
+    pdf.setLineWidth(0.6)
+    pdf.line(
+        box.left + CARD_PADDING,
+        box.top - 25,
+        box.right - CARD_PADDING,
+        box.top - 25,
+    )
+
+    metadata_rows = _technical_metadata_rows(case)
+    pdf.setFillColor(MUTED)
+    metadata_truncated = False
+    for index, row in enumerate(metadata_rows):
+        metadata_truncated |= _draw_metadata_row(
+            pdf,
+            row,
+            box.left + CARD_PADDING,
+            box.top - 34 - index * 11,
+            box.width - 2 * CARD_PADDING,
+        )
+    return box.bottom - 8, {
+        "boxed": True,
+        "box_height_pt": box.height,
+        "box_top_pt": box.top,
+        "content_padding_pt": CARD_PADDING,
+        "technical_metadata_location": "header",
+        "technical_metadata_rows": len(metadata_rows),
+        "technical_metadata_icons": [
+            kind for row in metadata_rows for kind, _value in row
+        ],
+        "technical_metadata_icon_style": "monochrome_vector",
+        "technical_metadata_truncated": metadata_truncated,
+    }
 
 
 def _draw_card(pdf: canvas.Canvas, box: ImageBox) -> None:
     pdf.setFillColor(CARD_BACKGROUND)
     pdf.setStrokeColor(BORDER)
-    pdf.setLineWidth(0.7)
-    pdf.roundRect(box.left, box.bottom, box.width, box.height, 5, stroke=1, fill=1)
+    pdf.setLineWidth(CARD_BORDER_WIDTH)
+    pdf.rect(box.left, box.bottom, box.width, box.height, stroke=1, fill=1)
+
+
+def _draw_main_grid(
+    pdf: canvas.Canvas,
+    *,
+    left: float,
+    right: float,
+    bottom: float,
+    top: float,
+    dividers: tuple[float, ...],
+) -> dict[str, Any]:
+    pdf.setStrokeColor(BORDER)
+    pdf.setLineWidth(CARD_BORDER_WIDTH)
+    pdf.line(left, top, right, top)
+    pdf.line(left, bottom, right, bottom)
+    for divider in dividers:
+        pdf.line(divider, bottom, divider, top)
+    return {
+        "style": "open_editorial_grid",
+        "divider_count": len(dividers),
+        "rule_width_pt": CARD_BORDER_WIDTH,
+        "outer_vertical_rules": False,
+    }
 
 
 def _wrap_text(value: str, width: float, *, font: str = FONT_REGULAR, size: float = 8) -> list[str]:
@@ -258,6 +499,23 @@ def _wrap_text(value: str, width: float, *, font: str = FONT_REGULAR, size: floa
     if current:
         lines.append(current)
     return lines or ["Not recorded"]
+
+
+def _hu_color(value: float) -> colors.Color:
+    normalized = float(
+        np.clip(
+            (float(value) - HU_SCALE_MIN) / (HU_SCALE_MAX - HU_SCALE_MIN),
+            0.0,
+            1.0,
+        )
+    )
+    scaled = normalized * (len(HU_PALETTE_RGB) - 1)
+    lower = min(int(np.floor(scaled)), len(HU_PALETTE_RGB) - 2)
+    fraction = scaled - lower
+    left = np.asarray(HU_PALETTE_RGB[lower], dtype=float)
+    right = np.asarray(HU_PALETTE_RGB[lower + 1], dtype=float)
+    red, green, blue = (left + fraction * (right - left)) / 255.0
+    return colors.Color(float(red), float(green), float(blue))
 
 
 def _image_box(projection: SagittalProjection, panel: ImageBox) -> ImageBox:
@@ -398,7 +656,7 @@ def _draw_projection(
         pdf.setFillColor(colors.white)
         label_width = max(24, pdfmetrics.stringWidth(anatomical, FONT_BOLD, 8) + 7)
         label_x = min(box.right - label_width - 2, max(box.left + 2, x_true + 12))
-        pdf.roundRect(label_x, y_label - 5, label_width, 11, 2, stroke=0, fill=1)
+        pdf.roundRect(label_x, y_label - 5, label_width, 10, 2, stroke=0, fill=1)
         pdf.setFillColor(colors.HexColor("#15232E"))
         _text(pdf, label_x + 3, y_label - 2, anatomical, size=8, bold=True)
     return box
@@ -417,9 +675,7 @@ def _draw_table(
     projection: SagittalProjection,
     panel: ImageBox,
 ) -> dict[str, Any]:
-    displayed_rows = [
-        row for row in rows if int(row["native_label"]) in projection.native_labels
-    ]
+    displayed_rows = [row for row in rows if int(row["native_label"]) in projection.native_labels]
     if not displayed_rows:
         raise ValueError("The vertebral table has no detected native levels to display.")
     pdf.setFillColor(colors.HexColor("#263746"))
@@ -428,7 +684,7 @@ def _draw_table(
         panel.left,
         panel.top - 8,
         "Vertebral summary",
-        size=9,
+        size=8,
         bold=True,
     )
     pdf.setFillColor(MUTED)
@@ -446,10 +702,9 @@ def _draw_table(
     header_bottom = grid_top - header_height
     available_body_height = header_bottom - panel.bottom
     row_height = min(18.0, available_body_height / len(displayed_rows))
-    if row_height < 9.5:
-        raise ValueError(
-            "Detected vertebral rows cannot fit the released uniform table at 8 pt."
-        )
+    row_capacity = int(available_body_height // MIN_TABLE_ROW_HEIGHT)
+    if row_height < MIN_TABLE_ROW_HEIGHT:
+        raise ValueError("Detected vertebral rows cannot fit the released uniform table at 8 pt.")
     table_bottom = header_bottom - row_height * len(displayed_rows)
     header_y = grid_top - 10
     pdf.setFillColor(colors.HexColor("#F3F7F9"))
@@ -521,13 +776,21 @@ def _draw_table(
         pdf,
         panel.left,
         panel.bottom - 13,
-        "* missing/invalid | V variant | ! incomplete territory",
+        "* missing/invalid | V variant | ! incomplete",
         size=8,
     )
     return {
         "row_layout": "uniform_categorical_grid",
         "displayed_levels": [str(row["vertebral_level"]) for row in displayed_rows],
+        "measurement_columns": list(settings.measurement_columns),
+        "display_labels": [
+            MEASUREMENT_DEFINITIONS[column]["short_label"]
+            for column in settings.measurement_columns
+        ],
+        "row_count": len(displayed_rows),
+        "row_capacity": row_capacity,
         "row_height_pt": float(row_height),
+        "minimum_row_height_pt": MIN_TABLE_ROW_HEIGHT,
         "metric_column_width_pt": float(metric_width),
     }
 
@@ -570,15 +833,14 @@ def _summary_value(
     unit: str,
 ) -> str:
     value = summary.get(name)
-    valid = bool(summary.get(name.replace("_cm", "") + "_valid", False))
-    if name.endswith("_cm"):
-        valid = bool(summary.get(f"{name[:-3]}_valid", False))
-    elif name.endswith("_ratio"):
-        valid = bool(summary.get(f"{name}_valid", False))
+    base_name = name[:-3] if name.endswith("_cm") else name
+    valid = bool(summary.get(f"{base_name}_valid", False))
     if not valid or pd.isna(value):
         return settings.missing_value_symbol + "*"
     formatted = f"{float(value):.{settings.numeric_precision}f}"
-    return f"{formatted} {unit}".rstrip()
+    eligible = summary.get(f"{base_name}_eligible", True)
+    marker = "*" if pd.notna(eligible) and not bool(eligible) else ""
+    return f"{formatted} {unit}{marker}".rstrip()
 
 
 def _draw_key_anthropometry(
@@ -629,10 +891,67 @@ def _draw_key_anthropometry(
         y -= 15
 
 
-def _draw_axial_panel(
+def _axial_card_pair(
+    *,
+    left: float,
+    width: float,
+    content_bottom: float,
+    content_top: float,
+) -> tuple[ImageBox, ImageBox]:
+    anthropometry_height = 82.0
+    preferred_visual_height = width + (57.0 if width >= 180 else 67.0)
+    available_height = content_top - content_bottom
+    visual_height = min(
+        preferred_visual_height,
+        available_height - CARD_GAP - anthropometry_height,
+    )
+    if visual_height < 120:
+        raise ValueError("Axial and anthropometry cards cannot fit the released layout.")
+    axial_card = ImageBox(
+        left,
+        content_top - visual_height,
+        width,
+        visual_height,
+    )
+    anthropometry_card = ImageBox(
+        left,
+        axial_card.bottom - CARD_GAP - anthropometry_height,
+        width,
+        anthropometry_height,
+    )
+    return axial_card, anthropometry_card
+
+
+def _draw_anthropometry_card(
     pdf: canvas.Canvas,
     case: CaseReportInput,
     settings: ReportingSettings,
+    panel: ImageBox,
+) -> dict[str, Any]:
+    _draw_key_anthropometry(
+        pdf,
+        case,
+        settings,
+        ImageBox(
+            panel.left + CARD_PADDING,
+            panel.bottom + CARD_PADDING,
+            panel.width - 2 * CARD_PADDING,
+            panel.height - CARD_TITLE_OFFSET - CARD_PADDING,
+        ),
+    )
+    return {
+        "separate_card": True,
+        "box_width_pt": panel.width,
+        "box_height_pt": panel.height,
+        "box_top_pt": panel.top,
+        "content_padding_pt": CARD_PADDING,
+        "title_baseline_from_top_pt": CARD_TITLE_OFFSET,
+        "labels": ["Min waist", "Pelvic max", "Waist / pelvic"],
+    }
+
+
+def _draw_axial_panel(
+    pdf: canvas.Canvas,
     view: AxialSegmentationView,
     panel: ImageBox,
 ) -> dict[str, Any]:
@@ -644,10 +963,10 @@ def _draw_axial_panel(
     )
     _text(
         pdf,
-        panel.left + 10,
-        panel.top - 18,
-        _truncate_to_width(title, panel.width - 20),
-        size=9,
+        panel.left + CARD_PADDING,
+        panel.top - CARD_TITLE_OFFSET,
+        _truncate_to_width(title, panel.width - 2 * CARD_PADDING),
+        size=8,
         bold=True,
     )
     pdf.setFillColor(MUTED)
@@ -657,15 +976,18 @@ def _draw_axial_panel(
         + ("" if view.l3_available else " | L3 unavailable")
     )
     _text(
-        pdf, panel.left + 10, panel.top - 31, _truncate_to_width(subtitle, panel.width - 20), size=8
+        pdf,
+        panel.left + CARD_PADDING,
+        panel.top - CARD_SUBTITLE_OFFSET,
+        _truncate_to_width(subtitle, panel.width - 2 * CARD_PADDING),
+        size=8,
     )
 
-    key_height = 81.0
     image_region = ImageBox(
-        panel.left + 10,
-        panel.bottom + key_height + 26,
-        panel.width - 20,
-        max(45.0, panel.height - key_height - 73),
+        panel.left + CARD_PADDING,
+        panel.bottom + 26,
+        panel.width - 2 * CARD_PADDING,
+        max(45.0, panel.height - 73),
     )
     box = _raster_box(view.rgb, image_region)
     pdf.drawImage(
@@ -703,8 +1025,8 @@ def _draw_axial_panel(
     pdf.setFont(FONT_REGULAR, 8)
     pdf.drawRightString(box.right - 8, scale_y + 4, f"{int(scale_mm)} mm")
 
-    legend_y = max(panel.bottom + key_height + 18, box.bottom - 17)
-    legend_x = panel.left + 10
+    legend_y = max(panel.bottom + 18, box.bottom - 17)
+    legend_x = panel.left + CARD_PADDING
     palette_lookup = {
         "SM": "sm",
         "SAT": "sat",
@@ -716,8 +1038,11 @@ def _draw_axial_panel(
         if palette_name is None:
             continue
         item_width = pdfmetrics.stringWidth(name, FONT_REGULAR, 8) + 18
-        if legend_x > panel.left + 10 and legend_x + item_width > panel.right - 10:
-            legend_x = panel.left + 10
+        if (
+            legend_x > panel.left + CARD_PADDING
+            and legend_x + item_width > panel.right - CARD_PADDING
+        ):
+            legend_x = panel.left + CARD_PADDING
             legend_y -= 10
         red, green, blue = tissue_color(palette_name)
         pdf.setFillColor(colors.Color(red / 255, green / 255, blue / 255))
@@ -726,20 +1051,6 @@ def _draw_axial_panel(
         _text(pdf, legend_x + 10, legend_y - 1, name, size=8)
         legend_x += item_width
 
-    separator_y = max(panel.bottom + key_height, legend_y - 13)
-    pdf.setStrokeColor(BORDER)
-    pdf.line(panel.left + 10, separator_y, panel.right - 10, separator_y)
-    _draw_key_anthropometry(
-        pdf,
-        case,
-        settings,
-        ImageBox(
-            panel.left + 10,
-            separator_y - key_height + 12,
-            panel.width - 20,
-            key_height - 24,
-        ),
-    )
     return {
         "method": view.method,
         "vertebral_level": view.vertebral_level,
@@ -775,7 +1086,7 @@ def _model_text(case: CaseReportInput) -> str:
     if isinstance(orientation, Mapping):
         model = orientation.get("model")
         if isinstance(model, Mapping):
-            orientation_model = str(model.get("asset_id") or model.get("name") or orientation_model)
+            orientation_model = str(model.get("name") or model.get("asset_id") or orientation_model)
     tissue = case.measurement_bundle.provenance.get("tissue", {})
     tissue_model = (
         tissue.get("backend_id", "tissue not recorded")
@@ -785,7 +1096,9 @@ def _model_text(case: CaseReportInput) -> str:
     return f"{orientation_model} | {case.vertebral_result.backend_id} | {tissue_model}"
 
 
-def _draw_metadata_card(pdf: canvas.Canvas, case: CaseReportInput, panel: ImageBox) -> None:
+def _technical_metadata_rows(
+    case: CaseReportInput,
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
     metadata = case.technical_metadata
     scanner = (
         " ".join(
@@ -799,7 +1112,7 @@ def _draw_metadata_card(pdf: canvas.Canvas, case: CaseReportInput, panel: ImageB
         or "Not recorded"
     )
     runtime = (
-        " | ".join(
+        " / ".join(
             value
             for value in (
                 metadata.get("runtime_backend"),
@@ -817,46 +1130,28 @@ def _draw_metadata_card(pdf: canvas.Canvas, case: CaseReportInput, panel: ImageB
     )
     spacing = case.prepared_image.GetSpacing()
     input_text = (
-        f"{str(metadata.get('input_format') or 'unknown').upper()} | "
+        f"{str(metadata.get('input_format') or 'unknown').upper()} "
         f"{spacing[0]:.2f} x {spacing[1]:.2f} x {spacing[2]:.2f} mm"
     )
     pipeline_version = metadata.get("pipeline_version") or __version__
-    rows = (
-        ("Analysis", _analysis_date(metadata.get("analysis_started_at")), "Input", input_text),
-        ("Pipeline", f"BodyComposition {pipeline_version}", "Scanner", scanner),
-        ("Runtime", runtime, "Slice", thickness_text),
+    return (
+        (
+            ("analysis", _analysis_date(metadata.get("analysis_started_at"))),
+            ("input", input_text),
+            ("pipeline", f"BodyComposition {pipeline_version}"),
+        ),
+        (
+            ("runtime", runtime),
+            ("scanner", scanner),
+            ("slice", thickness_text),
+            ("models", _model_text(case)),
+        ),
     )
-    pdf.setFillColor(INK)
-    _text(pdf, panel.left + 12, panel.top - 18, "Technical metadata", size=9, bold=True)
-    column_width = (panel.width - 34) / 2
-    y = panel.top - 37
-    for left_label, left_value, right_label, right_value in rows:
-        for offset, label, value in (
-            (0.0, left_label, left_value),
-            (column_width + 10, right_label, right_value),
-        ):
-            x = panel.left + 12 + offset
-            pdf.setFillColor(MUTED)
-            _text(pdf, x, y, label.upper(), size=8, bold=True)
-            pdf.setFillColor(INK)
-            _text(
-                pdf,
-                x + 53,
-                y,
-                _truncate_to_width(str(value), column_width - 55),
-                size=8,
-            )
-        y -= 15
-    pdf.setFillColor(MUTED)
-    _text(pdf, panel.left + 12, y, "MODELS", size=8, bold=True)
-    pdf.setFillColor(INK)
-    _text(
-        pdf,
-        panel.left + 65,
-        y,
-        _truncate_to_width(_model_text(case), panel.width - 79),
-        size=8,
-    )
+
+
+def _review_note_text(entry: ReviewEntry) -> str:
+    readable = REVIEW_NOTE_LABELS.get(entry.code) or entry.reason
+    return public_text(readable, maximum=180)
 
 
 def _report_notes(
@@ -864,52 +1159,265 @@ def _report_notes(
     rows: list[dict[str, Any]],
     review_entries: tuple[ReviewEntry, ...],
     warnings: tuple[str, ...],
-) -> list[str]:
-    notes: list[str] = []
+) -> _NotesSummary:
+    sections: list[_NotesSection] = []
+    orientation_changed = False
+    unchanged_uncertain = False
+    displayed_entries = tuple(
+        entry for entry in review_entries if entry.code not in ROUTINE_BOUNDARY_NOTE_CODES
+    )
+    suppressed_codes = tuple(
+        sorted(
+            {
+                entry.code
+                for entry in review_entries
+                if entry.code in ROUTINE_BOUNDARY_NOTE_CODES
+            }
+        )
+    )
+    orientation = case.orientation_result
+    if isinstance(orientation, Mapping):
+        orientation_changed = bool(orientation.get("orientation_changed", False))
+        orientation_review = bool(orientation.get("manual_review_required", False))
+    else:
+        orientation_changed = bool(orientation.orientation_changed)
+        orientation_review = bool(orientation.manual_review_required)
+    unchanged_uncertain = orientation_review and not orientation_changed
+    if displayed_entries:
+        entries_by_domain: dict[str, list[ReviewEntry]] = {}
+        for entry in displayed_entries:
+            entries_by_domain.setdefault(entry.domain, []).append(entry)
+        compact_domain_summaries = len(displayed_entries) > 8
+        for domain, entries in entries_by_domain.items():
+            lines = (
+                [_review_note_text(entries[0])]
+                if compact_domain_summaries
+                else [_review_note_text(entry) for entry in entries]
+            )
+            if compact_domain_summaries and len(entries) > 1:
+                lines.append(
+                    f"{len(entries) - 1} additional "
+                    f"{'finding' if len(entries) == 2 else 'findings'} "
+                    "in the canonical quality-control record."
+                )
+            sections.append(
+                _NotesSection(
+                    heading=NOTE_DOMAIN_LABELS.get(
+                        domain,
+                        domain.replace("_", " ").capitalize(),
+                    ),
+                    lines=tuple(lines),
+                )
+            )
+
+    report_lines: list[str] = []
+    if orientation_changed:
+        report_lines.append("Action: input CT automatically reoriented before analysis.")
+    elif unchanged_uncertain:
+        report_lines.append("Action: processing continued without orientation repair.")
     attribution = case.technical_metadata.get("data_attribution")
     if attribution:
-        notes.append(f"Data: {attribution}")
-    orientation_changed = any(
-        "lossless orientation transform" in entry.automatic_action.lower()
-        for entry in review_entries
-    )
-    if orientation_changed:
-        notes.append("Orientation corrected automatically; manual orientation review is required.")
-    for entry in review_entries:
-        note = f"{entry.domain}: {entry.reason}"
-        if note not in notes:
-            notes.append(note)
+        report_lines.append(f"Source: {attribution}")
     if "missing_or_invalid_display_measurement" in warnings:
         missing = sum(not metric["valid"] for row in rows for metric in row["metrics"].values())
-        notes.append(
-            f"{missing} vertebral table value(s) are missing or invalid; see canonical QC."
+        report_lines.append(f"Table: {missing} values missing or invalid.")
+    if displayed_entries:
+        report_lines.append("Details: canonical quality-control record.")
+    if not report_lines:
+        report_lines.append("No report-level issues.")
+    sections.append(
+        _NotesSection(
+            heading="Data and provenance",
+            lines=tuple(report_lines),
         )
-    return notes or ["No automated review flags or report-level issues."]
+    )
+    return _NotesSummary(
+        sections=tuple(sections),
+        review_count=len(review_entries),
+        displayed_review_count=len(displayed_entries),
+        suppressed_review_codes=suppressed_codes,
+    )
+
+
+def _note_section_block(
+    section: _NotesSection,
+    width: float,
+) -> list[tuple[str, bool]]:
+    lines: list[tuple[str, bool]] = [(section.heading, True)]
+    for value in section.lines:
+        lines.extend((line, False) for line in _wrap_text(value, width, size=8))
+    return lines
+
+
+def _balanced_note_section_columns(
+    blocks: list[list[tuple[str, bool]]],
+    column_count: int,
+    maximum_height: float,
+) -> list[list[list[tuple[str, bool]]]] | None:
+    if column_count < 1 or len(blocks) < column_count:
+        return None
+    line_height = 10.0
+    block_gap = 4.0
+    block_count = len(blocks)
+    line_prefix = [0]
+    for block in blocks:
+        line_prefix.append(line_prefix[-1] + len(block))
+
+    def group_height(start: int, end: int) -> float:
+        return (
+            (line_prefix[end] - line_prefix[start]) * line_height
+            + max(0, end - start - 1) * block_gap
+        )
+
+    infinity = float("inf")
+    costs = [[infinity] * (block_count + 1) for _ in range(column_count + 1)]
+    splits = [[-1] * (block_count + 1) for _ in range(column_count + 1)]
+    costs[0][0] = 0.0
+    for columns in range(1, column_count + 1):
+        for end in range(columns, block_count + 1):
+            for start in range(columns - 1, end):
+                cost = max(costs[columns - 1][start], group_height(start, end))
+                if cost < costs[columns][end]:
+                    costs[columns][end] = cost
+                    splits[columns][end] = start
+    if costs[column_count][block_count] > maximum_height:
+        return None
+
+    boundaries = [block_count]
+    end = block_count
+    for columns in range(column_count, 0, -1):
+        start = splits[columns][end]
+        boundaries.append(start)
+        end = start
+    boundaries.reverse()
+    return [
+        blocks[boundaries[index] : boundaries[index + 1]]
+        for index in range(column_count)
+    ]
 
 
 def _draw_notes_card(
     pdf: canvas.Canvas,
     panel: ImageBox,
-    notes: list[str],
-) -> None:
+    notes: _NotesSummary,
+) -> dict[str, Any]:
     pdf.setFillColor(INK)
-    _text(pdf, panel.left + 12, panel.top - 18, "Notes / QC", size=9, bold=True)
-    available_lines = max(1, int((panel.height - 35) // 11))
-    lines: list[str] = []
-    for note in notes:
-        wrapped = _wrap_text(f"- {note}", panel.width - 24)
-        if len(lines) + len(wrapped) > available_lines:
+    _text(
+        pdf,
+        panel.left + CARD_PADDING,
+        panel.top - CARD_TITLE_OFFSET,
+        "Notes",
+        size=8,
+        bold=True,
+    )
+    pdf.setStrokeColor(BORDER)
+    pdf.setLineWidth(CARD_BORDER_WIDTH)
+    header_rule_y = panel.top - 29.0
+    pdf.line(
+        panel.left + CARD_PADDING,
+        header_rule_y,
+        panel.right - CARD_PADDING,
+        header_rule_y,
+    )
+
+    maximum_columns = 3
+    column_gap = 20.0
+    preferred_columns = min(maximum_columns, len(notes.sections))
+    available_height = panel.height - 48.0
+    columns_used = 1
+    column_width = panel.width - 2 * CARD_PADDING
+    column_blocks: list[list[list[tuple[str, bool]]]] | None = None
+    truncated = False
+
+    for candidate_columns in range(preferred_columns, 0, -1):
+        candidate_width = (
+            panel.width
+            - 2 * CARD_PADDING
+            - column_gap * (candidate_columns - 1)
+        ) / candidate_columns
+        blocks = [
+            _note_section_block(section, candidate_width)
+            for section in notes.sections
+        ]
+        candidate_blocks = _balanced_note_section_columns(
+            blocks,
+            candidate_columns,
+            available_height,
+        )
+        if candidate_blocks is not None:
+            columns_used = candidate_columns
+            column_width = candidate_width
+            column_blocks = candidate_blocks
             break
-        lines.extend(wrapped)
-    if not lines:
-        lines = ["- Additional issues are recorded in canonical QC."]
-    elif len(lines) < sum(len(_wrap_text(f"- {note}", panel.width - 24)) for note in notes):
-        lines[-1] = _truncate_to_width(lines[-1] + " ...", panel.width - 24)
-    y = panel.top - 36
-    pdf.setFillColor(MUTED)
-    for line in lines[:available_lines]:
-        _text(pdf, panel.left + 12, y, line, size=8)
-        y -= 11
+
+    if column_blocks is None:
+        columns_used = min(maximum_columns, max(1, len(notes.sections)))
+        column_width = (
+            panel.width
+            - 2 * CARD_PADDING
+            - column_gap * (columns_used - 1)
+        ) / columns_used
+        fallback = _NotesSection(
+            heading="Details",
+            lines=("See the canonical quality-control record for remaining observations.",),
+        )
+        column_blocks = [[_note_section_block(fallback, column_width)]]
+        columns_used = 1
+        truncated = True
+    if column_blocks is None:
+        raise RuntimeError("Notes/QC layout did not produce a renderable column.")
+
+    body_top = panel.top - 42.0
+    if columns_used > 1:
+        pdf.setStrokeColor(BORDER)
+        pdf.setLineWidth(CARD_BORDER_WIDTH)
+        for column_index in range(1, columns_used):
+            divider_x = (
+                panel.left
+                + CARD_PADDING
+                + column_index * column_width
+                + (column_index - 0.5) * column_gap
+            )
+            pdf.line(
+                divider_x,
+                panel.bottom + CARD_PADDING,
+                divider_x,
+                header_rule_y - 5,
+            )
+
+    column_line_counts: list[int] = []
+    for column_index, blocks in enumerate(column_blocks):
+        x = panel.left + CARD_PADDING + column_index * (column_width + column_gap)
+        y = body_top
+        line_count = 0
+        for block_index, block in enumerate(blocks):
+            if block_index:
+                y -= 4
+            for line, bold in block:
+                pdf.setFillColor(INK if bold else MUTED)
+                _text(pdf, x, y, line, size=8, bold=bold)
+                y -= 10
+                line_count += 1
+        column_line_counts.append(line_count)
+    return {
+        "columns_used": columns_used,
+        "maximum_columns": maximum_columns,
+        "column_width_pt": column_width,
+        "column_gap_pt": column_gap,
+        "content_padding_pt": CARD_PADDING,
+        "column_block_counts": [len(blocks) for blocks in column_blocks],
+        "column_line_counts": column_line_counts,
+        "block_split": False,
+        "box_top_pt": panel.top,
+        "structured": True,
+        "review_count": notes.review_count,
+        "displayed_review_count": notes.displayed_review_count,
+        "suppressed_review_codes": list(notes.suppressed_review_codes),
+        "status_visible": False,
+        "section_headings": [section.heading for section in notes.sections],
+        "rendered_line_count": sum(column_line_counts),
+        "truncated": truncated,
+    }
 
 
 def _profile_layers(slices: pd.DataFrame) -> list[tuple[str, str, str]]:
@@ -917,7 +1425,7 @@ def _profile_layers(slices: pd.DataFrame) -> list[tuple[str, str, str]]:
     for name, label, column in (
         (
             "sm",
-            "Muscle",
+            "SM",
             "skeletal_muscle_tissue_hu_m29_150_area_cm2",
         ),
         (
@@ -966,6 +1474,7 @@ def _draw_profile(
     projection: SagittalProjection,
     panel: ImageBox,
     shared_y_box: ImageBox,
+    card_top: float,
 ) -> dict[str, Any]:
     slices = case.measurement_bundle.slices
     layers = _profile_layers(slices)
@@ -973,7 +1482,12 @@ def _draw_profile(
         raise ValueError("spine_profile_v2 requires canonical per-slice tissue-area columns.")
     positions = pd.to_numeric(slices["position_superior_mm"], errors="coerce").to_numpy(dtype=float)
     values: list[np.ndarray] = []
-    valid = np.isfinite(positions)
+    layer_validities: list[np.ndarray] = []
+    display_valid = (
+        np.isfinite(positions)
+        & (positions >= projection.inferior_mm)
+        & (positions <= projection.superior_mm)
+    )
     for _name, _, column in layers:
         layer = pd.to_numeric(slices[column], errors="coerce").to_numpy(dtype=float)
         validity_column = column.replace("_cm2", "_valid")
@@ -982,11 +1496,17 @@ def _draw_profile(
             if validity_column in slices
             else np.isfinite(layer)
         )
-        valid &= np.isfinite(layer) & (layer >= 0) & layer_valid
+        layer_validities.append(
+            display_valid & np.isfinite(layer) & (layer >= 0) & layer_valid
+        )
         values.append(layer)
-    valid &= (positions >= projection.inferior_mm) & (positions <= projection.superior_mm)
-    stack = np.sum(np.vstack(values), axis=0)
-    raw_max = float(np.nanmax(stack[valid])) if np.any(valid) else 0.0
+    safe_values = [
+        np.where(layer_valid, layer, 0.0)
+        for layer, layer_valid in zip(values, layer_validities, strict=True)
+    ]
+    any_layer_valid = np.any(np.vstack(layer_validities), axis=0)
+    stack = np.sum(np.vstack(safe_values), axis=0)
+    raw_max = float(np.nanmax(stack[any_layer_valid])) if np.any(any_layer_valid) else 0.0
     trunk = None
     trunk_valid = np.zeros(len(slices), dtype=bool)
     if "trunk_area_cm2" in slices:
@@ -1007,32 +1527,35 @@ def _draw_profile(
     _text(
         pdf,
         panel.left,
-        shared_y_box.top + 32,
+        card_top - CARD_TITLE_OFFSET,
         "Stacked tissue-area profile",
         size=8,
         bold=True,
     )
-    hu_definition_caption = "Muscle -29..150 | fat -190..-30 HU"
+    hu_definition_caption = "SM -29..150 | fat -190..-30 HU"
     pdf.setFillColor(MUTED)
     _text(
         pdf,
         panel.left,
-        shared_y_box.top + 20,
+        card_top - CARD_SUBTITLE_OFFSET,
         hu_definition_caption,
         size=8,
     )
     pdf.setStrokeColor(colors.HexColor("#AEB8C0"))
     pdf.rect(panel.left, shared_y_box.bottom, panel.width, shared_y_box.height, stroke=1, fill=0)
     cumulative = np.zeros(len(slices), dtype=float)
-    for name, _label, _ in layers:
-        layer_index = [item[0] for item in layers].index(name)
-        layer_values = values[layer_index]
+    for (name, _label, _), layer_values, layer_valid in zip(
+        layers,
+        safe_values,
+        layer_validities,
+        strict=True,
+    ):
         lower = cumulative.copy()
         upper = lower + layer_values
         red, green, blue = tissue_color(name)
         pdf.setFillColor(colors.Color(red / 255, green / 255, blue / 255, alpha=0.78))
         pdf.setStrokeColor(colors.Color(red / 255, green / 255, blue / 255))
-        for run in _contiguous_runs(valid):
+        for run in _contiguous_runs(layer_valid):
             path = pdf.beginPath()
             first = int(run[0])
             path.moveTo(
@@ -1083,10 +1606,21 @@ def _draw_profile(
         pdf,
         panel.left + panel.width / 2,
         shared_y_box.bottom - 27,
-        "area (cm2)",
+        "Tissue area (cm2)",
         size=8,
         bold=True,
     )
+    trunk_reference_label = None
+    if trunk is not None and np.any(trunk_valid):
+        trunk_reference_label = "Trunk area reference"
+        reference_y = shared_y_box.bottom - 43
+        pdf.setStrokeColor(colors.HexColor("#222222"))
+        pdf.setLineWidth(0.8)
+        pdf.setDash(3, 2)
+        pdf.line(panel.left + 4, reference_y + 3, panel.left + 24, reference_y + 3)
+        pdf.setDash()
+        pdf.setFillColor(colors.HexColor("#263746"))
+        _text(pdf, panel.left + 29, reference_y, trunk_reference_label, size=8)
     legend_x = panel.left
     legend_y = shared_y_box.top + 7
     legend_rows = 1
@@ -1109,8 +1643,21 @@ def _draw_profile(
         "hu_definition_caption": hu_definition_caption,
         "source_columns": [column for _, _, column in layers],
         "displayed_layer_integrals_cm3": {
-            name: _display_integral_cm3(layer, positions, valid)
-            for (name, _, _), layer in zip(layers, values, strict=True)
+            name: _display_integral_cm3(layer, positions, layer_valid)
+            for (name, _, _), layer, layer_valid in zip(
+                layers,
+                values,
+                layer_validities,
+                strict=True,
+            )
+        },
+        "valid_slice_counts": {
+            name: int(np.count_nonzero(layer_valid))
+            for (name, _, _), layer_valid in zip(
+                layers,
+                layer_validities,
+                strict=True,
+            )
         },
         "x_axis": "area_cm2",
         "y_axis": "position_superior_mm",
@@ -1121,9 +1668,189 @@ def _draw_profile(
         "x_max_display_cm2": x_max,
         "smoothing": "none",
         "trunk_area_reference": "unfilled" if "trunk_area_cm2" in slices else "unavailable",
+        "trunk_area_reference_label": trunk_reference_label,
         "displayed_trunk_reference_integral_cm3": (
             _display_integral_cm3(trunk, positions, trunk_valid) if trunk is not None else None
         ),
+    }
+
+
+def _draw_hu_heatmap(
+    pdf: canvas.Canvas,
+    case: CaseReportInput,
+    projection: SagittalProjection,
+    panel: ImageBox,
+    shared_y_box: ImageBox,
+    card_top: float,
+) -> dict[str, Any]:
+    slices = case.measurement_bundle.slices
+    layers: list[tuple[str, str, str, str]] = []
+    for name, label, area_column in _profile_layers(slices):
+        stem = area_column.removesuffix("_area_cm2")
+        value_column = f"{stem}_mean_hu"
+        validity_column = f"{stem}_hu_valid"
+        if value_column in slices and validity_column in slices:
+            layers.append((name, label, value_column, validity_column))
+    if not layers:
+        raise ValueError("spine_profile_v2 requires per-slice tissue mean-HU columns.")
+
+    pdf.setFillColor(INK)
+    _text(
+        pdf,
+        panel.left,
+        card_top - CARD_TITLE_OFFSET,
+        "Tissue mean HU",
+        size=8,
+        bold=True,
+    )
+    pdf.setFillColor(MUTED)
+    _text(
+        pdf,
+        panel.left,
+        card_top - CARD_SUBTITLE_OFFSET,
+        "white = NA",
+        size=8,
+    )
+
+    lower = pd.to_numeric(
+        slices["slice_slab_inferior_mm"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    upper = pd.to_numeric(
+        slices["slice_slab_superior_mm"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    displayed = (
+        np.isfinite(lower)
+        & np.isfinite(upper)
+        & (upper >= projection.inferior_mm)
+        & (lower <= projection.superior_mm)
+    )
+    column_width = panel.width / len(layers)
+    pdf.setFillColor(colors.white)
+    pdf.rect(
+        panel.left,
+        shared_y_box.bottom,
+        panel.width,
+        shared_y_box.height,
+        stroke=0,
+        fill=1,
+    )
+    valid_cell_counts: dict[str, int] = {}
+    clipped_cell_counts: dict[str, int] = {}
+    for column_index, (name, label, value_column, validity_column) in enumerate(layers):
+        display_label = label
+        pdf.setFillColor(INK)
+        _centered(
+            pdf,
+            panel.left + (column_index + 0.5) * column_width,
+            shared_y_box.top + 7,
+            display_label,
+            size=8,
+            bold=True,
+        )
+        values = pd.to_numeric(slices[value_column], errors="coerce").to_numpy(dtype=float)
+        valid = (
+            displayed
+            & np.isfinite(values)
+            & slices[validity_column].fillna(False).astype(bool).to_numpy()
+        )
+        valid_cell_counts[name] = int(np.count_nonzero(valid))
+        clipped_cell_counts[name] = int(
+            np.count_nonzero(valid & ((values < HU_SCALE_MIN) | (values > HU_SCALE_MAX)))
+        )
+        x = panel.left + column_index * column_width
+        for row_index in np.flatnonzero(valid):
+            inferior = max(float(lower[row_index]), projection.inferior_mm)
+            superior = min(float(upper[row_index]), projection.superior_mm)
+            y_inferior = projection.y_for_superior(
+                inferior,
+                shared_y_box.bottom,
+                shared_y_box.top,
+            )
+            y_superior = projection.y_for_superior(
+                superior,
+                shared_y_box.bottom,
+                shared_y_box.top,
+            )
+            cell_bottom = min(y_inferior, y_superior)
+            cell_height = abs(y_superior - y_inferior)
+            if cell_height <= 0:
+                continue
+            pdf.setFillColor(_hu_color(values[row_index]))
+            pdf.rect(
+                x,
+                cell_bottom,
+                column_width + 0.2,
+                cell_height + 0.2,
+                stroke=0,
+                fill=1,
+            )
+
+    pdf.setStrokeColor(colors.HexColor("#AEB8C0"))
+    pdf.setLineWidth(0.6)
+    pdf.rect(
+        panel.left,
+        shared_y_box.bottom,
+        panel.width,
+        shared_y_box.height,
+        stroke=1,
+        fill=0,
+    )
+    for column_index in range(1, len(layers)):
+        x = panel.left + column_index * column_width
+        pdf.line(x, shared_y_box.bottom, x, shared_y_box.top)
+
+    _centered(
+        pdf,
+        panel.left + panel.width / 2,
+        shared_y_box.bottom - 14,
+        "HU scale",
+        size=8,
+        bold=True,
+    )
+    bar_bottom = shared_y_box.bottom - 29
+    bar_height = 6.0
+    steps = 32
+    for index in range(steps):
+        fraction = index / (steps - 1)
+        value = HU_SCALE_MIN + fraction * (HU_SCALE_MAX - HU_SCALE_MIN)
+        pdf.setFillColor(_hu_color(value))
+        pdf.rect(
+            panel.left + index * panel.width / steps,
+            bar_bottom,
+            panel.width / steps + 0.2,
+            bar_height,
+            stroke=0,
+            fill=1,
+        )
+    pdf.setFillColor(MUTED)
+    _text(pdf, panel.left, shared_y_box.bottom - 43, "-190", size=8)
+    _centered(
+        pdf,
+        panel.left + panel.width / 2,
+        shared_y_box.bottom - 43,
+        "-20",
+        size=8,
+    )
+    pdf.setFont(FONT_REGULAR, 8)
+    pdf.drawRightString(panel.right, shared_y_box.bottom - 43, "150")
+    return {
+        "tissues": [name for name, _, _, _ in layers],
+        "display_labels": [label for _, label, _, _ in layers],
+        "source_columns": [value_column for _, _, value_column, _ in layers],
+        "validity_columns": [validity_column for _, _, _, validity_column in layers],
+        "valid_cell_counts": valid_cell_counts,
+        "clipped_cell_counts": clipped_cell_counts,
+        "color_scale_hu": [HU_SCALE_MIN, HU_SCALE_MAX],
+        "color_scale_midpoint_hu": (HU_SCALE_MIN + HU_SCALE_MAX) / 2.0,
+        "palette": "cividis_like_monotonic_v1",
+        "aggregation": "per_slice_voxel_mean",
+        "smoothing": "none",
+        "displayed_superior_range_mm": [
+            projection.inferior_mm,
+            projection.superior_mm,
+        ],
     }
 
 
@@ -1145,14 +1872,11 @@ def render_case_page(
     pdf.bookmarkPage(case.case_id)
     pdf.setFillColor(PAGE_BACKGROUND)
     pdf.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, stroke=0, fill=1)
-    content_top = _header(pdf, case, report_id, review_entries)
-    content_bottom = 151.0
-    metadata_card = ImageBox(24, 42, 526, 99)
-    notes_card = ImageBox(560, 42, PAGE_WIDTH - 584, 99)
-    _draw_card(pdf, metadata_card)
+    content_top, header_audit = _header(pdf, case, report_id)
+    notes_card = ImageBox(24, 18, PAGE_WIDTH - 48, 100)
+    content_bottom = notes_card.top + CARD_GAP
     _draw_card(pdf, notes_card)
-    _draw_metadata_card(pdf, case, metadata_card)
-    _draw_notes_card(
+    notes_audit = _draw_notes_card(
         pdf,
         notes_card,
         _report_notes(case, rows, review_entries, warnings),
@@ -1162,6 +1886,22 @@ def render_case_page(
         "layout_revision": LAYOUT_REVISION,
         "displayed_rows": rows,
         "technical_metadata": dict(case.technical_metadata),
+        "design": {
+            "card_gap_pt": CARD_GAP,
+            "content_padding_pt": CARD_PADDING,
+            "title_baseline_from_top_pt": CARD_TITLE_OFFSET,
+            "subtitle_baseline_from_top_pt": CARD_SUBTITLE_OFFSET,
+            "main_card_top_pt": content_top,
+            "main_panel_style": "open_editorial_grid",
+            "card_corner_radius_pt": CARD_CORNER_RADIUS,
+            "rule_width_pt": CARD_BORDER_WIDTH,
+        },
+        "header": header_audit,
+        "notes_qc": {
+            **notes_audit,
+            "box_width_pt": notes_card.width,
+            "box_height_pt": notes_card.height,
+        },
         "sagittal_projection": {
             "method": projection.method,
             "crop_basis": projection.crop_basis,
@@ -1181,38 +1921,63 @@ def render_case_page(
     }
     if settings.layout == "spine_overview_v1":
         sagittal_card = ImageBox(24, content_bottom, 225, content_top - content_bottom)
-        table_card = ImageBox(259, content_bottom, PAGE_WIDTH - 498, content_top - content_bottom)
-        axial_card = ImageBox(
-            table_card.right + 10, content_bottom, 205, content_top - content_bottom
+        table_card = ImageBox(
+            sagittal_card.right + CARD_GAP,
+            content_bottom,
+            PAGE_WIDTH - 494,
+            content_top - content_bottom,
+        )
+        axial_card, anthropometry_card = _axial_card_pair(
+            left=table_card.right + CARD_GAP,
+            width=205,
+            content_bottom=content_bottom,
+            content_top=content_top,
         )
         audit["panel_order"] = [
             "sagittal_spine",
             "vertebral_summary",
             "axial_segmentation",
+            "key_anthropometry",
         ]
-        for card in (sagittal_card, table_card, axial_card):
-            _draw_card(pdf, card)
+        right_column = ImageBox(
+            axial_card.left,
+            content_bottom,
+            axial_card.width,
+            content_top - content_bottom,
+        )
+        audit["main_grid"] = _draw_main_grid(
+            pdf,
+            left=sagittal_card.left,
+            right=right_column.right,
+            bottom=content_bottom,
+            top=content_top,
+            dividers=(
+                sagittal_card.right + CARD_GAP / 2,
+                table_card.right + CARD_GAP / 2,
+            ),
+        )
+        _draw_card(pdf, anthropometry_card)
         pdf.setFillColor(INK)
         _text(
             pdf,
-            sagittal_card.left + 10,
-            sagittal_card.top - 18,
+            sagittal_card.left + CARD_PADDING,
+            sagittal_card.top - CARD_TITLE_OFFSET,
             "Spine localization",
-            size=9,
+            size=8,
             bold=True,
         )
         pdf.setFillColor(MUTED)
         _text(
             pdf,
-            sagittal_card.left + 10,
-            sagittal_card.top - 31,
+            sagittal_card.left + CARD_PADDING,
+            sagittal_card.top - CARD_SUBTITLE_OFFSET,
             "Sagittal thick-slab projection",
             size=8,
         )
         left_panel = ImageBox(
-            sagittal_card.left + 10,
+            sagittal_card.left + CARD_PADDING,
             sagittal_card.bottom + 24,
-            sagittal_card.width - 20,
+            sagittal_card.width - 2 * CARD_PADDING,
             sagittal_card.height - 68,
         )
         image_box = _draw_projection(
@@ -1226,69 +1991,107 @@ def render_case_page(
         pdf.setFillColor(MUTED)
         _text(
             pdf,
-            sagittal_card.left + 10,
+            sagittal_card.left + CARD_PADDING,
             sagittal_card.bottom + 9,
             f"window {int(settings.ct_window[0])} to {int(settings.ct_window[1])} HU",
             size=8,
         )
         audit["axial_view"] = _draw_axial_panel(
             pdf,
-            case,
-            settings,
             axial_view,
             axial_card,
         )
+        audit["anthropometry"] = _draw_anthropometry_card(
+            pdf,
+            case,
+            settings,
+            anthropometry_card,
+        )
         table_panel = ImageBox(
-            table_card.left + 10,
+            table_card.left + CARD_PADDING,
             table_card.bottom + 24,
-            table_card.width - 20,
-            table_card.height - 32,
+            table_card.width - 2 * CARD_PADDING,
+            table_card.height - 34,
         )
         audit["table"] = _draw_table(pdf, rows, settings, projection, table_panel)
     elif settings.layout == "spine_profile_v2":
-        sagittal_card = ImageBox(24, content_bottom, 150, content_top - content_bottom)
+        sagittal_card = ImageBox(24, content_bottom, 140, content_top - content_bottom)
         profile_card = ImageBox(
-            sagittal_card.right + 8, content_bottom, 190, content_top - content_bottom
+            sagittal_card.right + CARD_GAP,
+            content_bottom,
+            165,
+            content_top - content_bottom,
         )
-        axial_card = ImageBox(
-            PAGE_WIDTH - 169, content_bottom, 145, content_top - content_bottom
+        hu_card = ImageBox(
+            profile_card.right + CARD_GAP,
+            content_bottom,
+            124,
+            content_top - content_bottom,
+        )
+        axial_card, anthropometry_card = _axial_card_pair(
+            left=PAGE_WIDTH - 169,
+            width=145,
+            content_bottom=content_bottom,
+            content_top=content_top,
         )
         table_card = ImageBox(
-            profile_card.right + 8,
+            hu_card.right + CARD_GAP,
             content_bottom,
-            axial_card.left - profile_card.right - 16,
+            axial_card.left - hu_card.right - 2 * CARD_GAP,
             content_top - content_bottom,
         )
         audit["panel_order"] = [
             "sagittal_spine",
             "tissue_area_profile",
+            "tissue_hu_heatmap",
             "vertebral_summary",
             "axial_segmentation",
+            "key_anthropometry",
         ]
-        for card in (sagittal_card, profile_card, table_card, axial_card):
-            _draw_card(pdf, card)
+        right_column = ImageBox(
+            axial_card.left,
+            content_bottom,
+            axial_card.width,
+            content_top - content_bottom,
+        )
+        audit["main_grid"] = _draw_main_grid(
+            pdf,
+            left=sagittal_card.left,
+            right=right_column.right,
+            bottom=content_bottom,
+            top=content_top,
+            dividers=(
+                sagittal_card.right + CARD_GAP / 2,
+                profile_card.right + CARD_GAP / 2,
+                hu_card.right + CARD_GAP / 2,
+                table_card.right + CARD_GAP / 2,
+            ),
+        )
+        _draw_card(pdf, anthropometry_card)
         pdf.setFillColor(INK)
         _text(
             pdf,
-            sagittal_card.left + 8,
-            sagittal_card.top - 18,
+            sagittal_card.left + CARD_PADDING,
+            sagittal_card.top - CARD_TITLE_OFFSET,
             "Spine localization",
-            size=9,
+            size=8,
             bold=True,
         )
         pdf.setFillColor(MUTED)
         _text(
             pdf,
-            sagittal_card.left + 8,
-            sagittal_card.top - 31,
+            sagittal_card.left + CARD_PADDING,
+            sagittal_card.top - CARD_SUBTITLE_OFFSET,
             "Sagittal thick-slab projection",
             size=8,
         )
+        profile_axis_space = 54.0
+        image_top_space = 51.0
         left_panel = ImageBox(
-            sagittal_card.left + 8,
-            sagittal_card.bottom + 27,
-            sagittal_card.width - 16,
-            sagittal_card.height - 70,
+            sagittal_card.left + CARD_PADDING,
+            sagittal_card.bottom + profile_axis_space,
+            sagittal_card.width - 2 * CARD_PADDING,
+            sagittal_card.height - profile_axis_space - image_top_space,
         )
         image_box = _draw_projection(
             pdf,
@@ -1301,35 +2104,59 @@ def render_case_page(
         pdf.setFillColor(MUTED)
         _text(
             pdf,
-            sagittal_card.left + 8,
+            sagittal_card.left + CARD_PADDING,
             sagittal_card.bottom + 9,
             f"window {int(settings.ct_window[0])} to {int(settings.ct_window[1])} HU",
             size=8,
         )
         audit["axial_view"] = _draw_axial_panel(
             pdf,
-            case,
-            settings,
             axial_view,
             axial_card,
         )
+        audit["anthropometry"] = _draw_anthropometry_card(
+            pdf,
+            case,
+            settings,
+            anthropometry_card,
+        )
         profile_panel = ImageBox(
-            profile_card.left + 8,
-            profile_card.bottom + 28,
-            profile_card.width - 16,
+            profile_card.left + CARD_PADDING,
+            profile_card.bottom + profile_axis_space,
+            profile_card.width - 2 * CARD_PADDING,
+            image_box.height,
+        )
+        hu_panel = ImageBox(
+            hu_card.left + CARD_PADDING,
+            hu_card.bottom + profile_axis_space,
+            hu_card.width - 2 * CARD_PADDING,
             image_box.height,
         )
         table_panel = ImageBox(
-            table_card.left + 10,
+            table_card.left + CARD_PADDING,
             table_card.bottom + 24,
-            table_card.width - 20,
-            table_card.height - 32,
+            table_card.width - 2 * CARD_PADDING,
+            table_card.height - 34,
         )
-        audit["profile"] = _draw_profile(pdf, case, projection, profile_panel, image_box)
+        audit["profile"] = _draw_profile(
+            pdf,
+            case,
+            projection,
+            profile_panel,
+            image_box,
+            profile_card.top,
+        )
+        audit["hu_heatmap"] = _draw_hu_heatmap(
+            pdf,
+            case,
+            projection,
+            hu_panel,
+            image_box,
+            hu_card.top,
+        )
         audit["table"] = _draw_table(pdf, rows, settings, projection, table_panel)
     else:
         raise ValueError(f"Unsupported report layout {settings.layout!r}.")
-    _footer(pdf, report_id)
     pdf.showPage()
     pdf.save()
     return audit
@@ -1358,14 +2185,23 @@ def render_failure_page(
     pdf.rect(0, PAGE_HEIGHT - 47, PAGE_WIDTH, 47, stroke=0, fill=1)
     pdf.setFillColor(colors.white)
     case_title = f"Case {case_id}"
+    page_identity = f"case page 1 of 1 | report {report_id[:12]}"
+    identity_width = pdfmetrics.stringWidth(page_identity, FONT_REGULAR, 8)
     _text(
         pdf,
         28,
         PAGE_HEIGHT - 25,
         case_title,
-        size=_fit_font_size(case_title, PAGE_WIDTH - 56, maximum=13, font=FONT_BOLD),
+        size=_fit_font_size(
+            case_title,
+            PAGE_WIDTH - 56 - identity_width - 18,
+            maximum=13,
+            font=FONT_BOLD,
+        ),
         bold=True,
     )
+    pdf.setFont(FONT_REGULAR, 8)
+    pdf.drawRightString(PAGE_WIDTH - 28, PAGE_HEIGHT - 25, page_identity)
     pdf.setFillColor(colors.HexColor("#A43E25"))
     banner_bottom = PAGE_HEIGHT - (103 if projection is not None else 145)
     banner_height = 36 if projection is not None else 45
@@ -1604,7 +2440,6 @@ def render_failure_page(
                 "measurement_columns": list(settings.measurement_columns),
             }
         )
-    _footer(pdf, report_id)
     pdf.showPage()
     pdf.save()
     return audit
@@ -1631,7 +2466,8 @@ def render_review_summary_page(
         pdf,
         260,
         PAGE_HEIGHT - 29,
-        f"export report {export_report_id[:16]} | {len(rows)} flagged cases of {total_cases}",
+        f"summary page 1 | report {export_report_id[:12]} | "
+        f"{len(rows)} flagged cases of {total_cases}",
         size=8,
     )
     counts: dict[tuple[str, str], int] = {}
@@ -1684,6 +2520,5 @@ def render_review_summary_page(
         "Automated QC index, not an adjudication. Canonical JSON and QC artifacts remain authoritative.",
         size=8,
     )
-    _footer(pdf, export_report_id, position="summary page 1")
     pdf.showPage()
     pdf.save()

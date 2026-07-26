@@ -31,8 +31,10 @@ rib remnants, fractures, implants, resections, deformity, and limited coverage
 require review. BodyComposition validates geometry and QC contracts but does
 not make an upstream model clinically generalizable.
 
-The default tissue model's frozen public source/model-card gate is still open;
-therefore `1.0.0rc1` is not a publishable final release.
+The default tissue models have frozen public source revisions and model cards.
+Weights remain external to wheels and containers; a deployment is operational
+only after `bodycomposition models sync` has downloaded and verified every
+required asset from its declared source.
 
 The container removes torchmetrics' bundled optional DISTS image-metric
 checkpoint to enforce a strict no-model-weights image. BodyComposition does
@@ -44,8 +46,10 @@ The default body/trunk envelope is derived from predicted tissue compartments,
 not a validated skin model. Connected arms, sparse predictions, devices,
 table/padding, and field-of-view truncation can affect contour and
 circumference. The sacral maximum is called a pelvic circumference, not a
-validated hip circumference. Waist/pelvic extrema require complete eligible
-coverage and remain research phenotypes.
+validated hip circumference. Observed waist/pelvic extrema may be retained from
+an incomplete search, but their eligibility and coverage must be preserved.
+Missing anchors and searches without any valid closed contour remain null.
+These measures remain research phenotypes.
 
 ## Longitudinal measurements
 
@@ -56,6 +60,11 @@ confidence-scored estimate from visible vertebral centroids. It does not
 normalize patient height, stretch anatomy, or impute unscanned regions.
 Comparisons must retain coverage, reference confidence, variants, and
 anatomical missingness. A single-anchor inferred origin is low confidence.
+Affine area and volume integration remains physically correct for oblique
+images, but longitudinal bins currently assign each native slice at its centre.
+Cases whose in-plane superior span exceeds 10 mm are flagged for review. That
+threshold is an engineering trigger, not proof that smaller obliquity is exact
+or clinically validated.
 
 ## Tissue interpretation
 

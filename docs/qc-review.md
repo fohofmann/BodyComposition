@@ -58,8 +58,10 @@ fragmentation, internal gaps, abrupt circumference changes, incomplete
 vertebral territories, insufficient coverage, invalid landmarks, and extrema
 at a search boundary.
 
-Missing measurements remain null with validity and reason columns. Do not
-replace them with zero. A valid zero means the tissue was assessed and absent.
+Missing measurements remain null with validity and reason columns. Observed
+anthropometric extrema from incomplete searches retain a numeric value but are
+marked ineligible with a reason and coverage. Do not replace either state with
+zero. A valid zero means the tissue was assessed and absent.
 
 ## Adjudication
 

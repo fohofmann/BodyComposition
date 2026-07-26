@@ -177,7 +177,7 @@ def _default_mapping() -> dict[str, Any]:
         },
         "reporting": {
             "enabled": False,
-            "layout": "spine_overview_v1",
+            "layout": "spine_profile_v2",
             "individual_pdf": True,
             "combined_pdf": True,
             "page_size": "A4_landscape",
@@ -185,7 +185,6 @@ def _default_mapping() -> dict[str, Any]:
             "measure_aggregation": "territory_mean",
             "measurement_columns": [
                 "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
-                "sm_mean_hu",
                 "vat_total_hu_m190_m30_mean_csa_cm2",
                 "sat_total_hu_m190_m30_mean_csa_cm2",
                 "trunk_mean_circumference_cm",

@@ -107,7 +107,7 @@ bodycomposition results review-queue output/runs/<run-id> --json
 ## Scientific tables
 
 `slices.parquet`, `vertebrae.parquet`, `summaries.parquet`, and
-`signature.parquet` use measurement schema `3.0.0`; their fields and units are
+`signature.parquet` use measurement schema `3.1.0`; their fields and units are
 documented in [measurements.md](measurements.md). The signature is a
 translation-only fixed-millimetre view. It preserves measured physical scale,
 records coverage, and leaves unscanned bins null.

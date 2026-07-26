@@ -1,7 +1,7 @@
 # Canonical physical measurements
 
 The canonical pipeline writes one outcome-blind measurement bundle per case.
-Schema `3.0.0` preserves every acquired slice, compact native vertebral
+Schema `3.1.0` preserves every acquired slice, compact native vertebral
 summaries, established case summaries, and a comparable fixed-millimetre
 longitudinal signature. No tissue curve is stretched and no unscanned anatomy
 is imputed.
@@ -105,12 +105,25 @@ The table contains exactly three ordered rows per detected supported level.
 - mean CSA and pooled HU for every available tissue;
 - trunk mean CSA and circumference.
 
-Volume is not duplicated. For a valid bin:
+Volume is not duplicated. For a fully covered valid bin:
 
 `volume_cm3 = mean_csa_cm2 * bin_integration_length_mm / 10`
 
-The integration length preserves oblique geometry. Whole-territory means and
-volumes can be reconstructed from the three rows.
+For a partially observed bin, use the metric-specific coverage:
+
+`observed_volume_cm3 = mean_csa_cm2 * bin_integration_length_mm * mean_csa_coverage_fraction / 10`
+
+The integration length is the target through-plane length and preserves oblique
+geometry. The coverage term prevents unobserved anatomy from being
+extrapolated. Whole-territory observed means and volumes can be reconstructed
+from the three rows.
+
+An incomplete edge or truncated vertebral territory remains marked
+`territory_complete=false` with its specific reason, but its observed bins are
+still summarized when physical bounds and acquired slices are available.
+`bin_valid` describes whether the observed bin can be measured; it does not
+claim that the full anatomical territory was acquired. Downstream comparisons
+must retain territory completeness and bin coverage.
 
 ## `summaries.parquet`
 
@@ -118,14 +131,21 @@ The single case row contains deterministic views:
 
 - a complete 200-mm L3-centred slab when available;
 - a whole-L3-territory view;
-- minimum valid trunk circumference across complete T10-to-L5 coverage;
+- minimum observed valid trunk circumference across the bounded T10-to-L5
+  search;
 - anatomical mid-waist circumference when rib and iliac landmarks are valid;
-- maximum valid circumference in the complete sacral territory; and
+- maximum observed valid circumference in the bounded sacral territory; and
 - explicitly named waist-to-pelvic ratios.
 
-An extremum at a search boundary is visible but not accepted as an
-unqualified result. The sacral maximum is called pelvic, not hip, until that
-clinical interpretation is separately validated.
+Numerical validity and scientific eligibility are separate. If the required
+anchors and at least one valid contour are present, an observed extremum is
+retained. It is eligible for an unqualified comparison only when the anatomical
+search, acquired interval, and valid-contour coverage are complete and the
+extremum is not at a search boundary. Waist-to-pelvic ratios are calculated
+when both component values are numerically valid and carry their own
+eligibility field. Missing anchors and searches with no valid contour remain
+null. The sacral maximum is called pelvic, not hip, until that clinical
+interpretation is separately validated.
 
 ## `signature.parquet`
 

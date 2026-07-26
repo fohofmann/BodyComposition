@@ -6,6 +6,7 @@ from BodyComposition.measurement.aggregation import (
     aggregate_named_range,
     aggregate_physical_range,
     annotate_slice_anatomy,
+    build_case_summaries,
     build_vertebra_table,
     derive_vertebral_extents,
     derive_vertebral_territories,
@@ -41,11 +42,7 @@ def make_extent(
     valid=True,
     reason=None,
 ):
-    centroid = (
-        (inferior + superior) / 2
-        if inferior is not None and superior is not None
-        else None
-    )
+    centroid = (inferior + superior) / 2 if inferior is not None and superior is not None else None
     return VertebralExtent(
         native_label=native_label,
         anatomical_label=level,
@@ -232,14 +229,10 @@ def test_three_bins_split_thick_slices_exactly_and_reconstruct_volume():
     assert l3["territory_bin"].tolist() == [1, 2, 3]
     assert l3["bin_valid"].all()
     assert l3["bin_height_mm"].tolist() == pytest.approx([20 / 3] * 3)
-    assert l3["bin_integration_length_mm"].tolist() == pytest.approx(
-        [20 / 3] * 3
-    )
+    assert l3["bin_integration_length_mm"].tolist() == pytest.approx([20 / 3] * 3)
 
     whole = aggregate_physical_range(slices, 15.0, 35.0)
-    reconstructed = float(
-        np.sum(l3["sm_mean_csa_cm2"] * l3["bin_height_mm"] / 10.0)
-    )
+    reconstructed = float(np.sum(l3["sm_mean_csa_cm2"] * l3["bin_height_mm"] / 10.0))
     assert reconstructed == pytest.approx(whole["sm_volume_cm3"])
 
 
@@ -261,16 +254,46 @@ def test_oblique_bin_volume_reconstruction_uses_integration_length():
     table = build_vertebra_table(slices, extents, territories, IDENTITY)
     l3 = table.loc[table["vertebral_level"].eq("L3")]
     whole = aggregate_physical_range(slices, 15.0, 35.0)
+    reconstructed = float(np.sum(l3["sm_mean_csa_cm2"] * l3["bin_integration_length_mm"] / 10.0))
+
+    assert l3["bin_integration_length_mm"].tolist() == pytest.approx([25 / 3] * 3)
+    assert reconstructed == pytest.approx(whole["sm_volume_cm3"])
+
+
+def test_partial_bin_volume_reconstruction_uses_metric_coverage():
+    extents = {
+        "L2": make_extent("L2", 40.0, 50.0, native_label=21),
+        "L3": make_extent(
+            "L3",
+            20.0,
+            30.0,
+            native_label=22,
+            complete=False,
+            reason="truncated_vertebra",
+        ),
+        "L4": make_extent("L4", 0.0, 10.0, native_label=23),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        [25.0, 30.0],
+        [30.0, 35.0],
+        area=[20.0, 30.0],
+    )
+
+    table = build_vertebra_table(slices, extents, territories, IDENTITY)
+    l3 = table.loc[table["vertebral_level"].eq("L3")]
+    whole = aggregate_physical_range(slices, 15.0, 35.0, allow_partial=True)
     reconstructed = float(
-        np.sum(
+        np.nansum(
             l3["sm_mean_csa_cm2"]
             * l3["bin_integration_length_mm"]
+            * l3["sm_mean_csa_cm2_coverage_fraction"]
             / 10.0
         )
     )
 
-    assert l3["bin_integration_length_mm"].tolist() == pytest.approx(
-        [25 / 3] * 3
+    assert l3["sm_mean_csa_cm2_coverage_fraction"].tolist() == pytest.approx(
+        [1.0, 0.5, 0.0]
     )
     assert reconstructed == pytest.approx(whole["sm_volume_cm3"])
 
@@ -286,7 +309,7 @@ def test_equal_height_slices_reduce_to_arithmetic_mean_and_variable_height_is_we
     assert variable_result["sm_mean_csa_cm2"] == pytest.approx((10 + 60 + 80) / 6)
 
 
-def test_partial_fov_edge_territories_have_null_bins_but_internal_level_remains_valid():
+def test_incomplete_edge_territories_retain_observed_means_and_completeness_qc():
     extents = {
         "L2": make_extent("L2", 50.0, 60.0, native_label=21),
         "L3": make_extent("L3", 30.0, 40.0, native_label=22),
@@ -298,8 +321,323 @@ def test_partial_fov_edge_territories_have_null_bins_but_internal_level_remains_
 
     assert table.loc[table["vertebral_level"].eq("L3"), "bin_valid"].all()
     edge = table.loc[table["vertebral_level"].isin(["L2", "L4"])]
-    assert not edge["bin_valid"].any()
-    assert set(edge["bin_missing_reason"]) == {"missing_neighbor"}
+    assert edge["bin_valid"].all()
+    assert edge["bin_missing_reason"].isna().all()
+    assert edge["sm_mean_csa_cm2"].eq(10.0).all()
+    assert edge["sm_mean_csa_cm2_valid"].all()
+    assert not edge["territory_complete"].any()
+    assert set(edge["territory_reason"]) == {"missing_neighbor"}
+    assert set(edge["territory_qc_status"]) == {"review"}
+
+
+def test_truncated_internal_vertebra_retains_observed_bin_means():
+    extents = {
+        "L2": make_extent("L2", 50.0, 60.0, native_label=21),
+        "L3": make_extent(
+            "L3",
+            30.0,
+            40.0,
+            native_label=22,
+            complete=False,
+            reason="truncated_vertebra",
+        ),
+        "L4": make_extent("L4", 10.0, 20.0, native_label=23),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(10.0, 60.0, 2.0),
+        np.arange(12.0, 62.0, 2.0),
+        area=np.linspace(10.0, 20.0, 25),
+    )
+
+    table = build_vertebra_table(slices, extents, territories, IDENTITY)
+    l3 = table.loc[table["vertebral_level"].eq("L3")]
+
+    assert not l3["territory_complete"].any()
+    assert set(l3["territory_reason"]) == {"truncated_vertebra"}
+    assert l3["bin_valid"].all()
+    assert l3["sm_mean_csa_cm2_valid"].all()
+    assert l3["sm_mean_csa_cm2"].notna().all()
+    assert l3["coverage_fraction"].eq(1.0).all()
+
+    l3_view = select_l3_view(slices, table, aggregation="territory_mean").iloc[0]
+    assert l3_view["valid"]
+    assert not l3_view["territory_complete"]
+    assert l3_view["reason"] == "truncated_vertebra"
+    assert l3_view["sm_mean_csa_cm2_valid"]
+    assert pd.notna(l3_view["sm_mean_csa_cm2"])
+
+
+def test_partial_anatomical_extrema_are_observed_but_not_unqualified():
+    extents = {
+        "T10": make_extent("T10", 80.0, 90.0, native_label=17),
+        "L5": make_extent("L5", 20.0, 30.0, native_label=24),
+        "SACRUM": make_extent(
+            "SACRUM",
+            -20.0,
+            0.0,
+            native_label=26,
+            complete=False,
+            reason="truncated_vertebra",
+        ),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 90.0, 5.0),
+        np.arange(-15.0, 95.0, 5.0),
+    )
+    slices.loc[slices["position_superior_mm"].eq(42.5), "trunk_circumference_cm"] = 80.0
+    slices.loc[slices["position_superior_mm"].eq(-7.5), "trunk_circumference_cm"] = 120.0
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert summary["ct_min_trunk_circumference_t10_l5_cm"] == pytest.approx(80.0)
+    assert summary["ct_min_trunk_circumference_t10_l5_valid"]
+    assert not summary["ct_min_trunk_circumference_t10_l5_eligible"]
+    assert summary["ct_min_trunk_circumference_t10_l5_reason"] == "missing_neighbor"
+    assert summary["ct_max_pelvic_circumference_cm"] == pytest.approx(120.0)
+    assert summary["ct_max_pelvic_circumference_valid"]
+    assert not summary["ct_max_pelvic_circumference_eligible"]
+    assert summary["ct_max_pelvic_circumference_reason"] == "truncated_vertebra"
+    assert summary["ct_min_waist_to_pelvic_ratio"] == pytest.approx(2.0 / 3.0)
+    assert summary["ct_min_waist_to_pelvic_ratio_valid"]
+    assert not summary["ct_min_waist_to_pelvic_ratio_eligible"]
+    assert summary["ct_min_waist_to_pelvic_ratio_reason"] == "missing_neighbor"
+
+
+def test_extrema_remain_missing_when_every_candidate_contour_is_cropped():
+    extents = {
+        "T10": make_extent("T10", 80.0, 90.0, native_label=17),
+        "L5": make_extent("L5", 20.0, 30.0, native_label=24),
+        "SACRUM": make_extent("SACRUM", -20.0, 0.0, native_label=26),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 90.0, 5.0),
+        np.arange(-15.0, 95.0, 5.0),
+    )
+    sacral = slices["position_superior_mm"].le(7.5)
+    slices.loc[sacral, "trunk_contour_valid"] = False
+    slices.loc[sacral, "trunk_circumference_cm"] = 101.0
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert not summary["ct_max_pelvic_circumference_valid"]
+    assert pd.isna(summary["ct_max_pelvic_circumference_cm"])
+    assert summary["ct_max_pelvic_circumference_reason"] == "invalid_measurement"
+    assert not summary["ct_min_waist_to_pelvic_ratio_valid"]
+    assert pd.isna(summary["ct_min_waist_to_pelvic_ratio"])
+
+
+def test_partial_contour_search_retains_observed_extremum_with_ineligible_qc():
+    extents = {
+        "T9": make_extent("T9", 100.0, 110.0, native_label=16),
+        "T10": make_extent("T10", 80.0, 90.0, native_label=17),
+        "T11": make_extent("T11", 72.5, 82.5, native_label=18),
+        "T12": make_extent("T12", 65.0, 75.0, native_label=19),
+        "L1": make_extent("L1", 57.5, 67.5, native_label=20),
+        "L2": make_extent("L2", 50.0, 60.0, native_label=21),
+        "L3": make_extent("L3", 42.5, 52.5, native_label=22),
+        "L4": make_extent("L4", 35.0, 45.0, native_label=23),
+        "L5": make_extent("L5", 20.0, 30.0, native_label=24),
+        "SACRUM": make_extent("SACRUM", -20.0, 0.0, native_label=26),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 115.0, 5.0),
+        np.arange(-15.0, 120.0, 5.0),
+    )
+    slices.loc[slices["position_superior_mm"].eq(42.5), "trunk_circumference_cm"] = 80.0
+    slices.loc[slices["position_superior_mm"].eq(-7.5), "trunk_circumference_cm"] = 120.0
+    slices.loc[slices["position_superior_mm"].eq(27.5), "trunk_contour_valid"] = False
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert summary["ct_min_trunk_circumference_t10_l5_cm"] == pytest.approx(80.0)
+    assert summary["ct_min_trunk_circumference_t10_l5_valid"]
+    assert not summary["ct_min_trunk_circumference_t10_l5_eligible"]
+    assert summary["ct_min_trunk_circumference_t10_l5_reason"] == "partial_contour_coverage"
+    assert summary["ct_min_trunk_circumference_t10_l5_search_valid_contour_coverage_fraction"] < 1.0
+    assert summary["ct_min_waist_to_pelvic_ratio_valid"]
+    assert not summary["ct_min_waist_to_pelvic_ratio_eligible"]
+    assert summary["ct_min_waist_to_pelvic_ratio_reason"] == "partial_contour_coverage"
+
+
+def test_internal_enumeration_gap_retains_waist_but_marks_it_ineligible():
+    levels = ("T9", "T10", "T12", "L1", "L2", "L3", "L4", "L5", "SACRUM")
+    centers = (175.0, 155.0, 115.0, 95.0, 75.0, 55.0, 35.0, 15.0, -10.0)
+    extents = {
+        level: make_extent(
+            level,
+            center - (10.0 if level == "SACRUM" else 5.0),
+            center + (10.0 if level == "SACRUM" else 5.0),
+            native_label=index + 1,
+        )
+        for index, (level, center) in enumerate(zip(levels, centers, strict=True))
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 180.0, 5.0),
+        np.arange(-15.0, 185.0, 5.0),
+    )
+    slices.loc[slices["position_superior_mm"].eq(82.5), "trunk_circumference_cm"] = 80.0
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert territories["T10"].complete
+    assert territories["L5"].complete
+    assert summary["ct_min_trunk_circumference_t10_l5_valid"]
+    assert not summary["ct_min_trunk_circumference_t10_l5_eligible"]
+    assert summary["ct_min_trunk_circumference_t10_l5_reason"] == "sequence_gap"
+    assert not summary[
+        "ct_min_trunk_circumference_t10_l5_search_anatomically_complete"
+    ]
+
+
+def test_sequence_gap_at_waist_search_boundary_is_not_treated_as_complete():
+    levels = ("T8", "T10", "T11", "T12", "L1", "L2", "L3", "L4", "L5", "SACRUM")
+    centers = (175.0, 155.0, 135.0, 115.0, 95.0, 75.0, 55.0, 35.0, 15.0, -10.0)
+    extents = {
+        level: make_extent(
+            level,
+            center - (10.0 if level == "SACRUM" else 5.0),
+            center + (10.0 if level == "SACRUM" else 5.0),
+            native_label=index + 1,
+        )
+        for index, (level, center) in enumerate(zip(levels, centers, strict=True))
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 180.0, 5.0),
+        np.arange(-15.0, 185.0, 5.0),
+    )
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert territories["T10"].complete
+    assert territories["T10"].sequence_gap_cranial
+    assert summary["ct_min_trunk_circumference_t10_l5_valid"]
+    assert not summary["ct_min_trunk_circumference_t10_l5_eligible"]
+    assert summary["ct_min_trunk_circumference_t10_l5_reason"] == "sequence_gap"
+
+
+def test_sacral_cranial_sequence_gap_retains_pelvic_maximum_as_ineligible():
+    extents = {
+        "L4": make_extent("L4", 20.0, 30.0, native_label=23),
+        "SACRUM": make_extent("SACRUM", -20.0, 0.0, native_label=26),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 35.0, 5.0),
+        np.arange(-15.0, 40.0, 5.0),
+    )
+    slices.loc[slices["position_superior_mm"].eq(-7.5), "trunk_circumference_cm"] = 120.0
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert territories["SACRUM"].complete
+    assert territories["SACRUM"].sequence_gap_cranial
+    assert summary["ct_max_pelvic_circumference_valid"]
+    assert not summary["ct_max_pelvic_circumference_eligible"]
+    assert summary["ct_max_pelvic_circumference_reason"] == "sequence_gap"
+
+
+def test_extremum_plateau_prefers_an_interior_slice_over_a_search_boundary():
+    levels = ("T9", "T10", "T11", "T12", "L1", "L2", "L3", "L4", "L5", "SACRUM")
+    centers = (175.0, 155.0, 135.0, 115.0, 95.0, 75.0, 55.0, 35.0, 15.0, -10.0)
+    extents = {
+        level: make_extent(
+            level,
+            center - (10.0 if level == "SACRUM" else 5.0),
+            center + (10.0 if level == "SACRUM" else 5.0),
+            native_label=index + 1,
+        )
+        for index, (level, center) in enumerate(zip(levels, centers, strict=True))
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 180.0, 5.0),
+        np.arange(-15.0, 185.0, 5.0),
+    )
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert summary["ct_min_trunk_circumference_t10_l5_valid"]
+    assert summary["ct_min_trunk_circumference_t10_l5_eligible"]
+    assert not summary["ct_min_trunk_circumference_t10_l5_at_search_boundary"]
+    assert summary["ct_max_pelvic_circumference_valid"]
+    assert summary["ct_max_pelvic_circumference_eligible"]
+    assert not summary["ct_max_pelvic_circumference_at_search_boundary"]
+
+
+def test_unique_extremum_at_search_boundary_is_observed_but_ineligible():
+    levels = ("T9", "T10", "T11", "T12", "L1", "L2", "L3", "L4", "L5", "SACRUM")
+    centers = (175.0, 155.0, 135.0, 115.0, 95.0, 75.0, 55.0, 35.0, 15.0, -10.0)
+    extents = {
+        level: make_extent(
+            level,
+            center - (10.0 if level == "SACRUM" else 5.0),
+            center + (10.0 if level == "SACRUM" else 5.0),
+            native_label=index + 1,
+        )
+        for index, (level, center) in enumerate(zip(levels, centers, strict=True))
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 180.0, 5.0),
+        np.arange(-15.0, 185.0, 5.0),
+    )
+    waist_inferior = float(territories["L5"].inferior_mm)
+    contributing = slices["slice_slab_superior_mm"].gt(waist_inferior)
+    boundary_index = slices.loc[contributing, "position_superior_mm"].idxmin()
+    slices.loc[boundary_index, "trunk_circumference_cm"] = 80.0
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert summary["ct_min_trunk_circumference_t10_l5_valid"]
+    assert not summary["ct_min_trunk_circumference_t10_l5_eligible"]
+    assert summary["ct_min_trunk_circumference_t10_l5_at_search_boundary"]
+    assert summary["ct_min_trunk_circumference_t10_l5_reason"] == "boundary_extremum"
 
 
 def test_l3_centroid_slice_uses_full_point_to_plane_distance():
@@ -351,6 +689,10 @@ def test_named_range_uses_territory_bounds_and_explicit_partial_mode():
 
     assert not strict["range_valid"]
     assert strict["range_missing_reason"] == "missing_anchor"
+    assert not strict["range_eligible"]
+    assert strict["range_eligibility_reason"] == "missing_anchor"
     assert partial["range_valid"]
     assert partial["allow_partial"]
+    assert not partial["range_eligible"]
+    assert partial["range_eligibility_reason"] == "missing_neighbor"
     assert BINS_PER_VERTEBRAL_TERRITORY == 3

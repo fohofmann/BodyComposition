@@ -14,8 +14,8 @@ import pyarrow as pa
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCStatus
 
-MEASUREMENT_SCHEMA_VERSION = "3.0.0"
-VERTEBRAL_TERRITORY_SCHEMA_VERSION = "native-physical-territories-v1-bins3"
+MEASUREMENT_SCHEMA_VERSION = "3.1.0"
+VERTEBRAL_TERRITORY_SCHEMA_VERSION = "native-physical-territories-v2-bins3"
 BINS_PER_VERTEBRAL_TERRITORY = 3
 SIGNATURE_SCHEMA_VERSION = "vertebral-reference-fixed-mm-v1"
 REFERENCE_ALIGNMENT_VERSION = "robust-vertebral-linear-reference-v1"
@@ -103,11 +103,20 @@ SUMMARY_REQUIRED_COLUMNS = {
     "case_id",
     "l3_200mm_slab_valid",
     "l3_200mm_slab_reason",
+    "l3_territory_valid",
+    "l3_territory_complete",
+    "l3_territory_reason",
+    "l3_territory_coverage_fraction",
     "ct_min_trunk_circumference_t10_l5_cm",
     "ct_min_trunk_circumference_t10_l5_valid",
     "ct_min_trunk_circumference_t10_l5_eligible",
     "ct_min_trunk_circumference_t10_l5_reason",
+    "ct_min_trunk_circumference_t10_l5_position_superior_mm",
+    "ct_min_trunk_circumference_t10_l5_slice_id",
+    "ct_min_trunk_circumference_t10_l5_at_search_boundary",
+    "ct_min_trunk_circumference_t10_l5_search_acquisition_coverage_fraction",
     "ct_min_trunk_circumference_t10_l5_search_valid_contour_coverage_fraction",
+    "ct_min_trunk_circumference_t10_l5_search_anatomically_complete",
     "ct_midwaist_circumference_cm",
     "ct_midwaist_circumference_valid",
     "ct_midwaist_circumference_reason",
@@ -121,12 +130,20 @@ SUMMARY_REQUIRED_COLUMNS = {
     "ct_max_pelvic_circumference_valid",
     "ct_max_pelvic_circumference_eligible",
     "ct_max_pelvic_circumference_reason",
+    "ct_max_pelvic_circumference_position_superior_mm",
+    "ct_max_pelvic_circumference_slice_id",
+    "ct_max_pelvic_circumference_at_search_boundary",
+    "ct_max_pelvic_circumference_search_acquisition_coverage_fraction",
     "ct_max_pelvic_circumference_search_valid_contour_coverage_fraction",
+    "ct_max_pelvic_circumference_search_anatomically_complete",
+    "ct_max_pelvic_search_definition",
     "ct_min_waist_to_pelvic_ratio",
     "ct_min_waist_to_pelvic_ratio_valid",
+    "ct_min_waist_to_pelvic_ratio_eligible",
     "ct_min_waist_to_pelvic_ratio_reason",
     "ct_midwaist_to_pelvic_ratio",
     "ct_midwaist_to_pelvic_ratio_valid",
+    "ct_midwaist_to_pelvic_ratio_eligible",
     "ct_midwaist_to_pelvic_ratio_reason",
 }
 SIGNATURE_REQUIRED_COLUMNS = {
@@ -192,6 +209,7 @@ for _destination, _source in SIGNATURE_CORE_CHANNELS:
 MISSING_REASONS = {
     "outside_fov",
     "partial_fov",
+    "partial_contour_coverage",
     "missing_vertebra",
     "truncated_vertebra",
     "segmentation_failure",
@@ -210,6 +228,7 @@ MISSING_REASONS = {
     "touching_image_boundary",
     "unassigned_edge",
     "missing_neighbor",
+    "sequence_gap",
 }
 
 
@@ -275,9 +294,7 @@ _INTEGER_COLUMNS = {
 def _storage_kind(column: str) -> str:
     """Return the canonical nullable storage family for one table column."""
 
-    if column == "contributing_slice_ids" or column.endswith(
-        "_contributing_slice_ids"
-    ):
+    if column == "contributing_slice_ids" or column.endswith("_contributing_slice_ids"):
         return "list_int64"
     if column in _STRING_COLUMNS or column.endswith(
         (
@@ -347,9 +364,7 @@ def normalize_measurement_table_storage(table: pd.DataFrame) -> pd.DataFrame:
                         item,
                         (int, np.integer),
                     ):
-                        raise TypeError(
-                            f"{column} must contain lists of integer slice IDs."
-                        )
+                        raise TypeError(f"{column} must contain lists of integer slice IDs.")
                     normalized.append(int(item))
                 values.append(normalized)
             output[column] = pd.Series(
@@ -362,13 +377,9 @@ def normalize_measurement_table_storage(table: pd.DataFrame) -> pd.DataFrame:
         elif kind == "boolean":
             output[column] = output[column].astype("boolean")
         elif kind == "int64":
-            output[column] = pd.to_numeric(output[column], errors="raise").astype(
-                "Int64"
-            )
+            output[column] = pd.to_numeric(output[column], errors="raise").astype("Int64")
         else:
-            output[column] = pd.to_numeric(output[column], errors="raise").astype(
-                "Float64"
-            )
+            output[column] = pd.to_numeric(output[column], errors="raise").astype("Float64")
     return output
 
 
@@ -421,9 +432,7 @@ def validate_signature_contract(
         table["relative_bin_index"].to_numpy(dtype=np.int64),
         expected_relative,
     ):
-        raise ValueError(
-            f"{table_name} relative_bin_index differs from the fixed L3 grid."
-        )
+        raise ValueError(f"{table_name} relative_bin_index differs from the fixed L3 grid.")
     for column, expected in (
         ("reference_inferior_mm", expected_inferior),
         ("reference_center_mm", expected_centres),
@@ -439,23 +448,13 @@ def validate_signature_contract(
             rtol=0.0,
             atol=1e-9,
         ):
-            raise ValueError(
-                f"{table_name} {column} differs from the fixed L3-centred grid."
-            )
+            raise ValueError(f"{table_name} {column} differs from the fixed L3-centred grid.")
     if not table["signature_schema_version"].eq(SIGNATURE_SCHEMA_VERSION).all():
-        raise ValueError(
-            f"{table_name} has an unsupported signature_schema_version."
-        )
-    if not table["reference_alignment_version"].eq(
-        REFERENCE_ALIGNMENT_VERSION
-    ).all():
-        raise ValueError(
-            f"{table_name} has an unsupported reference_alignment_version."
-        )
+        raise ValueError(f"{table_name} has an unsupported signature_schema_version.")
+    if not table["reference_alignment_version"].eq(REFERENCE_ALIGNMENT_VERSION).all():
+        raise ValueError(f"{table_name} has an unsupported reference_alignment_version.")
     if not table["reference_level"].eq(SIGNATURE_REFERENCE_LEVEL).all():
-        raise ValueError(
-            f"{table_name} reference_level must be {SIGNATURE_REFERENCE_LEVEL}."
-        )
+        raise ValueError(f"{table_name} reference_level must be {SIGNATURE_REFERENCE_LEVEL}.")
     profile_ids = table["signature_profile_id"].dropna().astype(str).unique()
     if len(profile_ids) != 1 or not table["signature_profile_id"].notna().all():
         raise ValueError(f"{table_name} must contain one signature_profile_id.")
@@ -472,19 +471,13 @@ def validate_signature_contract(
         "reference_variant_sequence",
     ):
         if table[column].nunique(dropna=False) != 1:
-            raise ValueError(
-                f"{table_name} has inconsistent {column} across fixed bins."
-            )
+            raise ValueError(f"{table_name} has inconsistent {column} across fixed bins.")
 
     anchor_count = int(table["reference_alignment_anchor_count"].iloc[0])
     anchor_levels = str(table["reference_alignment_anchor_levels"].iloc[0])
-    observed_anchor_count = len(
-        [level for level in anchor_levels.split(",") if level]
-    )
+    observed_anchor_count = len([level for level in anchor_levels.split(",") if level])
     if anchor_count < 0 or observed_anchor_count != anchor_count:
-        raise ValueError(
-            f"{table_name} has inconsistent reference alignment anchors."
-        )
+        raise ValueError(f"{table_name} has inconsistent reference alignment anchors.")
 
     alignment_valid = bool(table["reference_alignment_valid"].iloc[0])
     origin = pd.to_numeric(
@@ -507,18 +500,12 @@ def validate_signature_contract(
         table["contributing_slice_count"],
         errors="coerce",
     ).to_numpy(dtype=float)
-    if not np.all(np.isfinite(contributing_slices)) or np.any(
-        contributing_slices < 0
-    ):
-        raise ValueError(
-            f"{table_name} has invalid contributing_slice_count values."
-        )
+    if not np.all(np.isfinite(contributing_slices)) or np.any(contributing_slices < 0):
+        raise ValueError(f"{table_name} has invalid contributing_slice_count values.")
 
     if alignment_valid:
         if not np.all(np.isfinite(origin)):
-            raise ValueError(
-                f"{table_name} has a valid alignment without a finite origin."
-            )
+            raise ValueError(f"{table_name} has a valid alignment without a finite origin.")
         if not np.allclose(
             physical_inferior,
             origin + expected_inferior,
@@ -533,26 +520,16 @@ def validate_signature_contract(
             raise ValueError(
                 f"{table_name} physical bounds do not match its translation-only reference."
             )
-        if not np.all(np.isfinite(coverage)) or np.any(
-            (coverage < 0.0) | (coverage > 1.0)
-        ):
-            raise ValueError(
-                f"{table_name} coverage_fraction must be finite and within [0, 1]."
-            )
+        if not np.all(np.isfinite(coverage)) or np.any((coverage < 0.0) | (coverage > 1.0)):
+            raise ValueError(f"{table_name} coverage_fraction must be finite and within [0, 1].")
         bin_valid = table["bin_valid"].fillna(False).to_numpy(dtype=bool)
         if not np.array_equal(bin_valid, coverage > 0.0):
-            raise ValueError(
-                f"{table_name} bin_valid does not match acquired coverage."
-            )
+            raise ValueError(f"{table_name} bin_valid does not match acquired coverage.")
         outside_fov = coverage == 0.0
         if np.any(contributing_slices[outside_fov] != 0):
-            raise ValueError(
-                f"{table_name} has contributing slices outside the acquired FOV."
-            )
+            raise ValueError(f"{table_name} has contributing slices outside the acquired FOV.")
         if not table.loc[outside_fov, "bin_reason"].eq("outside_fov").all():
-            raise ValueError(
-                f"{table_name} must mark zero-coverage bins as outside_fov."
-            )
+            raise ValueError(f"{table_name} must mark zero-coverage bins as outside_fov.")
     else:
         if (
             np.any(np.isfinite(origin))
@@ -560,19 +537,11 @@ def validate_signature_contract(
             or np.any(np.isfinite(physical_superior))
             or np.any(np.isfinite(coverage))
         ):
-            raise ValueError(
-                f"{table_name} has physical coordinates despite unresolved alignment."
-            )
-        if table["bin_valid"].fillna(False).any() or np.any(
-            contributing_slices != 0
-        ):
-            raise ValueError(
-                f"{table_name} has acquired bins despite unresolved alignment."
-            )
+            raise ValueError(f"{table_name} has physical coordinates despite unresolved alignment.")
+        if table["bin_valid"].fillna(False).any() or np.any(contributing_slices != 0):
+            raise ValueError(f"{table_name} has acquired bins despite unresolved alignment.")
         if not bool(table["reference_alignment_review_required"].iloc[0]):
-            raise ValueError(
-                f"{table_name} unresolved alignment must require review."
-            )
+            raise ValueError(f"{table_name} unresolved alignment must require review.")
 
 
 def _validate_mask(mask_zyx: np.ndarray, geometry: ImageGeometry, name: str) -> np.ndarray:
@@ -818,11 +787,68 @@ class MeasurementBundle:
             for column, expected in expected_identity.items():
                 if not table[column].eq(expected).all():
                     raise ValueError(f"Measurement table {name} has inconsistent {column} values.")
+        summary = self.summaries.iloc[0]
+        tolerance_values = pd.to_numeric(
+            self.slices["full_coverage_tolerance"],
+            errors="coerce",
+        ).dropna().unique()
+        if len(tolerance_values) != 1:
+            raise ValueError("slices must contain one full_coverage_tolerance.")
+        full_coverage_tolerance = float(tolerance_values[0])
+        for prefix in (
+            "ct_min_trunk_circumference_t10_l5",
+            "ct_max_pelvic_circumference",
+        ):
+            valid = bool(summary[f"{prefix}_valid"])
+            eligible = bool(summary[f"{prefix}_eligible"])
+            if eligible and not valid:
+                raise ValueError(f"{prefix} cannot be eligible when it is invalid.")
+            if not eligible:
+                continue
+            acquisition_coverage = float(
+                summary[f"{prefix}_search_acquisition_coverage_fraction"]
+            )
+            contour_coverage = float(
+                summary[f"{prefix}_search_valid_contour_coverage_fraction"]
+            )
+            if (
+                not bool(summary[f"{prefix}_search_anatomically_complete"])
+                or bool(summary[f"{prefix}_at_search_boundary"])
+                or not np.isfinite(acquisition_coverage)
+                or acquisition_coverage < full_coverage_tolerance
+                or not np.isfinite(contour_coverage)
+                or contour_coverage < full_coverage_tolerance
+            ):
+                raise ValueError(
+                    f"{prefix} eligibility contradicts anatomy, coverage, or boundary QC."
+                )
+        for prefix in (
+            "ct_min_waist_to_pelvic_ratio",
+            "ct_midwaist_to_pelvic_ratio",
+        ):
+            if bool(summary[f"{prefix}_eligible"]) and not bool(summary[f"{prefix}_valid"]):
+                raise ValueError(f"{prefix} cannot be eligible when it is invalid.")
+        if bool(summary["ct_min_waist_to_pelvic_ratio_eligible"]) and not (
+            bool(summary["ct_min_trunk_circumference_t10_l5_eligible"])
+            and bool(summary["ct_max_pelvic_circumference_eligible"])
+        ):
+            raise ValueError(
+                "Minimum waist-to-pelvic ratio eligibility requires eligible components."
+            )
+        if bool(summary["ct_midwaist_to_pelvic_ratio_eligible"]) and not (
+            bool(summary["ct_midwaist_circumference_valid"])
+            and bool(summary["ct_max_pelvic_circumference_eligible"])
+        ):
+            raise ValueError(
+                "Mid-waist-to-pelvic ratio eligibility requires valid, eligible components."
+            )
         invalid = ~self.vertebrae["bin_valid"].fillna(False).astype(bool)
         reasons = set(self.vertebrae.loc[invalid, "bin_missing_reason"].dropna().astype(str))
         unknown_reasons = sorted(reasons - MISSING_REASONS)
         if unknown_reasons:
-            raise ValueError(f"Vertebral territories have unknown missing reasons: {unknown_reasons}.")
+            raise ValueError(
+                f"Vertebral territories have unknown missing reasons: {unknown_reasons}."
+            )
 
     @property
     def qc_status(self) -> QCStatus:

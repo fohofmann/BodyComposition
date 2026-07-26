@@ -14,6 +14,7 @@ from jsonschema import Draft202012Validator
 import BodyComposition.service as service_module
 from BodyComposition import cli
 from BodyComposition.config import ConfigError, PipelineConfig, configuration_schema
+from BodyComposition.measurement.contracts import MEASUREMENT_SCHEMA_VERSION
 from BodyComposition.model_manager import (
     INTERNAL_MODELS,
     ModelAssetError,
@@ -132,7 +133,7 @@ class SuccessfulPipeline:
         memory["tmp/measurement_bundle"] = SimpleNamespace(
             qc_status=SimpleNamespace(value="pass"),
             qc_flags=(),
-            slices=pd.DataFrame({"schema_version": ["3.0.0"]}),
+            slices=pd.DataFrame({"schema_version": [MEASUREMENT_SCHEMA_VERSION]}),
         )
         memory["tmp/stage_events"] = [
             {"stage": "Synthetic", "result_code": "succeeded", "duration_seconds": 0.01}
@@ -278,9 +279,7 @@ def test_internal_model_verification_separates_local_readiness_from_release_pin(
         config,
         (report,),
         include_all_selectable=True,
-    ) == (
-        "bodycomposition_resenc_l_v1:upstream_revision_unresolved",
-    )
+    ) == ("bodycomposition_resenc_l_v1:upstream_revision_unresolved",)
     assert sync_model(model_id, tmp_path).ready
 
 
@@ -292,9 +291,7 @@ def test_missing_spineps_bundle_does_not_report_unverified_files_as_checked(
 
     monkeypatch.setattr(
         "BodyComposition.vertebral.spineps_assets.verify_model_bundle",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssetVerificationError("bundle is missing")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssetVerificationError("bundle is missing")),
     )
 
     report = verify_model("spineps_veridah_ct_v1", tmp_path)
@@ -345,7 +342,10 @@ def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     )
     assert first.execution_status == ExecutionStatus.SUCCEEDED
     assert first.qc_status == QCStatus.REVIEW
-    assert first.output_path == tmp_path / "outputs/runs/cohort-1/cases/pseudonym-1" / first.analysis_id
+    assert (
+        first.output_path
+        == tmp_path / "outputs/runs/cohort-1/cases/pseudonym-1" / first.analysis_id
+    )
     assert (first.output_path / "tables/slices.parquet").is_file()
     assert not any((tmp_path / "outputs/runs/cohort-1/.attempts").glob("*"))
     manifest_text = first.manifest_path.read_text(encoding="utf-8")
@@ -604,9 +604,7 @@ def test_cli_convert_is_a_thin_adapter(monkeypatch, capsys, tmp_path):
     )
 
     assert code == 0
-    assert json.loads(capsys.readouterr().out) == json.loads(
-        json.dumps(expected, default=str)
-    )
+    assert json.loads(capsys.readouterr().out) == json.loads(json.dumps(expected, default=str))
     assert calls == {
         "input": tmp_path / "dicom",
         "output": output,
@@ -668,7 +666,15 @@ def test_doctor_defaults_to_operational_gate_and_offers_release_gate(
 def test_cli_exposes_only_the_one_release_command_tree():
     help_text = cli.build_parser().format_help()
     for command in (
-        "analyze", "convert", "batch", "models", "config", "results", "reports", "doctor", "version"
+        "analyze",
+        "convert",
+        "batch",
+        "models",
+        "config",
+        "results",
+        "reports",
+        "doctor",
+        "version",
     ):
         assert command in help_text
     assert "BodyCompositionFast" not in help_text

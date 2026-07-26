@@ -61,17 +61,19 @@ def _metric_value(
         "source_column": source,
         "bin_values": [],
         "bin_integration_length_mm": [],
+        "bin_coverage_fraction": [],
+        "effective_integration_length_mm": [],
         "aggregation": "integration_length_weighted_mean",
     }
     if source not in group:
         return None, False, "invalid_measurement", audit
-    weights = pd.to_numeric(
+    target_lengths = pd.to_numeric(
         group["bin_integration_length_mm"], errors="coerce"
     ).to_numpy(dtype=float)
     values = pd.to_numeric(group[source], errors="coerce").to_numpy(dtype=float)
     audit["bin_values"] = [float(value) if math.isfinite(value) else None for value in values]
     audit["bin_integration_length_mm"] = [
-        float(value) if math.isfinite(value) else None for value in weights
+        float(value) if math.isfinite(value) else None for value in target_lengths
     ]
     valid_column = f"{source}_valid"
     source_valid = (
@@ -80,11 +82,34 @@ def _metric_value(
         else np.isfinite(values)
     )
     bin_valid = group["bin_valid"].fillna(False).astype(bool).to_numpy()
-    base_valid = (
+    territory_complete = group["territory_complete"].fillna(False).astype(bool).all()
+    structural_valid = (
         len(group) == BINS_PER_VERTEBRAL_TERRITORY
-        and np.all(bin_valid)
-        and np.all(np.isfinite(weights))
-        and np.all(weights > 0)
+        and np.all(np.isfinite(target_lengths))
+        and np.all(target_lengths > 0)
+    )
+    coverage_column = f"{source}_coverage_fraction"
+    coverage = (
+        pd.to_numeric(group[coverage_column], errors="coerce").to_numpy(dtype=float)
+        if coverage_column in group
+        else bin_valid.astype(float)
+    )
+    effective_lengths = target_lengths * coverage
+    audit["bin_coverage_fraction"] = [
+        float(value) if math.isfinite(value) else None for value in coverage
+    ]
+    audit["effective_integration_length_mm"] = [
+        float(value) if math.isfinite(value) else None for value in effective_lengths
+    ]
+    measurement_valid = (
+        bin_valid
+        & source_valid
+        & np.isfinite(values)
+        & np.isfinite(coverage)
+        & (coverage > 0)
+        & (coverage <= 1)
+        & np.isfinite(effective_lengths)
+        & (effective_lengths > 0)
     )
 
     if definition["kind"] == "hu":
@@ -98,30 +123,71 @@ def _metric_value(
             if area_valid_column in group
             else np.isfinite(areas)
         )
-        volume_weights = areas * weights
+        area_coverage_column = f"{area_source}_coverage_fraction"
+        area_coverage = (
+            pd.to_numeric(group[area_coverage_column], errors="coerce").to_numpy(dtype=float)
+            if area_coverage_column in group
+            else bin_valid.astype(float)
+        )
+        area_lengths = target_lengths * area_coverage
+        area_support_valid = (
+            bin_valid
+            & area_valid
+            & np.isfinite(areas)
+            & (areas >= 0)
+            & np.isfinite(area_coverage)
+            & (area_coverage > 0)
+            & (area_coverage <= 1)
+            & np.isfinite(area_lengths)
+            & (area_lengths > 0)
+        )
+        nonempty = area_support_valid & (areas > 0)
+        hu_support_valid = nonempty & source_valid & np.isfinite(values)
+        volume_weights = areas * area_lengths
         audit["aggregation"] = "tissue_volume_weighted_mean"
         audit["weight_source_column"] = area_source
         audit["weight_source_bin_values"] = [
             float(value) if math.isfinite(value) else None for value in areas
         ]
-        if (
-            not base_valid
-            or not np.all(area_valid)
-            or not np.all(np.isfinite(areas))
-            or np.any(areas < 0)
+        audit["weight_source_bin_coverage_fraction"] = [
+            float(value) if math.isfinite(value) else None for value in area_coverage
+        ]
+        audit["weight_source_effective_integration_length_mm"] = [
+            float(value) if math.isfinite(value) else None for value in area_lengths
+        ]
+        if not structural_valid:
+            return None, False, _first_reason(group, source, "invalid_measurement"), audit
+        if territory_complete and (
+            not np.all(area_support_valid) or not np.all(hu_support_valid[nonempty])
         ):
             return None, False, _first_reason(group, source, "invalid_measurement"), audit
-        nonempty = areas > 0
         if not np.any(nonempty):
             return None, False, "empty_tissue", audit
-        if not np.all(source_valid[nonempty]) or not np.all(np.isfinite(values[nonempty])):
+        if not np.any(hu_support_valid):
             return None, False, _first_reason(group, source, "invalid_measurement"), audit
-        value = float(np.average(values[nonempty], weights=volume_weights[nonempty]))
+        value = float(
+            np.average(
+                values[hu_support_valid],
+                weights=volume_weights[hu_support_valid],
+            )
+        )
     else:
-        valid = base_valid and np.all(source_valid) and np.all(np.isfinite(values))
+        valid = bool(
+            structural_valid
+            and (
+                np.all(measurement_valid)
+                if territory_complete
+                else np.any(measurement_valid)
+            )
+        )
         if not valid:
             return None, False, _first_reason(group, source, "invalid_measurement"), audit
-        value = float(np.average(values, weights=weights))
+        value = float(
+            np.average(
+                values[measurement_valid],
+                weights=effective_lengths[measurement_valid],
+            )
+        )
     audit["unrounded_value"] = value
     return value, True, None, audit
 
