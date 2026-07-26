@@ -114,8 +114,12 @@ class SuccessfulPipeline:
                     "stage": "orientation",
                     "severity": "warning",
                     "reason": "The input was losslessly reoriented.",
-                    "observed": {"orientation_changed": True},
-                    "threshold": {},
+                    "observed": {
+                        "orientation_changed": True,
+                        "native_label": np.int64(24),
+                        "support_labels": np.asarray([23, 24], dtype=np.int64),
+                    },
+                    "threshold": {"minimum_votes": np.int64(23)},
                     "suggested_action": "Review the orientation scout.",
                 },
             ),
@@ -355,7 +359,27 @@ def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     assert "<mounted-model-cache>" in manifest_text
     run = inspect_result(tmp_path / "outputs/runs/cohort-1")
     assert run.aggregate_paths["cases"].is_file()
-    assert len(pd.read_parquet(run.aggregate_paths["review_queue"])) == 1
+    review_queue = pd.read_parquet(run.aggregate_paths["review_queue"])
+    assert len(review_queue) == 1
+    assert json.loads(review_queue.iloc[0]["observed_json"]) == {
+        "native_label": 24,
+        "orientation_changed": True,
+        "support_labels": [23, 24],
+    }
+    assert json.loads(review_queue.iloc[0]["thresholds_json"]) == {
+        "minimum_votes": 23,
+    }
+    manifest = json.loads(first.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["qc_flags"][0]["observed"]["native_label"] == 24
+    assert manifest["qc_flags"][0]["thresholds"]["minimum_votes"] == 23
+    json.dumps(first.as_dict(), allow_nan=False)
+    reloaded_paths = service_module.aggregate_results(run.output_path)
+    reloaded_queue = pd.read_parquet(reloaded_paths["review_queue"])
+    assert json.loads(reloaded_queue.iloc[0]["observed_json"]) == {
+        "native_label": 24,
+        "orientation_changed": True,
+        "support_labels": [23, 24],
+    }
 
     second = service.analyze_case(
         source,
@@ -365,6 +389,36 @@ def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     )
     assert second.execution_status == ExecutionStatus.SKIPPED_IDENTICAL
     assert SuccessfulPipeline.instances == 1
+
+
+def test_qc_evidence_json_normalization_is_strict_and_private(tmp_path):
+    flag = {
+        "observed": {np.int64(24): np.int64(2)},
+        "thresholds": {"values": np.asarray([1.5, 2.5])},
+    }
+    normalized = service_module._normalise_flag(flag, default_stage="measurement")
+    assert normalized["observed"] == {"24": 2}
+    assert normalized["thresholds"] == {"values": [1.5, 2.5]}
+
+    sensitive_path = tmp_path / "MRN-123"
+    with pytest.raises(TypeError) as unsupported:
+        service_module._normalise_flag(
+            {"observed": {"source": sensitive_path}},
+            default_stage="measurement",
+        )
+    assert str(sensitive_path) not in str(unsupported.value)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        service_module._normalise_flag(
+            {"observed": {"value": np.inf}},
+            default_stage="measurement",
+        )
+
+    with pytest.raises(TypeError, match="collide"):
+        service_module._normalise_flag(
+            {"observed": {"1": "string", 1: "integer"}},
+            default_stage="measurement",
+        )
 
 
 def test_service_rejects_loaded_pixels_that_differ_from_preflight(

@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shutil
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from time import monotonic, sleep
 from typing import Any, cast
 from uuid import uuid4
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -139,6 +142,53 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:16]}"
 
 
+def _json_mapping_key(value: Any) -> str:
+    if isinstance(value, Enum):
+        value = value.value
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    raise TypeError("QC evidence mapping keys must be strings or integers.")
+
+
+def _json_native(value: Any) -> Any:
+    """Convert nested QC evidence to deterministic, safe JSON values."""
+
+    if isinstance(value, Enum):
+        return _json_native(value.value)
+    if isinstance(value, np.generic):
+        value = value.item()
+    if value is pd.NA:
+        return None
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("QC evidence contains a non-finite floating-point value.")
+        return value
+    if isinstance(value, np.ndarray):
+        return _json_native(value.tolist())
+    if isinstance(value, Mapping):
+        normalized = {}
+        for key, item in value.items():
+            normalized_key = _json_mapping_key(key)
+            if normalized_key in normalized:
+                raise TypeError(
+                    "QC evidence mapping keys collide after JSON normalization."
+                )
+            normalized[normalized_key] = _json_native(item)
+        return normalized
+    if isinstance(value, Sequence) and not isinstance(
+        value,
+        (str, bytes, bytearray),
+    ):
+        return [_json_native(item) for item in value]
+    raise TypeError(f"Unsupported QC evidence type: {type(value).__name__}.")
+
+
 def _default_run_id(
     ordered_cases: Sequence[Mapping[str, str]],
     queue_configuration_sha256: str,
@@ -212,7 +262,7 @@ def _normalise_flag(value: Any, *, default_stage: str) -> dict[str, Any]:
     )
     severity = payload.get("severity", "warning")
     severity = getattr(severity, "value", severity)
-    return {
+    normalized = {
         "code": str(payload.get("code", "unspecified_review")),
         "stage": str(payload.get("stage", default_stage)),
         "severity": str(severity),
@@ -225,6 +275,7 @@ def _normalise_flag(value: Any, *, default_stage: str) -> dict[str, Any]:
         "adjudication": payload.get("adjudication"),
         "review_comment": payload.get("review_comment"),
     }
+    return cast(dict[str, Any], _json_native(normalized))
 
 
 def _case_qc(memory: Mapping[str, Any]) -> tuple[QCStatus, tuple[dict[str, Any], ...]]:
