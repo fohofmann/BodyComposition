@@ -100,6 +100,15 @@ package-external paths. The upstream citation reminder is routed to normal
 stderr logging so automation JSON remains valid; the citation and license
 obligations remain in notices and provenance.
 
+TPTBox 0.7.5's VibeSeg predictor invokes CUDA-only memory telemetry even for
+its supported CPU device. BodyComposition therefore applies a locked,
+CPU-only guard while serializing the complete in-process TPTBox/SPINEPS
+boundary: GPU waiting is disabled, available host memory feeds the upstream
+memory gate, and both telemetry functions are restored afterward. CUDA uses
+the original behavior, and CPU activation is recorded in crop-model
+provenance. The exact upstream tag, function, reason, and tests are documented
+in `THIRD_PARTY_NOTICES.md`.
+
 SPINEPS's pinned CT model declares an isotropic acquisition and its coarse
 preflight rejects anisotropic files before inference. BodyComposition accepts
 governed routine CT geometry, allows SPINEPS's own documented

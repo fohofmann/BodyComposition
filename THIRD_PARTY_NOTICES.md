@@ -124,15 +124,30 @@ not vendor or rewrite these projects. Its adapter adds explicit model paths,
 disables inference-time downloads, validates SimpleITK geometry, preserves
 native labels, and records QC/provenance.
 
-The only locally implemented upstream boundary is model transfer and archive
-extraction. The pinned upstream download paths are unsuitable for this package
-because they can resolve VibeSeg weights inside `site-packages`, permit hidden
-inference-time downloads, and do not provide BodyComposition's complete
-archive-hash, safe-extraction, and atomic-promotion contract. No segmentation
-or labeling algorithm is copied. The boundary is tested for the same pinned
-SPINEPS tag commit `ad622b87d9e4b81fb6a88df2a8050bd40f7046d5` and TPTBox
-0.7.5 APIs, including reuse of the precomputed upstream crop output without a
-download.
+The locally implemented upstream boundaries are model transfer/archive
+extraction and one CPU-only runtime guard. The pinned upstream download paths
+are unsuitable for this package because they can resolve VibeSeg weights
+inside `site-packages`, permit hidden inference-time downloads, and do not
+provide BodyComposition's complete archive-hash, safe-extraction, and
+atomic-promotion contract.
+
+TPTBox 0.7.5 tag commit
+`acaaf16f74fb0fe8fc555b23cf4e0230efc49753` calls CUDA memory-telemetry
+helpers from
+`nnUNetPredictor.predict_sliding_window_return_logits` even when its predictor
+device is CPU. During a CPU VibeSeg call only, BodyComposition serializes that
+complete in-process TPTBox/SPINEPS boundary, disables GPU waiting, supplies
+available host memory to the upstream memory gate, and restores the original
+functions in a `finally` block. CUDA execution uses the original telemetry
+functions. The adapter does not copy or alter model loading, preprocessing,
+sliding-window inference, logits, or postprocessing, and its activation is
+recorded in run provenance and covered by restoration and concurrent-runtime
+regression tests.
+
+No segmentation or labeling algorithm is copied. The boundaries are tested
+against SPINEPS tag commit
+`ad622b87d9e4b81fb6a88df2a8050bd40f7046d5` and the pinned TPTBox tag,
+including reuse of the precomputed upstream crop output without a download.
 
 SPINEPS, TPTBox, and the VIBESegmentator source repositories declare the
 Apache License 2.0. The TPTBox 0.7.5 wheel metadata contains an inconsistent

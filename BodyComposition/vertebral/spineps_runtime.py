@@ -9,11 +9,13 @@ import logging
 import os
 import re
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import SimpleITK as sitk
+from psutil import virtual_memory
 
 from BodyComposition.orientation.core import OrientationOutcome
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
@@ -35,6 +37,18 @@ from BodyComposition.vertebral.spineps_manifest import (
 from BodyComposition.vertebral.spineps_session import SpinepsModelSession
 
 _CITATION_REMINDER_CONFIGURED = False
+_TPTBOX_INFERENCE_LOCK = threading.RLock()
+_TPTBOX_CPU_TELEMETRY_ADAPTER = {
+    "id": "tptbox-0.7.5-cpu-memory-telemetry",
+    "upstream_repository": "https://github.com/Hendrik-code/TPTBox",
+    "upstream_revision": "acaaf16f74fb0fe8fc555b23cf4e0230efc49753",
+    "upstream_function": (
+        "TPTBox.segmentation.nnUnet_utils.predictor."
+        "nnUNetPredictor.predict_sliding_window_return_logits"
+    ),
+    "reason": "Pinned TPTBox 0.7.5 calls CUDA memory telemetry for a CPU device.",
+    "effect": "Disable GPU waiting and use available host memory on CPU only.",
+}
 
 
 def _configure_upstream_citation_reminder() -> None:
@@ -74,6 +88,35 @@ def _derive_output_paths(img_ref: Any, derivative_name: str) -> Mapping[str, Pat
     )
 
 
+@contextmanager
+def _tptbox_vibeseg_runtime_guard(device: str) -> Iterator[dict[str, str] | None]:
+    """Make the pinned upstream VibeSeg CPU telemetry device-safe."""
+
+    with _TPTBOX_INFERENCE_LOCK:
+        if device.casefold().partition(":")[0] != "cpu":
+            yield None
+            return
+
+        import TPTBox.segmentation.nnUnet_utils.predictor as predictor_module
+
+        original_util = predictor_module.get_gpu_util
+        original_memory = predictor_module.get_gpu_memory_MB
+
+        def cpu_gpu_util(_device: Any) -> float:
+            return 0.0
+
+        def cpu_free_gpu_memory_mb(_device: Any) -> float:
+            return float(virtual_memory().available / 1024**2)
+
+        predictor_module.get_gpu_util = cpu_gpu_util
+        predictor_module.get_gpu_memory_MB = cpu_free_gpu_memory_mb
+        try:
+            yield dict(_TPTBOX_CPU_TELEMETRY_ADAPTER)
+        finally:
+            predictor_module.get_gpu_util = original_util
+            predictor_module.get_gpu_memory_MB = original_memory
+
+
 def _run_explicit_vibeseg(
     trained_model: Path,
     input_nii: Any,
@@ -81,23 +124,25 @@ def _run_explicit_vibeseg(
     device: str,
     *,
     cache_model: bool = True,
-) -> None:
+) -> dict[str, str] | None:
     from TPTBox.segmentation.VibeSeg.inference_nnunet import run_inference_on_file
 
-    run_inference_on_file(
-        trained_model,
-        [input_nii],
-        out_file=output_path,
-        override=False,
-        keep_size=False,
-        padd=5,
-        max_folds=None,
-        ddevice=device,
-        memory_base=5500,
-        memory_factor=25,
-        auto_download=False,
-        cache_model=cache_model,
-    )
+    with _tptbox_vibeseg_runtime_guard(device) as runtime_adapter:
+        run_inference_on_file(
+            trained_model,
+            [input_nii],
+            out_file=output_path,
+            override=False,
+            keep_size=False,
+            padd=5,
+            max_folds=None,
+            ddevice=device,
+            memory_base=5500,
+            memory_factor=25,
+            auto_download=False,
+            cache_model=cache_model,
+        )
+    return runtime_adapter
 
 
 def _run_spineps(img_ref: Any, models: Any, derivative_name: str) -> Any:
@@ -232,7 +277,7 @@ class SpinepsRuntime:
         derivative_name: str = "derivatives_spineps",
         make_bids_file: Callable[[Path], Any] = _make_bids_file,
         derive_output_paths: Callable[[Any, str], Mapping[str, Path]] = _derive_output_paths,
-        run_vibeseg: Callable[[Path, Any, Path, str], None] = _run_explicit_vibeseg,
+        run_vibeseg: Callable[..., Mapping[str, str] | None] = _run_explicit_vibeseg,
         run_spineps: Callable[[Any, Any, str], Any] = _run_spineps,
         vibeseg_bundle_provenance: Mapping[str, Any] | None = None,
         cache_vibeseg_model: bool = True,
@@ -289,7 +334,13 @@ class SpinepsRuntime:
             if (path := Path(raw_path)).is_file()
         }
 
-    def _ensure_vibeseg_crop(self, img_ref: Any, output_path: Path, reference: ImageGeometry) -> None:
+    def _ensure_vibeseg_crop(
+        self,
+        img_ref: Any,
+        output_path: Path,
+        reference: ImageGeometry,
+    ) -> Mapping[str, str] | None:
+        runtime_adapter: Mapping[str, str] | None = None
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if not output_path.is_file():
             device = "cpu" if self.model_session.use_cpu else "cuda"
@@ -300,7 +351,7 @@ class SpinepsRuntime:
                 device,
             )
             if self._run_vibeseg is _run_explicit_vibeseg:
-                self._run_vibeseg(
+                runtime_adapter = self._run_vibeseg(
                     *arguments,
                     cache_model=self.cache_vibeseg_model,
                 )
@@ -317,6 +368,7 @@ class SpinepsRuntime:
             reference_name="prepared CT",
             candidate_name="VibeSeg crop output",
         )
+        return runtime_adapter
 
     def run(
         self,
@@ -342,7 +394,7 @@ class SpinepsRuntime:
             candidate_name="staged SPINEPS input",
         )
 
-        with self._lock:
+        with _TPTBOX_INFERENCE_LOCK, self._lock:
             img_ref = self._make_bids_file(staged_input)
             output_paths = {
                 name: Path(path)
@@ -350,7 +402,11 @@ class SpinepsRuntime:
             }
             if "out_vibeseg" not in output_paths:
                 raise RuntimeError("SPINEPS did not define its required VibeSeg output path.")
-            self._ensure_vibeseg_crop(img_ref, output_paths["out_vibeseg"], reference_geometry)
+            runtime_adapter = self._ensure_vibeseg_crop(
+                img_ref,
+                output_paths["out_vibeseg"],
+                reference_geometry,
+            )
             vibeseg_output = output_paths["out_vibeseg"]
             models = self.model_session.load()
             response = self._run_spineps(img_ref, models, self.derivative_name)
@@ -362,6 +418,8 @@ class SpinepsRuntime:
             "bytes": vibeseg_output.stat().st_size,
             "sha256": sha256_file(vibeseg_output),
         }
+        if runtime_adapter is not None:
+            crop_model["runtime_adapter"] = dict(runtime_adapter)
         provenance["required_crop_model"] = crop_model
         provenance.update(
             {

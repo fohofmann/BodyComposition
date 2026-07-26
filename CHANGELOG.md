@@ -34,6 +34,8 @@ This is a deliberate breaking release candidate.
   subsystem omissions; model/GPU regressions remain separate integration gates.
 - the standard CLI and Python API need only an input CT; code-defined settings,
   automatic device selection, and the `./output` result root are defaults.
+- the pinned VibeSeg CPU path is guarded against TPTBox's CUDA-only memory
+  telemetry without changing upstream inference or CUDA execution.
 
 ### Removed
 

@@ -1,7 +1,10 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import SimpleITK as sitk
 
 from BodyComposition.orientation.core import OrientationOutcome
@@ -167,7 +170,7 @@ def test_upstream_wrappers_disable_downloads_and_use_saved_outputs(monkeypatch, 
     trained_model = tmp_path / "verified-dataset100"
     output = tmp_path / "attempt" / "vibeseg.nii.gz"
 
-    spineps_runtime._run_explicit_vibeseg(
+    runtime_adapter = spineps_runtime._run_explicit_vibeseg(
         trained_model,
         "input-nii",
         output,
@@ -182,6 +185,7 @@ def test_upstream_wrappers_disable_downloads_and_use_saved_outputs(monkeypatch, 
     assert vibeseg_call["kwargs"]["cache_model"] is True
     assert vibeseg_call["kwargs"]["ddevice"] == "cuda"
     assert vibeseg_call["kwargs"]["max_folds"] is None
+    assert runtime_adapter is None
     assert response == "response"
     assert spineps_call["img_ref"] == "img-ref"
     assert spineps_call["model_semantic"] == "semantic"
@@ -192,6 +196,174 @@ def test_upstream_wrappers_disable_downloads_and_use_saved_outputs(monkeypatch, 
     assert spineps_call["save_raw"] is True
     assert spineps_call["save_softmax_logits"] is False
     assert spineps_call["save_debug_data"] is False
+
+
+def test_upstream_vibeseg_cpu_guard_is_scoped_and_records_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    import TPTBox.segmentation.nnUnet_utils.predictor as predictor_module
+
+    original_util = predictor_module.get_gpu_util
+    original_memory = predictor_module.get_gpu_memory_MB
+    monkeypatch.setattr(
+        spineps_runtime,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=12 * 1024**2),
+    )
+
+    def fake_vibeseg(*args, **kwargs):
+        assert predictor_module.get_gpu_util("cpu") == 0.0
+        assert predictor_module.get_gpu_memory_MB("cpu") == 12.0
+
+    monkeypatch.setattr(
+        "TPTBox.segmentation.VibeSeg.inference_nnunet.run_inference_on_file",
+        fake_vibeseg,
+    )
+
+    adapter = spineps_runtime._run_explicit_vibeseg(
+        tmp_path / "verified-dataset100",
+        "input-nii",
+        tmp_path / "vibeseg.nii.gz",
+        "cpu",
+    )
+
+    assert adapter is not None
+    assert adapter["id"] == "tptbox-0.7.5-cpu-memory-telemetry"
+    assert adapter["upstream_revision"] == "acaaf16f74fb0fe8fc555b23cf4e0230efc49753"
+    assert predictor_module.get_gpu_util is original_util
+    assert predictor_module.get_gpu_memory_MB is original_memory
+
+
+def test_upstream_vibeseg_cpu_guard_restores_telemetry_after_failure(
+    monkeypatch,
+    tmp_path,
+):
+    import TPTBox.segmentation.nnUnet_utils.predictor as predictor_module
+
+    original_util = predictor_module.get_gpu_util
+    original_memory = predictor_module.get_gpu_memory_MB
+
+    def fail_vibeseg(*args, **kwargs):
+        assert predictor_module.get_gpu_util("cpu") == 0.0
+        raise RuntimeError("upstream failure")
+
+    monkeypatch.setattr(
+        "TPTBox.segmentation.VibeSeg.inference_nnunet.run_inference_on_file",
+        fail_vibeseg,
+    )
+
+    with pytest.raises(RuntimeError, match="upstream failure"):
+        spineps_runtime._run_explicit_vibeseg(
+            tmp_path / "verified-dataset100",
+            "input-nii",
+            tmp_path / "vibeseg.nii.gz",
+            "cpu",
+        )
+
+    assert predictor_module.get_gpu_util is original_util
+    assert predictor_module.get_gpu_memory_MB is original_memory
+
+
+def test_spineps_runtime_serializes_cpu_adapter_across_instances(
+    monkeypatch,
+    tmp_path,
+):
+    geometry = _geometry()
+    array = np.zeros((4, 5, 6), dtype=np.int16)
+    input_path = tmp_path / "source.nii.gz"
+    _write_image(input_path, array, geometry)
+    cpu_paths = {"out_vibeseg": tmp_path / "cpu/vibeseg.nii.gz"}
+    cuda_paths = {"out_vibeseg": tmp_path / "cuda/vibeseg.nii.gz"}
+    cpu_patch_active = Event()
+    release_cpu = Event()
+    cuda_spineps_entered = Event()
+
+    monkeypatch.setattr(
+        spineps_runtime,
+        "_configure_upstream_citation_reminder",
+        lambda: None,
+    )
+
+    def successful_response():
+        semantic = np.zeros(array.shape, dtype=np.uint8)
+        vertebra = np.zeros(array.shape, dtype=np.uint8)
+        semantic[1:3, 1:4, 1:5] = 49
+        vertebra[1:3, 1:4, 1:5] = 22
+        return (
+            _image(semantic, geometry),
+            _image(vertebra, geometry),
+            None,
+            SimpleNamespace(name="OK"),
+        )
+
+    def fake_upstream_vibeseg(*args, **kwargs):
+        import TPTBox.segmentation.nnUnet_utils.predictor as predictor_module
+
+        assert predictor_module.get_gpu_util("cpu") == 0.0
+        _write_image(
+            Path(kwargs["out_file"]),
+            np.zeros(array.shape, dtype=np.uint8),
+            geometry,
+        )
+        cpu_patch_active.set()
+        assert release_cpu.wait(timeout=5)
+
+    def cuda_vibeseg(model, input_nii, output, device):
+        assert device == "cuda"
+        _write_image(output, np.zeros(array.shape, dtype=np.uint8), geometry)
+
+    def cuda_spineps(img_ref, models, derivative_name):
+        cuda_spineps_entered.set()
+        return successful_response()
+
+    monkeypatch.setattr(
+        "TPTBox.segmentation.VibeSeg.inference_nnunet.run_inference_on_file",
+        fake_upstream_vibeseg,
+    )
+    cpu_runtime = SpinepsRuntime(
+        FakeSession(use_cpu=True),
+        tmp_path / "verified-dataset100",
+        make_bids_file=lambda path: SimpleNamespace(
+            format="ct",
+            open_nii=lambda: "cpu-input",
+        ),
+        derive_output_paths=lambda ref, name: cpu_paths,
+        run_spineps=lambda ref, models, name: successful_response(),
+    )
+    cuda_runtime = SpinepsRuntime(
+        FakeSession(use_cpu=False),
+        tmp_path / "verified-dataset100",
+        make_bids_file=lambda path: SimpleNamespace(
+            format="ct",
+            open_nii=lambda: "cuda-input",
+        ),
+        derive_output_paths=lambda ref, name: cuda_paths,
+        run_vibeseg=cuda_vibeseg,
+        run_spineps=cuda_spineps,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        cpu_future = executor.submit(
+            cpu_runtime.run,
+            _prepared(input_path),
+            attempt_directory=tmp_path / "cpu-attempt",
+            case_id="cpu-case",
+        )
+        assert cpu_patch_active.wait(timeout=5)
+        cuda_future = executor.submit(
+            cuda_runtime.run,
+            _prepared(input_path),
+            attempt_directory=tmp_path / "cuda-attempt",
+            case_id="cuda-case",
+        )
+        cuda_blocked = not cuda_spineps_entered.wait(timeout=0.25)
+        release_cpu.set()
+
+        assert cuda_blocked
+        assert cpu_future.result(timeout=10).execution_status == ExecutionStatus.SUCCEEDED
+        assert cuda_future.result(timeout=10).execution_status == ExecutionStatus.SUCCEEDED
+        assert cuda_spineps_entered.is_set()
 
 
 def test_upstream_crop_reuses_precomputed_vibeseg_without_downloading(
