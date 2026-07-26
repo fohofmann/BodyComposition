@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 from collections.abc import Mapping
@@ -15,6 +14,7 @@ from uuid import uuid4
 import numpy as np
 import SimpleITK as sitk
 
+from BodyComposition.provenance import file_sha256, image_pixel_sha256
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 
 
@@ -74,23 +74,6 @@ class DicomConversionResult:
 class _DicomCandidate:
     info: DicomSeriesInfo
     files: tuple[Path, ...]
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _image_pixel_sha256(image: sitk.Image) -> str:
-    array = np.ascontiguousarray(sitk.GetArrayViewFromImage(image))
-    digest = hashlib.sha256()
-    digest.update(str(array.dtype).encode("ascii"))
-    digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode("ascii"))
-    digest.update(memoryview(array).cast("B"))
-    return digest.hexdigest()
 
 
 def _metadata(reader: Any, key: str, *, index: int | None = None) -> str | None:
@@ -315,7 +298,7 @@ def dicom_image_summary(
         "source_reference": "content-addressed-local-input",
         "source_content_sha256": source_digest,
         "source_byte_size": source_byte_size,
-        "input_pixel_sha256": _image_pixel_sha256(image),
+        "input_pixel_sha256": image_pixel_sha256(image),
         "input_format": "dicom",
         "geometry": geometry_summary,
         "dicom": {
@@ -385,9 +368,9 @@ def convert_dicom(
             reference_name="DICOM CT",
             candidate_name="converted NIfTI CT",
         )
-        if _image_pixel_sha256(verified) != input_summary["input_pixel_sha256"]:
+        if image_pixel_sha256(verified) != input_summary["input_pixel_sha256"]:
             raise DicomInputError("The converted NIfTI pixels differ from the selected DICOM CT.")
-        output_digest = _file_sha256(temporary)
+        output_digest = file_sha256(temporary)
         output_size = temporary.stat().st_size
         os.replace(temporary, destination)
     finally:

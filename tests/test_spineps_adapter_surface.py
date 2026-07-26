@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
 import SimpleITK as sitk
 
 from BodyComposition.actions.vertebral import (
@@ -434,6 +435,29 @@ def test_pipeline_action_promotes_validated_body_mask_and_summary(
     assert summary_path.is_file()
     assert memory["tmp/vertebral_result"].backend_id == "spineps_veridah_ct_v1"
     assert not any((tmp_path / ".attempts").rglob("*.nii.gz"))
+
+
+@pytest.mark.parametrize(
+    "invalid_label",
+    (
+        np.array([[[-1]]], dtype=np.int16),
+        np.array([[[256]]], dtype=np.int16),
+        np.array([[[1.5]]], dtype=np.float32),
+    ),
+)
+def test_pipeline_action_rejects_labels_that_cannot_be_uint8(
+    pipeline_stub,
+    tmp_path,
+    invalid_label,
+):
+    action = SegmSpinepsVeridah(pipeline_stub)
+
+    with pytest.raises(ValueError):
+        action._container_from_array(
+            tmp_path / "invalid.nii.gz",
+            invalid_label,
+            _image(invalid_label.shape),
+        )
 
 
 def test_pipeline_resume_revalidates_corpus_intersection_against_prepared_ct(

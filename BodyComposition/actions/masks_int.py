@@ -48,7 +48,10 @@ class MasksInternalTissue(PipelineAction):
 
         # create output: mask, = empty dc + header from input
         output_mask_path = memory['workspace']/self.output_mask_name.format(caseid=memory['id'])
-        output_mask = memory[self.output_mask_name] = NiftiDataContainer(output_mask_path)
+        output_mask = memory[self.output_mask_name] = NiftiDataContainer(
+            output_mask_path,
+            dtype=np.uint8,
+        )
 
         # if mask already available, skip all
         if output_mask.exists() and self.config['run']['skip']:

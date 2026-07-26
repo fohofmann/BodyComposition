@@ -10,32 +10,27 @@ LPS_TO_RAS = np.diag([-1.0, -1.0, 1.0, 1.0])
 
 
 class NiftiDataContainer:
-    """
-    Class for loading and handling Nifti data using SimpleITK.
-    The origin, direction, and spacing properties of the image are stored and used for file handling.
-    directions: np: z, y, x, sitk: x, y, z, nifti: x, y, z
-    """
-    
-    def __init__(self, path: str | Path):
+    """Store a three-dimensional image with explicit zyx arrays and xyz metadata."""
 
-        # save path, can not be changed
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        dtype: np.dtype | type | str | None = None,
+    ):
         self._path = Path(path)
-
-        # empty data and metadata
         self._data = None
         self._origin = None
         self._direction = None
         self._spacing = None
 
-        # set datatype
-        if any(keyword in self._path.parent.name for keyword in ['label', 'mask']):
-            self.dtype = np.uint8
-        else:
-            self.dtype = np.int16 # int8 would be enough for CT scans, but flexibility if using other dtypes
-
+        self.dtype = None if dtype is None else np.dtype(dtype)
+        if self.dtype is not None and not np.issubdtype(self.dtype, np.integer):
+            raise TypeError("An explicit container dtype must be an integer label dtype.")
 
     def __repr__(self):
-        return f"NiftiDataContainer(loaded={self._data is not None}, dtype={self.dtype})"
+        dtype = self._data.dtype if self._data is not None else self.dtype
+        return f"NiftiDataContainer(loaded={self._data is not None}, dtype={dtype or 'preserve'})"
 
     @property
     def path(self):
@@ -144,10 +139,10 @@ class NiftiDataContainer:
         affine_lps = self.geometry.affine_lps
         affine_ras = LPS_TO_RAS @ affine_lps
         
-        # Transpose the data from z, y, x (SITK numpy) to x, y, z (Nifti1Image expected orientation)
+        # SimpleITK exposes zyx arrays; nibabel expects xyz arrays.
         data_tmp = self.data.transpose((2, 1, 0))
 
-        return Nifti1Image(data_tmp.astype(self.dtype, copy=False), affine_ras)
+        return Nifti1Image(data_tmp, affine_ras)
     
 
     @property
@@ -165,9 +160,31 @@ class NiftiDataContainer:
     @data.setter
     def data(self, value: np.ndarray):
         """Set an array in explicit SimpleITK zyx order without implicit cropping."""
-        if self._data is not None and self._data.shape != value.shape:
-            raise ValueError(f'Numpy shapes do not match: {self._data.shape} != {value.shape}')
-        self._data = value.astype(self.dtype)
+        array = np.asarray(value)
+        if self._data is not None and self._data.shape != array.shape:
+            raise ValueError(f'Numpy shapes do not match: {self._data.shape} != {array.shape}')
+        if self.dtype is None:
+            self._data = np.array(array, copy=True)
+            return
+
+        integer_or_bool = np.issubdtype(array.dtype, np.integer) or np.issubdtype(
+            array.dtype,
+            np.bool_,
+        )
+        if np.iscomplexobj(array) or not (
+            integer_or_bool or np.issubdtype(array.dtype, np.floating)
+        ):
+            raise ValueError("Label arrays must contain real numeric data.")
+        if not np.all(np.isfinite(array)):
+            raise ValueError("Label arrays must contain only finite values.")
+        if not integer_or_bool and not np.all(array == np.rint(array)):
+            raise ValueError("Label arrays must contain integer-valued data.")
+        limits = np.iinfo(self.dtype)
+        if array.size and (np.min(array) < limits.min or np.max(array) > limits.max):
+            raise ValueError(
+                f"Label values do not fit the configured {self.dtype} dtype."
+            )
+        self._data = array.astype(self.dtype, copy=True)
 
 
 
@@ -216,7 +233,6 @@ class NiftiDataContainer:
             raise FileNotFoundError(f'File not available at {self.path}.')
         else:
             img_tmp = sitk.ReadImage(str(self.path))
-            #print(f'Image loaded from {self.path}:\n - Origin: {img_tmp.GetOrigin()} \n - Direction: {img_tmp.GetDirection()} \n - Spacing: {img_tmp.GetSpacing()}')
             self.img = img_tmp
 
 
@@ -225,18 +241,3 @@ class NiftiDataContainer:
         self.geometry.validate()
         if finite_pixels and not np.all(np.isfinite(self.data)):
             raise GeometryError(f'Image contains non-finite pixels: {self.path}.')
-
-
-
-    def remap(self, mapping: dict):
-        """Remap labels: replace values in data numpy usimg mapping dictionary."""
-        data_tmp = self.data # load np
-        if data_tmp is None:
-            raise ValueError('No data available for remapping.')
-        else:
-            # create mapping array for relabeling, not existing labels are replaced with 0, then fancy indexing
-            labels_max = max(max(mapping.keys()), np.max(data_tmp))
-            relabel_array = np.zeros(labels_max+1, dtype=np.uint8)
-            for key, value in mapping.items():
-                relabel_array[key] = value
-            self.data = relabel_array[data_tmp]

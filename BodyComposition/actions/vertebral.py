@@ -121,9 +121,9 @@ class SegmSpinepsVeridah(PipelineAction):
         array_zyx: np.ndarray,
         reference: sitk.Image,
     ) -> NiftiDataContainer:
-        image = sitk.GetImageFromArray(array_zyx.astype(np.uint8, copy=False))
+        image = sitk.GetImageFromArray(array_zyx)
         image.CopyInformation(reference)
-        container = NiftiDataContainer(path)
+        container = NiftiDataContainer(path, dtype=np.uint8)
         container.img = image
         container.validate()
         return container
@@ -166,7 +166,7 @@ class SegmSpinepsVeridah(PipelineAction):
                 raise RuntimeError("SPINEPS did not retain the native semantic output.")
             semantic_path = self._path(memory, SPINEPS_SEMANTIC_MASK)
             _atomic_copy(Path(semantic_source), semantic_path)
-            semantic = NiftiDataContainer(semantic_path)
+            semantic = NiftiDataContainer(semantic_path, dtype=np.uint8)
             semantic.load_from_file()
             semantic.validate()
             assert_same_physical_domain(
@@ -229,7 +229,7 @@ class SegmSpinepsVeridah(PipelineAction):
             )
             semantic = sitk.ReadImage(str(paths["semantic"]))
             whole = sitk.ReadImage(str(paths["whole"]))
-            body = NiftiDataContainer(paths["body"])
+            body = NiftiDataContainer(paths["body"], dtype=np.uint8)
             body.load_from_file()
             body.validate()
             assert_same_physical_domain(
@@ -266,10 +266,10 @@ class SegmSpinepsVeridah(PipelineAction):
             qc_flags=tuple(result.qc_flags) + orientation_qc_flags(memory["tmp/prepared_image"]),
         )
         memory[SPINEPS_BODY_MASK] = body
-        semantic_container = NiftiDataContainer(paths["semantic"])
+        semantic_container = NiftiDataContainer(paths["semantic"], dtype=np.uint8)
         semantic_container.load_from_file()
         memory[SPINEPS_SEMANTIC_MASK] = semantic_container
-        whole_container = NiftiDataContainer(paths["whole"])
+        whole_container = NiftiDataContainer(paths["whole"], dtype=np.uint8)
         whole_container.load_from_file()
         memory[SPINEPS_WHOLE_MASK] = whole_container
         memory[SPINEPS_RESULT_JSON] = paths["summary"]

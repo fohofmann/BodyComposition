@@ -78,11 +78,11 @@ of being reclaimed forever.
 
 The stale and absolute time limits are stored in each claim. A worker with a
 short timeout therefore cannot incorrectly reclaim a live claim created by a
-worker with a longer timeout. If a worker itself raises its configured case
-timeout, that failed attempt is retained for audit, the process exits nonzero,
-and the case remains claimable within the bounded attempt budget. Another
-already-running worker—or a restarted command with a larger timeout—can then
-run the complete case.
+worker with a longer timeout. If a worker itself raises its configured
+pipeline-execution timeout between stages, that failed attempt is retained for
+audit, the process exits nonzero, and the case remains claimable within the
+bounded attempt budget. Another already-running worker—or a restarted command
+with a larger timeout—can then run the complete case.
 
 Defaults can be adjusted operationally without changing the scientific
 configuration:
@@ -91,7 +91,7 @@ configuration:
 | --- | ---: | --- |
 | `BODYCOMPOSITION_HEARTBEAT_SECONDS` | 30 | Claim heartbeat interval |
 | `BODYCOMPOSITION_STALE_AFTER_SECONDS` | 300 | Missing-heartbeat takeover delay |
-| `BODYCOMPOSITION_MAX_CLAIM_SECONDS` | case timeout + 600 | Absolute live/hung claim limit |
+| `BODYCOMPOSITION_MAX_CLAIM_SECONDS` | pipeline budget + 600 | Absolute live/hung claim limit |
 | `BODYCOMPOSITION_MAX_ATTEMPTS` | 3 | Abandoned/OOM attempts before terminal failure |
 | `BODYCOMPOSITION_POLL_SECONDS` | 2 | Wait while other workers own remaining cases |
 

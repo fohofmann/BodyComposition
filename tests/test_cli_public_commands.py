@@ -264,6 +264,38 @@ def test_version_and_human_emit_paths(capsys):
     assert capsys.readouterr().out.strip()
 
 
+def test_json_stdout_excludes_dependency_chatter(monkeypatch, capsys):
+    version_handler = cli._cmd_version
+
+    def noisy_version(args):
+        print("upstream progress")
+        return version_handler(args)
+
+    monkeypatch.setattr(cli, "_cmd_version", noisy_version)
+    assert cli.main(["version", "--json"]) == cli.EXIT_OK
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["config_schema_version"] == "1.0.0"
+    assert "upstream progress" not in captured.out
+    assert "upstream progress" in captured.err
+
+
+def test_json_error_stdout_excludes_dependency_chatter(monkeypatch, capsys):
+    def failing_version(_args):
+        print("upstream failure details")
+        raise RuntimeError("inference failed")
+
+    monkeypatch.setattr(cli, "_cmd_version", failing_version)
+    assert cli.main(["version", "--json"]) == cli.EXIT_EXECUTION
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "error_code": "RuntimeError",
+        "message": "inference failed",
+        "status": "error",
+    }
+    assert "upstream failure details" not in captured.out
+    assert "upstream failure details" in captured.err
+
+
 def test_output_check_preserves_the_original_filesystem_error(tmp_path):
     assert cli._output_check(None) == (True, None)
     assert cli._output_check(str(tmp_path / "output")) == (True, None)

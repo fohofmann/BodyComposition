@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 import SimpleITK as sitk
 
+import BodyComposition.service as service_module
 from BodyComposition import cli, convert_dicom, discover_dicom_series
 from BodyComposition.config import PipelineConfig
 from BodyComposition.dicom import DicomSeriesSelectionError
@@ -182,7 +184,10 @@ def test_standalone_cli_converts_one_dicom_series(tmp_path, capsys):
     assert output.is_file()
 
 
-def test_pipeline_accepts_dicom_without_persisting_the_temporary_conversion(tmp_path):
+def test_pipeline_accepts_dicom_without_persisting_the_temporary_conversion(
+    tmp_path,
+    monkeypatch,
+):
     source = tmp_path / "private-patient-name" / "dicom"
     uid = "1.2.826.0.1.3680043.10.999.31"
     array = np.arange(3 * 4 * 5, dtype=np.int16).reshape(3, 4, 5)
@@ -248,3 +253,21 @@ def test_pipeline_accepts_dicom_without_persisting_the_temporary_conversion(tmp_
     assert not any(
         item["relative_path"].endswith("converted_input.nii.gz") for item in manifest["artifacts"]
     )
+
+    convert = service_module.convert_dicom
+
+    def changed_conversion(*args, **kwargs):
+        conversion = convert(*args, **kwargs)
+        changed_summary = dict(conversion.input_summary)
+        changed_summary["input_pixel_sha256"] = "0" * 64
+        return replace(conversion, input_summary=changed_summary)
+
+    monkeypatch.setattr(service_module, "convert_dicom", changed_conversion)
+    changed = service.analyze_case(
+        source,
+        tmp_path / "changed-output",
+        case_id="case-1",
+        run_id="changed-dicom",
+    )
+    assert changed.execution_status == ExecutionStatus.FAILED
+    assert changed.failure["code"] == "InputChangedError"

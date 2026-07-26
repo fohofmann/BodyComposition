@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 from time import time
 
+import numpy as np
+
 from BodyComposition.pipeline import PipelineAction
 from BodyComposition.utils.geometry import assert_same_physical_domain
 from BodyComposition.utils.logging import LoggingWriter, log_gpu_usage
@@ -129,7 +131,10 @@ class _SegmInternal(PipelineAction):
         super().__call__(memory)
         time_start = time()
         output_path = Path(memory["workspace"]) / self.output_label_name.format(caseid=memory["id"])
-        output_label = memory[self.output_label_name] = NiftiDataContainer(output_path)
+        output_label = memory[self.output_label_name] = NiftiDataContainer(
+            output_path,
+            dtype=np.uint8,
+        )
 
         if output_label.exists() and self.config["run"]["skip"]:
             logging.info(" internal segmentation already available, skipping")

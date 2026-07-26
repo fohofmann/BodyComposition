@@ -8,10 +8,11 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager, redirect_stdout, suppress
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import pandas as pd
 
@@ -45,6 +46,11 @@ EXIT_USAGE = 2
 EXIT_ENVIRONMENT = 3
 EXIT_EXECUTION = 4
 
+_JSON_OUTPUT_STREAM: ContextVar[TextIO | None] = ContextVar(
+    "bodycomposition_json_output_stream",
+    default=None,
+)
+
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, Path):
@@ -58,7 +64,10 @@ def _json_default(value: Any) -> Any:
 
 def _emit(value: Any, *, json_output: bool, human: str | None = None) -> None:
     if json_output:
-        print(json.dumps(value, indent=2, sort_keys=True, default=_json_default))
+        print(
+            json.dumps(value, indent=2, sort_keys=True, default=_json_default),
+            file=_JSON_OUTPUT_STREAM.get() or sys.stdout,
+        )
     elif human is not None:
         print(human)
     elif isinstance(value, Mapping):
@@ -66,6 +75,21 @@ def _emit(value: Any, *, json_output: bool, human: str | None = None) -> None:
             print(f"{key}: {_json_default(item)}")
     else:
         print(value)
+
+
+@contextmanager
+def _machine_readable_stdout(enabled: bool) -> Iterator[None]:
+    """Reserve stdout for the CLI JSON payload while dependencies run."""
+
+    if not enabled:
+        yield
+        return
+    token = _JSON_OUTPUT_STREAM.set(sys.stdout)
+    try:
+        with redirect_stdout(sys.stderr):
+            yield
+    finally:
+        _JSON_OUTPUT_STREAM.reset(token)
 
 
 def _config(args: argparse.Namespace) -> PipelineConfig:
@@ -567,33 +591,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(levelname)s: %(message)s",
         stream=sys.stderr,
     )
-    try:
-        return int(args.handler(args))
-    except (ConfigError, ValueError, FileNotFoundError, FileExistsError) as error:
-        payload = {"status": "error", "error_code": type(error).__name__, "message": str(error)}
-        if args.json:
-            _emit(payload, json_output=True)
-        else:
-            print(f"error: {error}", file=sys.stderr)
-        return EXIT_USAGE
-    except (DirtySourceError, ModelAssetError, PermissionError) as error:
-        payload = {"status": "error", "error_code": type(error).__name__, "message": str(error)}
-        if args.json:
-            _emit(payload, json_output=True)
-        else:
-            print(f"model error: {error}", file=sys.stderr)
-        return EXIT_ENVIRONMENT
-    except Exception as error:
-        payload = {
-            "status": "error",
-            "error_code": type(error).__name__,
-            "message": str(error),
-        }
-        if args.json:
-            _emit(payload, json_output=True)
-        else:
-            print(f"execution error: {error}", file=sys.stderr)
-        return EXIT_EXECUTION
+    with _machine_readable_stdout(args.json):
+        try:
+            return int(args.handler(args))
+        except (ConfigError, ValueError, FileNotFoundError, FileExistsError) as error:
+            payload = {
+                "status": "error",
+                "error_code": type(error).__name__,
+                "message": str(error),
+            }
+            if args.json:
+                _emit(payload, json_output=True)
+            else:
+                print(f"error: {error}", file=sys.stderr)
+            return EXIT_USAGE
+        except (DirtySourceError, ModelAssetError, PermissionError) as error:
+            payload = {
+                "status": "error",
+                "error_code": type(error).__name__,
+                "message": str(error),
+            }
+            if args.json:
+                _emit(payload, json_output=True)
+            else:
+                print(f"model error: {error}", file=sys.stderr)
+            return EXIT_ENVIRONMENT
+        except Exception as error:
+            payload = {
+                "status": "error",
+                "error_code": type(error).__name__,
+                "message": str(error),
+            }
+            if args.json:
+                _emit(payload, json_output=True)
+            else:
+                print(f"execution error: {error}", file=sys.stderr)
+            return EXIT_EXECUTION
 
 
 if __name__ == "__main__":

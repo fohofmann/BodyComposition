@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import SimpleITK as sitk
 
 from BodyComposition.utils.geometry import (
     GeometryError,
@@ -42,6 +43,45 @@ def test_sitk_nifti_round_trip_preserves_array_and_physical_points(
             original.img.TransformIndexToPhysicalPoint(index_xyz),
             abs=1e-4,
         )
+
+
+def test_ct_dtype_and_values_are_preserved_in_a_mask_named_directory(tmp_path):
+    array_zyx = np.array(
+        [[[-1024.0, -100.25], [31.5, 847.75]]],
+        dtype=np.float32,
+    )
+    path = tmp_path / "patient_masks_and_labels" / "ct.nii.gz"
+    path.parent.mkdir()
+    sitk.WriteImage(sitk.GetImageFromArray(array_zyx), str(path))
+
+    container = NiftiDataContainer(path)
+    container.load_from_file()
+
+    assert container.data.dtype == np.float32
+    assert np.array_equal(container.data, array_zyx)
+
+
+def test_explicit_label_dtype_is_validated_before_conversion(tmp_path):
+    container = NiftiDataContainer(
+        tmp_path / "masks" / "labels.nii.gz",
+        dtype=np.uint8,
+    )
+    container.img = sitk.GetImageFromArray(
+        np.array([[[0, 1], [2, 255]]], dtype=np.int16)
+    )
+
+    assert container.data.dtype == np.uint8
+    assert np.array_equal(
+        container.data,
+        np.array([[[0, 1], [2, 255]]], dtype=np.uint8),
+    )
+
+    with pytest.raises(ValueError, match="do not fit"):
+        container.data = np.array([[[0, 1], [2, 256]]], dtype=np.int16)
+    with pytest.raises(ValueError, match="real numeric"):
+        container.data = np.full((1, 2, 2), 1 + 1j, dtype=np.complex64)
+    with pytest.raises(TypeError, match="integer label dtype"):
+        NiftiDataContainer(tmp_path / "labels.nii.gz", dtype=np.float32)
 
 
 def test_domain_mismatch_fails_early():

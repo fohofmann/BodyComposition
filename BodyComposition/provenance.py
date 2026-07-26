@@ -39,13 +39,19 @@ def file_sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-def image_pixel_sha256(image: sitk.Image) -> str:
-    array = np.ascontiguousarray(sitk.GetArrayViewFromImage(image))
+def pixel_array_sha256(array: np.ndarray) -> str:
+    """Hash an image array with its dtype and explicit axis shape."""
+
+    array = np.ascontiguousarray(array)
     digest = hashlib.sha256()
     digest.update(str(array.dtype).encode("ascii"))
     digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode("ascii"))
-    digest.update(memoryview(array).cast("B"))
+    digest.update(array.data)
     return digest.hexdigest()
+
+
+def image_pixel_sha256(image: sitk.Image) -> str:
+    return pixel_array_sha256(sitk.GetArrayViewFromImage(image))
 
 
 def image_summary(

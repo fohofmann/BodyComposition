@@ -39,6 +39,7 @@ from BodyComposition.provenance import (
     canonical_digest,
     file_sha256,
     image_summary,
+    pixel_array_sha256,
     source_state,
 )
 from BodyComposition.results import (
@@ -1275,6 +1276,10 @@ class PipelineService:
             source = NiftiDataContainer(analysis_input)
             source.load_from_file()
             source.validate()
+            if pixel_array_sha256(source.data) != input_summary.get("input_pixel_sha256"):
+                raise InputChangedError(
+                    "The loaded CT pixels differ from preflight; rerun the analysis."
+                )
             memory["tmp/index"] = source
             self._executor()(memory)
         except KeyboardInterrupt:

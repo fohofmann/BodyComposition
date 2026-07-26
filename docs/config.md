@@ -96,9 +96,12 @@ fields.
 the same batch command multiple times against the same shared output. Each
 process claims whole cases and owns one externally assigned accelerator.
 
-`runtime.timeout_seconds` limits a stage. `runtime.fail_fast=false` records a
-failed case and continues unrelated cases. With fail-fast enabled, unstarted
-cases receive explicit cancelled manifests.
+`runtime.timeout_seconds` is the pipeline-execution budget, starting when the
+model stages begin and checked between those stages. Preflight and DICOM
+conversion are outside this timer. The four-hour default accommodates the
+validated CPU fallback; it is not an in-stage watchdog.
+`runtime.fail_fast=false` records a failed case and continues unrelated cases.
+With fail-fast enabled, unstarted cases receive explicit cancelled manifests.
 
 `runtime.deterministic=true` enables deterministic PyTorch algorithms where
 available. `runtime.allow_dirty=false` blocks cohort execution from an

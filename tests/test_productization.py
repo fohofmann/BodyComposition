@@ -176,6 +176,7 @@ def test_public_config_is_strict_roundtrippable_and_cwd_independent(tmp_path, mo
     assert config.vertebral_backend == "spineps_veridah_ct_v1"
     assert config.tissue_backend == "bodycomposition_resenc_l_v1"
     assert config.model_root == Path.home() / ".cache/bodycomposition/models"
+    assert config.normalized()["runtime"]["timeout_seconds"] == 14400
     assert PipelineConfig.model_validate(config.normalized()).digest() == config.digest()
     with pytest.raises(ConfigError, match="Unknown configuration value"):
         PipelineConfig.model_validate({"method": "BodyCompositionFast"})
@@ -364,6 +365,52 @@ def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     )
     assert second.execution_status == ExecutionStatus.SKIPPED_IDENTICAL
     assert SuccessfulPipeline.instances == 1
+
+
+def test_service_rejects_loaded_pixels_that_differ_from_preflight(
+    tmp_path,
+    monkeypatch,
+):
+    source = _write_ct(tmp_path / "case.nii.gz")
+
+    class ChangedPixelContainer(service_module.NiftiDataContainer):
+        def load_from_file(self):
+            super().load_from_file()
+            changed = self.data.copy()
+            changed[0, 0, 0] += 1
+            self.data = changed
+
+    monkeypatch.setattr(service_module, "NiftiDataContainer", ChangedPixelContainer)
+    result = _service(tmp_path).analyze_case(
+        source,
+        tmp_path / "outputs",
+        case_id="case-1",
+        run_id="input-integrity",
+    )
+
+    assert result.execution_status == ExecutionStatus.FAILED
+    assert result.failure["code"] == "InputChangedError"
+
+
+def test_service_rejects_nifti_file_mutated_after_preflight(tmp_path, monkeypatch):
+    source = _write_ct(tmp_path / "case.nii.gz")
+    service = _service(tmp_path)
+    drain = service._drain_shared_queue
+
+    def mutate_before_execution(**kwargs):
+        _write_ct(source, value=1)
+        return drain(**kwargs)
+
+    monkeypatch.setattr(service, "_drain_shared_queue", mutate_before_execution)
+    result = service.analyze_case(
+        source,
+        tmp_path / "outputs",
+        case_id="case-1",
+        run_id="mutated-input",
+    )
+
+    assert result.execution_status == ExecutionStatus.FAILED
+    assert result.failure["code"] == "InputChangedError"
 
 
 def test_result_inspection_rejects_artifact_tampering_and_path_traversal(tmp_path):

@@ -204,7 +204,7 @@ def _default_mapping() -> dict[str, Any]:
             "device": "auto",
             "cpu_threads": 0,
             "max_workers": 1,
-            "timeout_seconds": 1200,
+            "timeout_seconds": 14400,
             "fail_fast": False,
             "deterministic": True,
             "allow_dirty": False,

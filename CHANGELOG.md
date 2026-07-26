@@ -34,6 +34,12 @@ This is a deliberate breaking release candidate.
   subsystem omissions; model/GPU regressions remain separate integration gates.
 - the standard CLI and Python API need only an input CT; code-defined settings,
   automatic device selection, and the `./output` result root are defaults.
+- source CT voxel dtype and calibrated values are preserved independently of
+  path names; integer casting is explicit and validated only for output labels.
+- JSON CLI mode reserves stdout for its single machine-readable payload and
+  routes dependency progress to stderr.
+- the default pipeline-execution budget is four hours so the automatic CPU
+  fallback can complete the pinned model stack.
 - the pinned VibeSeg CPU path is guarded against TPTBox's CUDA-only memory
   telemetry without changing upstream inference or CUDA execution.
 

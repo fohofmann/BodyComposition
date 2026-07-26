@@ -219,7 +219,10 @@ class CreateBodySurface(PipelineAction):
         encoded[result.trunk_mask_zyx] = 1
         image = sitk.GetImageFromArray(encoded)
         image.CopyInformation(prepared)
-        output = NiftiDataContainer(_path(memory, BODY_SURFACE_MASK))
+        output = NiftiDataContainer(
+            _path(memory, BODY_SURFACE_MASK),
+            dtype=np.uint8,
+        )
         output.img = image
         output.validate()
         if self.settings["save_mask"]:
