@@ -60,9 +60,11 @@ confidence-scored estimate from visible vertebral centroids. It does not
 normalize patient height, stretch anatomy, or impute unscanned regions.
 Comparisons must retain coverage, reference confidence, variants, and
 anatomical missingness. A single-anchor inferred origin is low confidence.
-Affine area and volume integration remains physically correct for oblique
-images, but longitudinal bins currently assign each native slice at its centre.
-Cases whose in-plane superior span exceeds 10 mm are flagged for review. That
+Affine area and volume integration, including numeric longitudinal-bin
+aggregation, uses each native slice slab's exact physical overlap and remains
+physically correct for oblique images. Categorical territory and bin
+annotations in the per-slice table use the slice centre for display. Cases
+whose in-plane superior span exceeds 10 mm are flagged for review. That
 threshold is an engineering trigger, not proof that smaller obliquity is exact
 or clinically validated.
 
