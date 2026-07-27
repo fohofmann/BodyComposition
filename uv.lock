@@ -238,8 +238,8 @@ requires-dist = [
     { name = "scipy" },
     { name = "simpleitk" },
     { name = "spineps", specifier = "==2.0.0" },
-    { name = "torch" },
-    { name = "torchvision" },
+    { name = "torch", specifier = "==2.13.0" },
+    { name = "torchvision", specifier = "==0.28.0" },
     { name = "tptbox", specifier = "==0.7.5" },
     { name = "urllib3", specifier = ">=2.7,<3" },
 ]

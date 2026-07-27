@@ -290,20 +290,14 @@ def _load_model(checkpoint: str, expected_sha256: str, device_name: str):
     from torchvision.models import resnet18
 
     verify_checkpoint(Path(checkpoint), expected_sha256)
-    try:
-        model = resnet18(weights=None)
-    except TypeError:  # pragma: no cover - compatibility with older torchvision
-        model = resnet18(pretrained=False)
+    model = resnet18(weights=None)
     model.conv1 = nn.Conv2d(9, 64, kernel_size=7, stride=2, padding=3, bias=False)
     model.fc = nn.Linear(model.fc.in_features, MODEL_CLASS_COUNT)
-    try:
-        state = torch.load(
-            checkpoint,
-            map_location=torch.device(device_name),
-            weights_only=True,
-        )
-    except TypeError:  # pragma: no cover - compatibility with older PyTorch
-        state = torch.load(checkpoint, map_location=torch.device(device_name))
+    state = torch.load(
+        checkpoint,
+        map_location=torch.device(device_name),
+        weights_only=True,
+    )
     model.load_state_dict(state, strict=True)
     model.to(torch.device(device_name))
     model.eval()

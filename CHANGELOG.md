@@ -42,6 +42,8 @@ This is a deliberate breaking release candidate.
   fallback can complete the pinned model stack.
 - the pinned VibeSeg CPU path is guarded against TPTBox's CUDA-only memory
   telemetry without changing upstream inference or CUDA execution.
+- CTDeepRot checkpoint loading requires the exact validated PyTorch/torchvision
+  pair and fails closed instead of retrying legacy pickle-loading APIs.
 
 ### Removed
 

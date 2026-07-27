@@ -789,6 +789,66 @@ def test_ctdeeprot_inference_never_downloads_missing_assets(tmp_path, monkeypatc
         CTDeepRotPredictor(tmp_path / "missing" / "net2d.pt")
 
 
+def test_ctdeeprot_model_loader_uses_only_safe_modern_apis(tmp_path, monkeypatch):
+    import torch
+    from torchvision import models as torchvision_models
+
+    from BodyComposition.orientation import ctdeeprot
+
+    checkpoint = tmp_path / "net2d.pt"
+    checkpoint.write_bytes(b"verified in test")
+    resnet_calls = []
+    load_calls = []
+    original_resnet18 = torchvision_models.resnet18
+
+    def observe_resnet18(*args, **kwargs):
+        resnet_calls.append((args, kwargs))
+        return original_resnet18(*args, **kwargs)
+
+    def reject_after_observation(*args, **kwargs):
+        load_calls.append((args, kwargs))
+        raise TypeError("simulated unsupported safe loader")
+
+    ctdeeprot.release_cached_models()
+    monkeypatch.setattr(ctdeeprot, "verify_checkpoint", lambda *args: checkpoint)
+    monkeypatch.setattr(torchvision_models, "resnet18", observe_resnet18)
+    monkeypatch.setattr(torch, "load", reject_after_observation)
+
+    with pytest.raises(TypeError, match="unsupported safe loader"):
+        ctdeeprot._load_model(str(checkpoint), "expected", "cpu")
+
+    assert resnet_calls == [((), {"weights": None})]
+    assert len(load_calls) == 1
+    assert load_calls[0][1]["weights_only"] is True
+    ctdeeprot.release_cached_models()
+
+
+def test_ctdeeprot_model_loader_does_not_retry_legacy_resnet_api(
+    tmp_path, monkeypatch
+):
+    from torchvision import models as torchvision_models
+
+    from BodyComposition.orientation import ctdeeprot
+
+    checkpoint = tmp_path / "net2d.pt"
+    checkpoint.write_bytes(b"verified in test")
+    calls = []
+
+    def reject_modern_api(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise TypeError("simulated unsupported torchvision")
+
+    ctdeeprot.release_cached_models()
+    monkeypatch.setattr(ctdeeprot, "verify_checkpoint", lambda *args: checkpoint)
+    monkeypatch.setattr(torchvision_models, "resnet18", reject_modern_api)
+
+    with pytest.raises(TypeError, match="unsupported torchvision"):
+        ctdeeprot._load_model(str(checkpoint), "expected", "cpu")
+
+    assert calls == [((), {"weights": None})]
+    ctdeeprot.release_cached_models()
+
+
 def test_ctdeeprot_model_sync_is_atomic_verified_and_idempotent(tmp_path, monkeypatch):
     payload = b"pinned checkpoint fixture"
     digest = hashlib.sha256(payload).hexdigest()

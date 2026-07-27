@@ -41,8 +41,8 @@ dependencies = [
     "SPINEPS==2.0.0",
     "TPTBox==0.7.5",
     "nnunetv2==2.5.2",
-    "torch",
-    "torchvision"
+    "torch==2.13.0",
+    "torchvision==0.28.0"
 ]
 
 [project.optional-dependencies]

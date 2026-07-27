@@ -99,6 +99,14 @@ def test_measurement_support_uses_the_pinned_nnunet_engine_directly():
     )
 
 
+def test_checkpoint_runtime_uses_the_exact_validated_safe_torch_pair():
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = project["project"]["dependencies"]
+
+    assert "torch==2.13.0" in dependencies
+    assert "torchvision==0.28.0" in dependencies
+
+
 def test_ci_and_release_gate_pin_tools_and_run_supply_chain_checks():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     release = Path("scripts/release_checks.py").read_text(encoding="utf-8")
