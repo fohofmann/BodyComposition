@@ -10,9 +10,8 @@ SPINEPS_SOURCE_COMMIT = "ad622b87d9e4b81fb6a88df2a8050bd40f7046d5"
 SPINEPS_WHEEL_SHA256 = "5a5feec1268b71ccf5d2c4400cd7f4ca68d7673bdb16814956e238de18c5b40b"
 SPINEPS_SOURCE_LICENSE = "Apache-2.0"
 
-# The project decision treats the pinned source as Apache-2.0 based on the
-# repository and the license bundled in the wheel. The inconsistent wheel
-# metadata is retained as a non-blocking provenance note.
+# TPTBox 0.7.5's repository and bundled license declare Apache-2.0. A
+# discrepancy in its wheel metadata remains explicit in model provenance.
 TPTBOX_COMPAT_VERSION = "0.7.5"
 TPTBOX_SOURCE_LICENSE = "Apache-2.0"
 TPTBOX_LICENSE_STATUS = "apache_2_0_with_wheel_metadata_discrepancy"
@@ -64,11 +63,10 @@ SPINEPS_CRANIO_CAUDAL_ORDER = (
     *range(20, 27),
 )
 
-# SPINEPS 2.0.0 stores derived IVD and endplate instances in the same output
-# array as vertebrae using label+100 and label+200. Importing seg_pipeline just
-# for these constants also imports the model runtime, so this narrow adapter
-# mirrors the two ranges from upstream commit SPINEPS_SOURCE_COMMIT. A focused
-# equivalence test compares them with the pinned upstream package.
+# SPINEPS 2.0.0 stores derived IVD and endplate instances in the vertebral
+# output as label+100 and label+200. Importing the upstream constants also
+# initializes its model runtime, so these pinned ranges are checked against
+# the upstream package by an equivalence test.
 SPINEPS_AUXILIARY_INSTANCE_LABELS = frozenset(
     (*range(100, 134), *range(200, 234))
 )
@@ -153,11 +151,10 @@ SPINEPS_MODEL_ASSETS = (
 
 SPINEPS_MODEL_ASSET_BY_ID = {asset.model_id: asset for asset in SPINEPS_MODEL_ASSETS}
 
-# SPINEPS 2.0.0's CT semantic configuration has ``needs_corp=true``. Its
-# process_img_nii path therefore invokes TPTBox VibeSeg Dataset100 before the
-# three SPINEPS models. Upstream's downloader also follows other_downloads.json
-# to the two addendum archives. These pins are deliberately explicit so this
-# approximately 2.3 GB hidden dependency cannot silently download or change.
+# SPINEPS 2.0.0 requires TPTBox VibeSeg Dataset100 for CT cropping. The
+# upstream manifest splits the approximately 2.3 GB model across three
+# archives; each archive is pinned because inference-time downloads are
+# disabled.
 VIBESEG_CROP_ASSETS = (
     ReleaseAssetPin(
         asset_name="100.zip",

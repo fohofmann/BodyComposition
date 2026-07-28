@@ -159,7 +159,6 @@ class InternalPipeline:
         if self.public_config.model_dump()["runtime"]["deterministic"]:
             torch.use_deterministic_algorithms(True, warn_only=True)
 
-        # function factory: load actions, use list of functions
         from BodyComposition.actions.orientation import AssessOrientation
         from BodyComposition.pipelines.bodycomposition import canonical_actions
 
@@ -171,14 +170,11 @@ class InternalPipeline:
         ):
             raise ValueError("Reporting was enabled but no report action was composed.")
 
-        # check if all actions are valid
         for action in self.actions:
             if not isinstance(action, PipelineAction):
                 raise TypeError(f'Invalid PipelineAction: {action}')
 
-        # log
         logging.info('canonical pipeline initialized with %s actions', len(self.actions))
-        
 
     def get_reset_outputs(self) -> list[str]:
         """Return file outputs that a requested reset must remove."""

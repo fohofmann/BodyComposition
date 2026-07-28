@@ -1,5 +1,5 @@
 measurements:
-  tissue_profile_id: local_draft_physical_cleanup_20_50mm3_v1
+  tissue_profile_id: physical_cleanup_20_50mm3_v1
   tissue_definitions:
     skeletal_muscle_tissue_hu_m29_150_min_component_20mm3:
       enabled: true

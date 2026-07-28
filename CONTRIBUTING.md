@@ -52,9 +52,9 @@ visual/model integration that has a separate controlled test.
 
 Prefer small conventional changes. Remove obsolete paths instead of adding
 compatibility shims unless a public contract explicitly requires one. Comments
-explain scientific or software invariants. Do not include task transcripts,
-local paths, generated clinical output, credentials, model weights, or
-automation metadata.
+explain scientific or software invariants. Do not include local paths,
+generated clinical output, credentials, model weights, or machine-specific
+state.
 
 ## License
 

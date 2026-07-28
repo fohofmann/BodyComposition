@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
+import re
 import tarfile
 import tomllib
 import zipfile
@@ -192,7 +193,7 @@ def test_array_digest_matches_c_order_bytes_for_empty_and_fortran_arrays():
         assert array_sha256(array) == expected.hexdigest()
 
 
-def test_public_product_surface_does_not_expose_internal_development_stages_labels():
+def test_public_product_surface_omits_internal_development_residue():
     public_files = [
         *Path("BodyComposition").rglob("*.py"),
         *Path("scripts").rglob("*.py"),
@@ -201,10 +202,15 @@ def test_public_product_surface_does_not_expose_internal_development_stages_labe
         Path("THIRD_PARTY_NOTICES.md"),
     ]
     forbidden = {f"wp{index:02d}" for index in range(1, 10)}
+    task_id = re.compile(
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
+    )
     findings = {}
     for path in public_files:
         text = path.read_text(encoding="utf-8").lower()
         matched = sorted(token for token in forbidden if token in text)
+        if task_id.search(text):
+            matched.append("task_id")
         if matched:
             findings[path.as_posix()] = matched
     assert findings == {}

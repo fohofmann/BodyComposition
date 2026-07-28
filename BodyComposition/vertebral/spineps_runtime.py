@@ -60,9 +60,9 @@ def _configure_upstream_citation_reminder() -> None:
     os.environ["SPINEPS_TURN_OF_CITATION_REMINDER"] = "TRUE"
     from spineps.utils import citation_reminder
 
-    # SPINEPS 2.0.0 registers an unconditional rich stdout banner at import.
-    # BodyComposition provides the same citation requirement in its notices,
-    # model records, documentation, and stderr log instead.
+    # SPINEPS 2.0.0 registers an exit-time stdout banner at import. Machine
+    # stdout remains reserved for CLI results; attribution is retained in
+    # notices, model provenance, documentation, and the stderr log.
     atexit.unregister(citation_reminder.print_citation_reminder)
     logging.info(
         "SPINEPS/VERIDAH inference requires citation; see THIRD_PARTY_NOTICES.md."
@@ -161,12 +161,10 @@ def _run_spineps(img_ref: Any, models: Any, derivative_name: str) -> Any:
         auto_crop_to_spine=False,
         proc_lab_force_no_tl_anomaly=False,
         ignore_bids_filter=True,
-        # The pinned CT model declares an "iso" acquisition, while routine CT
-        # is commonly anisotropic. SPINEPS itself reorients and resamples the
-        # image to the model's 0.8-mm grid and returns outputs in input space.
-        # BodyComposition validates the governed CT and its physical domain
-        # before and after this call, so the coarse BIDS acquisition check must
-        # not reject a physically valid anisotropic CT before that resampling.
+        # The CT model's BIDS descriptor says "iso", but SPINEPS accepts
+        # anisotropic CT by resampling to its 0.8-mm grid and returning outputs
+        # in input space. This adapter validates the input and output physical
+        # domains around that operation.
         ignore_compatibility_issues=True,
         return_output_instead_of_save=False,
         verbose=False,
@@ -356,8 +354,7 @@ class SpinepsRuntime:
                     cache_model=self.cache_vibeseg_model,
                 )
             else:
-                # Keep the narrow four-argument injection contract used by tests
-                # and downstream controlled adapters.
+                # Custom runners implement the stable four-argument adapter.
                 self._run_vibeseg(*arguments)
         if not output_path.is_file():
             raise RuntimeError("VibeSeg did not create the required SPINEPS crop segmentation.")

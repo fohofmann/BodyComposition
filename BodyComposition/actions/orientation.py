@@ -95,9 +95,8 @@ class AssessOrientation(PipelineAction):
 
         memory["tmp/original_index"] = source
         memory["tmp/orientation_result"] = outcome.result
-        # Keep the prepared-image handoff immutable for downstream adapters.
-        # It keeps the prepared image, orientation provenance, transform, and
-        # review state together instead of asking later stages to reconstruct it.
+        # This object binds the prepared image, transform, provenance, and
+        # review state at the downstream orientation boundary.
         memory["tmp/prepared_image"] = outcome
         if outcome.report_json is not None:
             memory[self.report_name] = outcome.report_json

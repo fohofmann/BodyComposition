@@ -351,8 +351,6 @@ class PipelineConfig:
         _merge_strict(data, value)
         _validate_public(data)
         instance = cls(copy.deepcopy(data))
-        # Reuse the mature scientific validators against the exact internal
-        # adapter consumed by the orientation, vertebral, measurement, and reporting stages.
         from BodyComposition.utils.config import validate_config
 
         validate_config(instance.to_runtime_dict())
