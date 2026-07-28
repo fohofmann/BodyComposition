@@ -64,6 +64,8 @@ def _metric_value(
         "bin_coverage_fraction": [],
         "effective_integration_length_mm": [],
         "aggregation": "integration_length_weighted_mean",
+        "bin_value_is_fov_cropped": [],
+        "value_is_fov_cropped": False,
     }
     if source not in group:
         return None, False, "invalid_measurement", audit
@@ -111,6 +113,13 @@ def _metric_value(
         & np.isfinite(effective_lengths)
         & (effective_lengths > 0)
     )
+    fov_column = f"{source}_value_is_fov_cropped"
+    fov_cropped = (
+        group[fov_column].fillna(False).astype(bool).to_numpy()
+        if fov_column in group
+        else np.zeros(len(group), dtype=bool)
+    )
+    audit["bin_value_is_fov_cropped"] = [bool(value) for value in fov_cropped]
 
     if definition["kind"] == "hu":
         area_source = definition["weight_source"]
@@ -188,6 +197,7 @@ def _metric_value(
                 weights=effective_lengths[measurement_valid],
             )
         )
+        audit["value_is_fov_cropped"] = bool(np.any(fov_cropped & measurement_valid))
     audit["unrounded_value"] = value
     return value, True, None, audit
 
@@ -213,7 +223,14 @@ def aggregate_vertebral_measurements(
         audit: dict[str, Any] = {}
         for column in columns:
             value, valid, reason, source_audit = _metric_value(group, column)
-            metrics[column] = {"value": value, "valid": valid, "reason": reason}
+            metrics[column] = {
+                "value": value,
+                "valid": valid,
+                "reason": reason,
+                "value_is_fov_cropped": bool(
+                    source_audit.get("value_is_fov_cropped", False)
+                ),
+            }
             audit[column] = source_audit
         rows.append(
             {

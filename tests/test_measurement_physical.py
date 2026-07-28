@@ -200,6 +200,36 @@ def test_external_rectangle_contour_matches_independent_physical_reference():
     assert observed.perimeter_cm * 10 == pytest.approx(expected_mm, abs=0.5)
 
 
+def test_boundary_touching_trunk_retains_observed_slice_values_with_qc():
+    shape = (1, 14, 16)
+    geometry = make_geometry(shape)
+    image = np.zeros(shape, dtype=np.int16)
+    tissues = np.zeros(shape, dtype=np.uint8)
+    body_labels = np.zeros(shape, dtype=np.uint8)
+    body_labels[0, 2:12, 0:13] = 1
+    body = body_surface_from_totalsegmentator(body_labels, geometry)
+
+    table = calculate_canonical_slice_measurements(
+        image,
+        tissues,
+        geometry,
+        {1: "SM"},
+        body,
+        MeasurementIdentity("case", "run", "analysis"),
+        compartment_labels_zyx=tissues,
+        compartment_label_schema={1: "SM"},
+    )
+
+    row = table.iloc[0]
+    assert row["trunk_area_cm2"] > 0
+    assert pd.notna(row["trunk_circumference_cm"])
+    assert row["trunk_circumference_cm"] > 0
+    assert not row["trunk_area_valid"]
+    assert not row["trunk_contour_valid"]
+    assert row["trunk_area_reason"] == "touching_image_boundary"
+    assert row["trunk_contour_reason"] == "touching_image_boundary"
+
+
 def test_oblique_anisotropic_elliptical_solid_matches_voxel_volume_reference():
     shape = (5, 96, 120)
     angle = math.radians(18)
@@ -211,9 +241,7 @@ def test_oblique_anisotropic_elliptical_solid_matches_voxel_volume_reference():
         direction_lps=(1.0, 0.0, 0.0, 0.0, cosine, -sine, 0.0, sine, cosine),
     )
     y, x = np.ogrid[: shape[1], : shape[2]]
-    ellipse_yx = (
-        ((x - 60.0) / 31.0) ** 2 + ((y - 48.0) / 23.0) ** 2
-    ) <= 1.0
+    ellipse_yx = (((x - 60.0) / 31.0) ** 2 + ((y - 48.0) / 23.0) ** 2) <= 1.0
     labels = np.broadcast_to(ellipse_yx, shape).astype(np.uint8).copy()
     image = np.full(shape, 35, dtype=np.int16)
     body_labels = np.zeros(shape, dtype=np.uint8)
@@ -242,9 +270,7 @@ def test_oblique_anisotropic_elliptical_solid_matches_voxel_volume_reference():
         float(table["slice_slab_inferior_mm"].min()),
         float(table["slice_slab_superior_mm"].max()),
     )
-    expected_volume_cm3 = (
-        int(np.count_nonzero(labels)) * geometry.voxel_volume_mm3 / 1000.0
-    )
+    expected_volume_cm3 = int(np.count_nonzero(labels)) * geometry.voxel_volume_mm3 / 1000.0
     assert aggregate["range_valid"]
     assert aggregate["sm_volume_cm3"] == pytest.approx(
         expected_volume_cm3,
@@ -342,8 +368,7 @@ def test_body_surface_backends_are_explicit_and_never_substitute_each_other():
     assert np.all(derived.body_mask_zyx[labels == 2])
     assert not np.any(derived.trunk_mask_zyx[labels == 2])
     assert any(
-        flag.code == "deterministic_body_surface_selected"
-        for flag in deterministic.qc_flags
+        flag.code == "deterministic_body_surface_selected" for flag in deterministic.qc_flags
     )
 
     empty = tissue_segmentation_envelope(
@@ -434,6 +459,32 @@ def test_range_aggregation_honors_metric_specific_surface_and_tissue_validity():
     assert partial["body_mean_csa_cm2"] == pytest.approx(100.0)
     assert partial["body_mean_csa_cm2_coverage_fraction"] == pytest.approx(0.5)
     assert partial["trunk_mean_circumference_cm"] == pytest.approx(90.0)
+
+
+def test_range_aggregation_retains_numeric_fov_cropped_trunk_observation():
+    slices = pd.DataFrame(
+        {
+            "slice_id": [0, 1],
+            "slice_slab_inferior_mm": [0.0, 2.0],
+            "slice_slab_superior_mm": [2.0, 4.0],
+            "slice_thickness_normal_mm": [2.0, 2.0],
+            "normal_mm_per_superior_mm": [1.0, 1.0],
+            "trunk_circumference_cm": [90.0, 86.0],
+            "trunk_contour_valid": [True, False],
+            "trunk_contour_reason": [None, "touching_image_boundary"],
+            "trunk_contour_closed": [True, True],
+            "trunk_touching_fov": [False, True],
+            "trunk_mask_fragmented": [False, False],
+            "trunk_mask_internal_gap": [False, False],
+        }
+    )
+
+    result = aggregate_physical_range(slices, 0.0, 4.0)
+
+    assert result["trunk_mean_circumference_cm_valid"]
+    assert result["trunk_mean_circumference_cm"] == pytest.approx(88.0)
+    assert result["trunk_mean_circumference_cm_coverage_fraction"] == pytest.approx(1.0)
+    assert result["trunk_mean_circumference_cm_value_is_fov_cropped"]
 
 
 def test_strict_pooled_hu_rejects_invalid_nonempty_slices_but_not_empty_tissue():

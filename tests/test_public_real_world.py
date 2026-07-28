@@ -46,6 +46,7 @@ EXPECTED_OUTPUTS = (
     "tables/vertebrae.parquet",
     "tables/summaries.parquet",
     "tables/signature.parquet",
+    "tables/hu_distributions.parquet",
     "qc/vertebral_result.json",
     "qc/spine_review.png",
     "qc/qc.json",
@@ -135,9 +136,7 @@ def _release_config() -> PipelineConfig:
     assert all(report.ready for report in reports), {
         report.model_id: report.errors for report in reports if not report.ready
     }
-    tissue = next(
-        report for report in reports if report.model_id == "bodycomposition_resenc_l_v1"
-    )
+    tissue = next(report for report in reports if report.model_id == "bodycomposition_resenc_l_v1")
     assert dict(tissue.checked_files) == TISSUE_MODEL_ASSETS
     return config
 
@@ -171,9 +170,7 @@ def _run_cli(command: list[str]) -> dict:
         text=True,
         timeout=3000,
     )
-    assert completed.returncode == 0, (
-        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
-    )
+    assert completed.returncode == 0, f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     assert "Traceback (most recent call last)" not in completed.stderr
     # JSON mode is an automation contract: upstream banners may not leak into stdout.
     return json.loads(completed.stdout)
@@ -291,6 +288,7 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     vertebrae = pd.read_parquet(bundle / "tables/vertebrae.parquet")
     summaries = pd.read_parquet(bundle / "tables/summaries.parquet")
     signature = pd.read_parquet(bundle / "tables/signature.parquet")
+    hu_distributions = pd.read_parquet(bundle / "tables/hu_distributions.parquet")
     assert len(slices) == ct_image.GetSize()[2]
     assert slices["slice_id"].is_unique
     assert np.all(np.diff(slices["position_superior_mm"].to_numpy()) > 0)
@@ -301,6 +299,19 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     assert len(signature) == 100
     assert signature["bin_width_mm"].eq(20.0).all()
     assert signature["signature_bin"].tolist() == list(range(100))
+    assert hu_distributions.groupby("tissue_key").size().to_dict() == {
+        "avat": 68,
+        "sat": 68,
+        "sm": 68,
+        "tvat": 68,
+    }
+    assert hu_distributions["source_semantics"].eq("model_native_compartment").all()
+    assert (
+        hu_distributions["in_histogram_voxel_count"]
+        + hu_distributions["below_histogram_voxel_count"]
+        + hu_distributions["above_histogram_voxel_count"]
+        == hu_distributions["finite_voxel_count"]
+    ).all()
     assert summaries.loc[0, "case_id"] == manifest["asset_id"]
 
     inspected = inspect_result(bundle)

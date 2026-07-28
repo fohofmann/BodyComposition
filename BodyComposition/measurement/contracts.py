@@ -14,7 +14,7 @@ import pyarrow as pa
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCStatus
 
-MEASUREMENT_SCHEMA_VERSION = "3.1.0"
+MEASUREMENT_SCHEMA_VERSION = "3.2.0"
 VERTEBRAL_TERRITORY_SCHEMA_VERSION = "native-physical-territories-v2-bins3"
 BINS_PER_VERTEBRAL_TERRITORY = 3
 SIGNATURE_SCHEMA_VERSION = "vertebral-reference-fixed-mm-v1"
@@ -22,6 +22,17 @@ REFERENCE_ALIGNMENT_VERSION = "robust-vertebral-linear-reference-v1"
 SIGNATURE_BIN_COUNT = 100
 SIGNATURE_BIN_WIDTH_MM = 20.0
 SIGNATURE_REFERENCE_LEVEL = "L3"
+TISSUE_HU_DISTRIBUTION_SCHEMA_VERSION = "fixed-bin-native-compartment-hu-v1"
+HU_DISTRIBUTION_SCOPE = "analyzed_volume"
+HU_DISTRIBUTION_MIN_HU = -190.0
+HU_DISTRIBUTION_MAX_HU = 150.0
+HU_DISTRIBUTION_BIN_WIDTH_HU = 5.0
+HU_DISTRIBUTION_TISSUES: tuple[tuple[str, str, str], ...] = (
+    ("sm", "SM", "sm"),
+    ("sat", "SAT", "sat"),
+    ("avat", "aVAT", "avat"),
+    ("tvat", "tVAT", "tvat"),
+)
 SIGNATURE_CORE_CHANNELS: tuple[tuple[str, str], ...] = (
     ("sm", "sm"),
     (
@@ -66,6 +77,11 @@ SLICE_REQUIRED_COLUMNS = {
     "trunk_area_reason",
     "trunk_circumference_cm",
     "trunk_contour_valid",
+    "trunk_contour_reason",
+    "trunk_contour_closed",
+    "body_touching_fov",
+    "trunk_touching_fov",
+    "trunk_mask_fragmented",
     "slice_measurement_valid",
     "slice_qc_status",
 }
@@ -95,6 +111,7 @@ VERTEBRA_REQUIRED_COLUMNS = {
     "bin_valid",
     "bin_missing_reason",
     "aggregation",
+    "trunk_mean_circumference_cm_value_is_fov_cropped",
 }
 SUMMARY_REQUIRED_COLUMNS = {
     "schema_version",
@@ -136,15 +153,23 @@ SUMMARY_REQUIRED_COLUMNS = {
     "ct_max_pelvic_circumference_search_acquisition_coverage_fraction",
     "ct_max_pelvic_circumference_search_valid_contour_coverage_fraction",
     "ct_max_pelvic_circumference_search_anatomically_complete",
+    "ct_max_pelvic_circumference_search_touches_fov",
+    "ct_max_pelvic_circumference_value_is_fov_cropped",
     "ct_max_pelvic_search_definition",
     "ct_min_waist_to_pelvic_ratio",
     "ct_min_waist_to_pelvic_ratio_valid",
     "ct_min_waist_to_pelvic_ratio_eligible",
     "ct_min_waist_to_pelvic_ratio_reason",
+    "ct_min_waist_to_pelvic_ratio_value_is_fov_cropped",
     "ct_midwaist_to_pelvic_ratio",
     "ct_midwaist_to_pelvic_ratio_valid",
     "ct_midwaist_to_pelvic_ratio_eligible",
     "ct_midwaist_to_pelvic_ratio_reason",
+    "ct_midwaist_to_pelvic_ratio_value_is_fov_cropped",
+    "body_surface_touches_fov",
+    "body_surface_touches_fov_slice_count",
+    "trunk_contour_touches_fov",
+    "trunk_contour_touches_fov_slice_count",
 }
 SIGNATURE_REQUIRED_COLUMNS = {
     "schema_version",
@@ -189,6 +214,50 @@ SIGNATURE_REQUIRED_COLUMNS = {
     "trunk_mean_circumference_cm_reason",
     "trunk_mean_circumference_cm_coverage_fraction",
 }
+HU_DISTRIBUTION_REQUIRED_COLUMNS = {
+    "schema_version",
+    "run_id",
+    "analysis_id",
+    "case_id",
+    "distribution_schema_version",
+    "distribution_scope",
+    "tissue_key",
+    "display_label",
+    "source_compartment",
+    "source_label_ids",
+    "source_semantics",
+    "histogram_min_hu",
+    "histogram_max_hu",
+    "bin_width_hu",
+    "bin_semantics",
+    "bin_index",
+    "bin_lower_hu",
+    "bin_upper_hu",
+    "bin_upper_inclusive",
+    "voxel_count",
+    "voxel_fraction",
+    "total_voxel_count",
+    "finite_voxel_count",
+    "nonfinite_voxel_count",
+    "in_histogram_voxel_count",
+    "below_histogram_voxel_count",
+    "above_histogram_voxel_count",
+    "below_histogram_voxel_fraction",
+    "above_histogram_voxel_fraction",
+    "contributing_slice_count",
+    "voxel_volume_mm3",
+    "total_volume_cm3",
+    "distribution_valid",
+    "distribution_reason",
+    "mean_hu",
+    "standard_deviation_hu",
+    "q1_hu",
+    "median_hu",
+    "q3_hu",
+    "quantile_method",
+    "scope_inferior_position_superior_mm",
+    "scope_superior_position_superior_mm",
+}
 for _destination, _ in SIGNATURE_CORE_CHANNELS:
     SIGNATURE_REQUIRED_COLUMNS.update(
         {
@@ -228,6 +297,8 @@ MISSING_REASONS = {
     "unassigned_edge",
     "missing_neighbor",
     "sequence_gap",
+    "definition_disabled",
+    "missing_compartment",
 }
 
 
@@ -237,6 +308,16 @@ _STRING_COLUMNS = {
     "signature_schema_version",
     "signature_profile_id",
     "reference_alignment_version",
+    "distribution_schema_version",
+    "distribution_scope",
+    "tissue_key",
+    "display_label",
+    "tissue_definition",
+    "source_compartment",
+    "source_label_ids",
+    "source_semantics",
+    "bin_semantics",
+    "quantile_method",
     "run_id",
     "analysis_id",
     "case_id",
@@ -271,6 +352,13 @@ _BOOLEAN_COLUMNS = {
     "reference_alignment_valid",
     "reference_alignment_review_required",
     "bin_valid",
+    "bin_upper_inclusive",
+    "distribution_valid",
+    "body_surface_touches_fov",
+    "ct_max_pelvic_circumference_value_is_fov_cropped",
+    "trunk_mean_circumference_cm_value_is_fov_cropped",
+    "ct_min_waist_to_pelvic_ratio_value_is_fov_cropped",
+    "ct_midwaist_to_pelvic_ratio_value_is_fov_cropped",
     "sequence_gap_cranial",
     "sequence_gap_caudal",
 }
@@ -286,6 +374,14 @@ _INTEGER_COLUMNS = {
     "signature_bin",
     "relative_bin_index",
     "reference_alignment_anchor_count",
+    "bin_index",
+    "voxel_count",
+    "total_voxel_count",
+    "finite_voxel_count",
+    "nonfinite_voxel_count",
+    "in_histogram_voxel_count",
+    "below_histogram_voxel_count",
+    "above_histogram_voxel_count",
 }
 
 
@@ -542,6 +638,302 @@ def validate_signature_contract(
             raise ValueError(f"{table_name} unresolved alignment must require review.")
 
 
+def validate_hu_distribution_contract(
+    table: pd.DataFrame,
+    *,
+    table_name: str = "hu_distributions",
+) -> None:
+    """Validate the fixed-bin, raw-voxel tissue HU distribution contract."""
+
+    missing = sorted(HU_DISTRIBUTION_REQUIRED_COLUMNS - set(table.columns))
+    if missing:
+        raise ValueError(f"{table_name} is missing columns: {missing}.")
+    expected_bin_count = int(
+        round((HU_DISTRIBUTION_MAX_HU - HU_DISTRIBUTION_MIN_HU) / HU_DISTRIBUTION_BIN_WIDTH_HU)
+    )
+    expected_row_count = len(HU_DISTRIBUTION_TISSUES) * expected_bin_count
+    if len(table) != expected_row_count:
+        raise ValueError(
+            f"{table_name} must contain exactly {expected_row_count} fixed tissue/bin rows."
+        )
+    expected_tissue_sequence = [
+        tissue_key
+        for tissue_key, _display_label, _definition in HU_DISTRIBUTION_TISSUES
+        for _ in range(expected_bin_count)
+    ]
+    if table["tissue_key"].astype(str).tolist() != expected_tissue_sequence:
+        raise ValueError(f"{table_name} must retain the fixed SM, SAT, aVAT, tVAT tissue order.")
+    if (
+        table["distribution_schema_version"].isna().any()
+        or not table["distribution_schema_version"].eq(TISSUE_HU_DISTRIBUTION_SCHEMA_VERSION).all()
+    ):
+        raise ValueError(f"{table_name} has an unsupported distribution_schema_version.")
+    if (
+        table["distribution_scope"].isna().any()
+        or not table["distribution_scope"].eq(HU_DISTRIBUTION_SCOPE).all()
+    ):
+        raise ValueError(f"{table_name} distribution_scope must be {HU_DISTRIBUTION_SCOPE}.")
+    if (
+        table["bin_semantics"].isna().any()
+        or not table["bin_semantics"].eq("left_closed_right_open_final_closed").all()
+    ):
+        raise ValueError(f"{table_name} has unsupported histogram bin semantics.")
+    if table["quantile_method"].isna().any() or not table["quantile_method"].eq("linear").all():
+        raise ValueError(f"{table_name} has an unsupported quantile method.")
+    if table[["tissue_key", "bin_index"]].duplicated().any():
+        raise ValueError(f"{table_name} contains duplicate tissue/bin identities.")
+
+    scope_inferior = pd.to_numeric(
+        table["scope_inferior_position_superior_mm"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    scope_superior = pd.to_numeric(
+        table["scope_superior_position_superior_mm"],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    if (
+        not np.all(np.isfinite(scope_inferior))
+        or not np.all(np.isfinite(scope_superior))
+        or not np.allclose(scope_inferior, scope_inferior[0], rtol=0.0, atol=1e-9)
+        or not np.allclose(scope_superior, scope_superior[0], rtol=0.0, atol=1e-9)
+        or not scope_inferior[0] < scope_superior[0]
+    ):
+        raise ValueError(f"{table_name} has inconsistent analyzed-volume bounds.")
+
+    expected_edges = np.arange(
+        HU_DISTRIBUTION_MIN_HU,
+        HU_DISTRIBUTION_MAX_HU + HU_DISTRIBUTION_BIN_WIDTH_HU,
+        HU_DISTRIBUTION_BIN_WIDTH_HU,
+        dtype=float,
+    )
+    expected_indices = np.arange(expected_bin_count, dtype=np.int64)
+    expected_inclusive = np.zeros(expected_bin_count, dtype=bool)
+    expected_inclusive[-1] = True
+    tissue_metadata = {
+        tissue_key: (display_label, source_compartment)
+        for tissue_key, display_label, source_compartment in HU_DISTRIBUTION_TISSUES
+    }
+    allowed_invalid_reasons = {
+        "empty_tissue",
+        "invalid_measurement",
+        "missing_compartment",
+    }
+
+    for tissue_key, group in table.groupby("tissue_key", sort=False):
+        group = group.reset_index(drop=True)
+        display_label, source_compartment = tissue_metadata[str(tissue_key)]
+        if (
+            group[
+                [
+                    "display_label",
+                    "source_compartment",
+                    "source_label_ids",
+                    "source_semantics",
+                ]
+            ]
+            .isna()
+            .any()
+            .any()
+            or not group["display_label"].eq(display_label).all()
+            or not group["source_compartment"].eq(source_compartment).all()
+            or not group["source_semantics"].eq("model_native_compartment").all()
+        ):
+            raise ValueError(f"{table_name} has inconsistent metadata for {tissue_key}.")
+        if not np.array_equal(
+            pd.to_numeric(group["bin_index"], errors="coerce").to_numpy(dtype=np.int64),
+            expected_indices,
+        ):
+            raise ValueError(f"{table_name} has unstable bin identities for {tissue_key}.")
+        for column, expected in (
+            ("bin_lower_hu", expected_edges[:-1]),
+            ("bin_upper_hu", expected_edges[1:]),
+            (
+                "bin_width_hu",
+                np.full(expected_bin_count, HU_DISTRIBUTION_BIN_WIDTH_HU),
+            ),
+            (
+                "histogram_min_hu",
+                np.full(expected_bin_count, HU_DISTRIBUTION_MIN_HU),
+            ),
+            (
+                "histogram_max_hu",
+                np.full(expected_bin_count, HU_DISTRIBUTION_MAX_HU),
+            ),
+        ):
+            observed = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=float)
+            if not np.allclose(observed, expected, rtol=0.0, atol=1e-9):
+                raise ValueError(
+                    f"{table_name} {column} differs from the fixed HU grid for {tissue_key}."
+                )
+        if not group["bin_upper_inclusive"].notna().all() or not np.array_equal(
+            group["bin_upper_inclusive"].to_numpy(dtype=bool),
+            expected_inclusive,
+        ):
+            raise ValueError(f"{table_name} has inconsistent final-bin inclusion for {tissue_key}.")
+        for column in (
+            "source_label_ids",
+            "total_voxel_count",
+            "finite_voxel_count",
+            "nonfinite_voxel_count",
+            "in_histogram_voxel_count",
+            "below_histogram_voxel_count",
+            "above_histogram_voxel_count",
+            "below_histogram_voxel_fraction",
+            "above_histogram_voxel_fraction",
+            "contributing_slice_count",
+            "voxel_volume_mm3",
+            "total_volume_cm3",
+            "distribution_valid",
+            "distribution_reason",
+            "mean_hu",
+            "standard_deviation_hu",
+            "q1_hu",
+            "median_hu",
+            "q3_hu",
+        ):
+            if group[column].nunique(dropna=False) != 1:
+                raise ValueError(f"{table_name} has inconsistent {column} for {tissue_key}.")
+
+        counts = pd.to_numeric(group["voxel_count"], errors="coerce").to_numpy(dtype=float)
+        fractions = pd.to_numeric(
+            group["voxel_fraction"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        if (
+            not np.all(np.isfinite(counts))
+            or np.any(counts < 0)
+            or not np.all(counts == np.floor(counts))
+            or not np.all(np.isfinite(fractions))
+            or np.any((fractions < 0.0) | (fractions > 1.0))
+        ):
+            raise ValueError(f"{table_name} has invalid histogram values for {tissue_key}.")
+        totals = {
+            column: int(group[column].iloc[0])
+            for column in (
+                "total_voxel_count",
+                "finite_voxel_count",
+                "nonfinite_voxel_count",
+                "in_histogram_voxel_count",
+                "below_histogram_voxel_count",
+                "above_histogram_voxel_count",
+                "contributing_slice_count",
+            )
+        }
+        if any(value < 0 for value in totals.values()):
+            raise ValueError(f"{table_name} has negative counts for {tissue_key}.")
+        if (
+            totals["finite_voxel_count"] + totals["nonfinite_voxel_count"]
+            != totals["total_voxel_count"]
+            or totals["in_histogram_voxel_count"]
+            + totals["below_histogram_voxel_count"]
+            + totals["above_histogram_voxel_count"]
+            != totals["finite_voxel_count"]
+            or int(counts.sum()) != totals["in_histogram_voxel_count"]
+        ):
+            raise ValueError(f"{table_name} count accounting differs for {tissue_key}.")
+        expected_fractions = (
+            counts / totals["total_voxel_count"]
+            if totals["total_voxel_count"]
+            else np.zeros(expected_bin_count, dtype=float)
+        )
+        if not np.allclose(fractions, expected_fractions, rtol=0.0, atol=1e-12):
+            raise ValueError(f"{table_name} voxel fractions differ for {tissue_key}.")
+        below_fraction = float(group["below_histogram_voxel_fraction"].iloc[0])
+        above_fraction = float(group["above_histogram_voxel_fraction"].iloc[0])
+        expected_below_fraction = (
+            totals["below_histogram_voxel_count"] / totals["total_voxel_count"]
+            if totals["total_voxel_count"]
+            else 0.0
+        )
+        expected_above_fraction = (
+            totals["above_histogram_voxel_count"] / totals["total_voxel_count"]
+            if totals["total_voxel_count"]
+            else 0.0
+        )
+        if not np.isclose(
+            below_fraction,
+            expected_below_fraction,
+            rtol=0.0,
+            atol=1e-12,
+        ) or not np.isclose(
+            above_fraction,
+            expected_above_fraction,
+            rtol=0.0,
+            atol=1e-12,
+        ):
+            raise ValueError(f"{table_name} overflow fractions differ for {tissue_key}.")
+        voxel_volume_mm3 = float(group["voxel_volume_mm3"].iloc[0])
+        total_volume_cm3 = float(group["total_volume_cm3"].iloc[0])
+        if (
+            not np.isfinite(voxel_volume_mm3)
+            or voxel_volume_mm3 <= 0
+            or not np.isclose(
+                total_volume_cm3,
+                totals["total_voxel_count"] * voxel_volume_mm3 / 1000.0,
+                rtol=0.0,
+                atol=1e-9,
+            )
+        ):
+            raise ValueError(f"{table_name} has inconsistent physical volume for {tissue_key}.")
+
+        valid = bool(group["distribution_valid"].iloc[0])
+        reason_value = group["distribution_reason"].iloc[0]
+        reason = None if pd.isna(reason_value) else str(reason_value)
+        quantiles = np.asarray(
+            [
+                group["q1_hu"].iloc[0],
+                group["median_hu"].iloc[0],
+                group["q3_hu"].iloc[0],
+            ],
+            dtype=float,
+        )
+        moments = np.asarray(
+            [
+                group["mean_hu"].iloc[0],
+                group["standard_deviation_hu"].iloc[0],
+            ],
+            dtype=float,
+        )
+        source_label_ids = str(group["source_label_ids"].iloc[0])
+        parsed_source_label_ids: tuple[int, ...] = ()
+        if source_label_ids:
+            try:
+                parsed_source_label_ids = tuple(int(value) for value in source_label_ids.split(","))
+            except ValueError as error:
+                raise ValueError(
+                    f"{table_name} has invalid source_label_ids for {tissue_key}."
+                ) from error
+            if any(value <= 0 for value in parsed_source_label_ids) or len(
+                set(parsed_source_label_ids)
+            ) != len(parsed_source_label_ids):
+                raise ValueError(f"{table_name} has invalid source_label_ids for {tissue_key}.")
+        if valid:
+            if (
+                totals["total_voxel_count"] <= 0
+                or totals["nonfinite_voxel_count"] != 0
+                or totals["contributing_slice_count"] <= 0
+                or not parsed_source_label_ids
+                or reason is not None
+                or not np.all(np.isfinite(moments))
+                or moments[1] < 0
+                or not np.all(np.isfinite(quantiles))
+                or not quantiles[0] <= quantiles[1] <= quantiles[2]
+            ):
+                raise ValueError(
+                    f"{table_name} has inconsistent valid statistics for {tissue_key}."
+                )
+        elif reason not in allowed_invalid_reasons:
+            raise ValueError(f"{table_name} has an unsupported invalid reason for {tissue_key}.")
+        if totals["total_voxel_count"] == 0 and (
+            totals["contributing_slice_count"] != 0
+            or np.any(np.isfinite(moments))
+            or np.any(np.isfinite(quantiles))
+        ):
+            raise ValueError(f"{table_name} has statistics for an empty tissue {tissue_key}.")
+        if reason == "missing_compartment" and parsed_source_label_ids:
+            raise ValueError(f"{table_name} marks {tissue_key} missing despite source labels.")
+
+
 def _validate_mask(mask_zyx: np.ndarray, geometry: ImageGeometry, name: str) -> np.ndarray:
     mask = np.asarray(mask_zyx)
     expected_shape = tuple(reversed(geometry.size_xyz))
@@ -730,6 +1122,7 @@ class MeasurementBundle:
     vertebrae: pd.DataFrame
     summaries: pd.DataFrame
     signature: pd.DataFrame
+    hu_distributions: pd.DataFrame
     body_surface: BodySurfaceResult
     vertebral_extents: Mapping[str, VertebralExtent]
     vertebral_territories: Mapping[str, VertebralTerritory]
@@ -739,7 +1132,13 @@ class MeasurementBundle:
     paths: Mapping[str, Path] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        for name in ("slices", "vertebrae", "summaries", "signature"):
+        for name in (
+            "slices",
+            "vertebrae",
+            "summaries",
+            "signature",
+            "hu_distributions",
+        ):
             value = getattr(self, name)
             if not isinstance(value, pd.DataFrame):
                 raise TypeError(f"Measurement bundle {name} must be a pandas DataFrame.")
@@ -755,6 +1154,7 @@ class MeasurementBundle:
             "vertebrae": VERTEBRA_REQUIRED_COLUMNS,
             "summaries": SUMMARY_REQUIRED_COLUMNS,
             "signature": SIGNATURE_REQUIRED_COLUMNS,
+            "hu_distributions": HU_DISTRIBUTION_REQUIRED_COLUMNS,
         }
         for name, required in required_by_table.items():
             missing = sorted(required - set(getattr(self, name).columns))
@@ -763,6 +1163,7 @@ class MeasurementBundle:
         if self.slices.empty:
             raise ValueError("slices must retain every acquired CT slice and cannot be empty.")
         validate_signature_contract(self.signature)
+        validate_hu_distribution_contract(self.hu_distributions)
         if self.slices["slice_id"].duplicated().any():
             raise ValueError("slice_id must be unique within a case.")
         position = self.slices["position_superior_mm"].to_numpy(dtype=float)
@@ -780,16 +1181,36 @@ class MeasurementBundle:
             if observed != expected:
                 raise ValueError(f"Vertebral territory {level!r} has unstable bin identities.")
         expected_identity = self.identity.as_columns()
-        for name in ("slices", "vertebrae", "summaries", "signature"):
+        for name in (
+            "slices",
+            "vertebrae",
+            "summaries",
+            "signature",
+            "hu_distributions",
+        ):
             table = getattr(self, name)
             for column, expected in expected_identity.items():
                 if not table[column].eq(expected).all():
                     raise ValueError(f"Measurement table {name} has inconsistent {column} values.")
         summary = self.summaries.iloc[0]
-        tolerance_values = pd.to_numeric(
-            self.slices["full_coverage_tolerance"],
-            errors="coerce",
-        ).dropna().unique()
+        body_touching_fov = self.slices["body_touching_fov"].fillna(False).astype(bool)
+        if bool(summary["body_surface_touches_fov"]) != bool(body_touching_fov.any()) or int(
+            summary["body_surface_touches_fov_slice_count"]
+        ) != int(body_touching_fov.sum()):
+            raise ValueError("Case-level body FOV flags disagree with slices.parquet.")
+        trunk_touching_fov = self.slices["trunk_touching_fov"].fillna(False).astype(bool)
+        if bool(summary["trunk_contour_touches_fov"]) != bool(trunk_touching_fov.any()) or int(
+            summary["trunk_contour_touches_fov_slice_count"]
+        ) != int(trunk_touching_fov.sum()):
+            raise ValueError("Case-level trunk FOV flags disagree with slices.parquet.")
+        tolerance_values = (
+            pd.to_numeric(
+                self.slices["full_coverage_tolerance"],
+                errors="coerce",
+            )
+            .dropna()
+            .unique()
+        )
         if len(tolerance_values) != 1:
             raise ValueError("slices must contain one full_coverage_tolerance.")
         full_coverage_tolerance = float(tolerance_values[0])
@@ -803,12 +1224,8 @@ class MeasurementBundle:
                 raise ValueError(f"{prefix} cannot be eligible when it is invalid.")
             if not eligible:
                 continue
-            acquisition_coverage = float(
-                summary[f"{prefix}_search_acquisition_coverage_fraction"]
-            )
-            contour_coverage = float(
-                summary[f"{prefix}_search_valid_contour_coverage_fraction"]
-            )
+            acquisition_coverage = float(summary[f"{prefix}_search_acquisition_coverage_fraction"])
+            contour_coverage = float(summary[f"{prefix}_search_valid_contour_coverage_fraction"])
             if (
                 not bool(summary[f"{prefix}_search_anatomically_complete"])
                 or bool(summary[f"{prefix}_at_search_boundary"])
@@ -826,6 +1243,49 @@ class MeasurementBundle:
         ):
             if bool(summary[f"{prefix}_eligible"]) and not bool(summary[f"{prefix}_valid"]):
                 raise ValueError(f"{prefix} cannot be eligible when it is invalid.")
+        pelvic_fov_cropped = bool(summary["ct_max_pelvic_circumference_value_is_fov_cropped"])
+        if pelvic_fov_cropped and (
+            not bool(summary["ct_max_pelvic_circumference_valid"])
+            or bool(summary["ct_max_pelvic_circumference_eligible"])
+            or not bool(summary["ct_max_pelvic_circumference_search_touches_fov"])
+            or str(summary["ct_max_pelvic_circumference_reason"]) != "touching_image_boundary"
+        ):
+            raise ValueError("FOV-cropped pelvic circumference has contradictory validity or QC.")
+        if pelvic_fov_cropped:
+            pelvic_slice_id = int(summary["ct_max_pelvic_circumference_slice_id"])
+            selected_slices = self.slices.loc[self.slices["slice_id"].eq(pelvic_slice_id)]
+            if len(selected_slices) != 1:
+                raise ValueError(
+                    "FOV-cropped pelvic circumference lacks one selected source slice."
+                )
+            selected_slice = selected_slices.iloc[0]
+            selected_circumference = float(selected_slice["trunk_circumference_cm"])
+            if (
+                not bool(selected_slice["trunk_touching_fov"])
+                or not bool(selected_slice["trunk_contour_closed"])
+                or bool(selected_slice["trunk_mask_fragmented"])
+                or str(selected_slice["trunk_contour_reason"]) != "touching_image_boundary"
+                or not np.isclose(
+                    selected_circumference,
+                    float(summary["ct_max_pelvic_circumference_cm"]),
+                    rtol=0.0,
+                    atol=1e-9,
+                )
+            ):
+                raise ValueError(
+                    "FOV-cropped pelvic circumference disagrees with its source slice."
+                )
+        for prefix in (
+            "ct_min_waist_to_pelvic_ratio",
+            "ct_midwaist_to_pelvic_ratio",
+        ):
+            ratio_fov_cropped = bool(summary[f"{prefix}_value_is_fov_cropped"])
+            if ratio_fov_cropped and (
+                not pelvic_fov_cropped
+                or not bool(summary[f"{prefix}_valid"])
+                or bool(summary[f"{prefix}_eligible"])
+            ):
+                raise ValueError(f"{prefix} has contradictory FOV-cropped denominator QC.")
         if bool(summary["ct_min_waist_to_pelvic_ratio_eligible"]) and not (
             bool(summary["ct_min_trunk_circumference_t10_l5_eligible"])
             and bool(summary["ct_max_pelvic_circumference_eligible"])
@@ -840,6 +1300,53 @@ class MeasurementBundle:
             raise ValueError(
                 "Mid-waist-to-pelvic ratio eligibility requires valid, eligible components."
             )
+        fov_cropped_trunk = self.vertebrae[
+            "trunk_mean_circumference_cm_value_is_fov_cropped"
+        ].fillna(False).astype(bool)
+        trunk_valid = self.vertebrae["trunk_mean_circumference_cm_valid"].fillna(
+            False
+        ).astype(bool)
+        trunk_values = pd.to_numeric(
+            self.vertebrae["trunk_mean_circumference_cm"],
+            errors="coerce",
+        )
+        if (fov_cropped_trunk & (~trunk_valid | ~np.isfinite(trunk_values))).any():
+            raise ValueError(
+                "FOV-cropped vertebral trunk circumference must retain a valid numeric value."
+            )
+        for _, row in self.vertebrae.loc[fov_cropped_trunk].iterrows():
+            overlaps = (
+                np.minimum(
+                    self.slices["slice_slab_superior_mm"].to_numpy(dtype=float),
+                    float(row["bin_superior_mm"]),
+                )
+                - np.maximum(
+                    self.slices["slice_slab_inferior_mm"].to_numpy(dtype=float),
+                    float(row["bin_inferior_mm"]),
+                )
+            ) > 0
+            source_evidence = (
+                overlaps
+                & self.slices["trunk_touching_fov"].fillna(False).to_numpy(dtype=bool)
+                & self.slices["trunk_contour_closed"].fillna(False).to_numpy(dtype=bool)
+                & ~self.slices["trunk_mask_fragmented"].fillna(False).to_numpy(dtype=bool)
+                & ~self.slices["trunk_mask_internal_gap"].fillna(False).to_numpy(dtype=bool)
+                & self.slices["trunk_contour_reason"]
+                .fillna("")
+                .astype(str)
+                .eq("touching_image_boundary")
+                .to_numpy(dtype=bool)
+                & np.isfinite(
+                    pd.to_numeric(
+                        self.slices["trunk_circumference_cm"],
+                        errors="coerce",
+                    ).to_numpy(dtype=float)
+                )
+            )
+            if not np.any(source_evidence):
+                raise ValueError(
+                    "FOV-cropped vertebral trunk circumference lacks supporting source slices."
+                )
         invalid = ~self.vertebrae["bin_valid"].fillna(False).astype(bool)
         reasons = set(self.vertebrae.loc[invalid, "bin_missing_reason"].dropna().astype(str))
         unknown_reasons = sorted(reasons - MISSING_REASONS)

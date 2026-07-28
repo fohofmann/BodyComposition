@@ -22,7 +22,7 @@ import pandas as pd
 import yaml
 
 from BodyComposition.config import PipelineConfig
-from BodyComposition.dicom import convert_dicom
+from BodyComposition.dicom import convert_dicom, dicom_report_patient_metadata
 from BodyComposition.execution import (
     CaseLease,
     ClaimLostError,
@@ -131,6 +131,7 @@ class _PreparedCase:
     case_id: str
     analysis_id: str
     provenance: Mapping[str, Any]
+    patient_metadata: Mapping[str, str]
     preflight_failure: Mapping[str, Any] | None = None
 
 
@@ -551,11 +552,23 @@ class PipelineService:
         prepared: list[_PreparedCase] = []
         for ordinal, case in enumerate(cases):
             preflight_failure = None
+            patient_metadata: Mapping[str, str] = {}
             try:
                 _, input_info = image_summary(
                     case.input_path,
                     series_uid=case.series_uid,
                 )
+                if input_info.get("input_format") == "dicom":
+                    try:
+                        patient_metadata = dicom_report_patient_metadata(
+                            case.input_path,
+                            series_uid=case.series_uid,
+                        )
+                    except Exception as error:
+                        logging.warning(
+                            "DICOM demographics are unavailable for the local report header (%s).",
+                            type(error).__name__,
+                        )
             except Exception as error:
                 content_digest = file_sha256(case.input_path) if case.input_path.is_file() else None
                 pseudo_pixel_digest = canonical_digest(
@@ -599,6 +612,7 @@ class PipelineService:
                     case_id=resolved_case_id,
                     analysis_id=analysis_id,
                     provenance=provenance,
+                    patient_metadata=patient_metadata,
                     preflight_failure=preflight_failure,
                 )
             )
@@ -1086,7 +1100,7 @@ class PipelineService:
                     continue
                 made_progress = True
                 with lease:
-                    # A previous owner can complete between the scan and our mkdir.
+                    # Another worker may complete the case between the scan and claim.
                     shared = self._shared_result(item=item, run_root=run_root, state=state)
                     if shared is not None:
                         if shared.succeeded:
@@ -1127,6 +1141,7 @@ class PipelineService:
                             case_id=item.case_id,
                             analysis_id=item.analysis_id,
                             provenance=item.provenance,
+                            patient_metadata=item.patient_metadata,
                             run_id=run_id,
                             run_root=run_root,
                             lease=lease,
@@ -1237,6 +1252,7 @@ class PipelineService:
         case_id: str,
         analysis_id: str,
         provenance: Mapping[str, Any],
+        patient_metadata: Mapping[str, str],
         run_id: str,
         run_root: Path,
         lease: CaseLease,
@@ -1296,6 +1312,7 @@ class PipelineService:
                 provenance=provenance,
                 hardware_profile=hardware_profile,
             ),
+            "tmp/report_patient_metadata": dict(patient_metadata),
             "tmp/case_lease": lease,
         }
         failure: dict[str, Any] | None = None

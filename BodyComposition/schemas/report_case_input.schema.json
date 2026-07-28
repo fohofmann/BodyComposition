@@ -27,6 +27,22 @@
     "measurement_directory": {"type": "string", "minLength": 1},
     "orientation_report_json": {"type": "string", "minLength": 1},
     "measurement_qc_json": {"type": "string", "minLength": 1},
+    "patient_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "patient_name": {"type": ["string", "null"], "minLength": 1, "maxLength": 96},
+        "date_of_birth": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "scan_date": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "sex": {"enum": ["F", "M", "O", "U", null]}
+      }
+    },
     "technical_metadata": {
       "type": "object",
       "additionalProperties": false,

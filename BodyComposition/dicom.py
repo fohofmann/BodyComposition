@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -224,6 +226,129 @@ def _select_candidate(
         "Multiple CT DICOM series were found; select one explicitly with its Series Instance UID."
     )
     raise error
+
+
+def _ascii_header_text(value: str | None, *, maximum: int) -> str | None:
+    if value is None:
+        return None
+    normalized = unicodedata.normalize("NFKD", value)
+    text = normalized.encode("ascii", errors="ignore").decode("ascii")
+    text = " ".join(text.replace("\x00", "").split())
+    text = "".join(character for character in text if 32 <= ord(character) < 127)
+    return text[:maximum].strip() or None
+
+
+def _dicom_date(value: str | None) -> str | None:
+    text = _ascii_header_text(value, maximum=32)
+    if text is None:
+        return None
+    compact = text.replace("-", "").replace(".", "")
+    if len(compact) < 8 or not compact[:8].isdigit():
+        return None
+    try:
+        parsed = datetime.strptime(compact[:8], "%Y%m%d")
+    except ValueError:
+        return None
+    return parsed.strftime("%Y-%m-%d")
+
+
+def _dicom_person_name(value: str | None) -> str | None:
+    text = _ascii_header_text(value, maximum=160)
+    if text is None:
+        return None
+    primary = text.split("=", maxsplit=1)[0]
+    components = [component.strip() for component in primary.split("^")]
+    components.extend([""] * (5 - len(components)))
+    family, given, middle, prefix, suffix = components[:5]
+    display = " ".join(
+        component for component in (prefix, given, middle, family, suffix) if component
+    )
+    return _ascii_header_text(display or primary, maximum=96)
+
+
+def _consistent_dicom_header_value(
+    files: tuple[Path, ...],
+    key: str,
+) -> str | None:
+    """Return a standard tag only when the first and last instances agree."""
+
+    indices = (0,) if len(files) == 1 else (0, len(files) - 1)
+    values: list[str | None] = []
+    for index in indices:
+        reader = sitk.ImageFileReader()
+        reader.SetImageIO("GDCMImageIO")
+        reader.SetFileName(str(files[index]))
+        reader.LoadPrivateTagsOff()
+        try:
+            reader.ReadImageInformation()
+        except RuntimeError:
+            return None
+        values.append(_metadata(reader, key))
+    return values[0] if len(set(values)) == 1 else None
+
+
+def _consistent_dicom_date(
+    files: tuple[Path, ...],
+    key: str,
+) -> str | None:
+    """Return one calendar date even when acquisition times differ by slice."""
+
+    indices = (0,) if len(files) == 1 else (0, len(files) - 1)
+    values: list[str | None] = []
+    for index in indices:
+        reader = sitk.ImageFileReader()
+        reader.SetImageIO("GDCMImageIO")
+        reader.SetFileName(str(files[index]))
+        reader.LoadPrivateTagsOff()
+        try:
+            reader.ReadImageInformation()
+        except RuntimeError:
+            return None
+        values.append(_dicom_date(_metadata(reader, key)))
+    return values[0] if values[0] is not None and len(set(values)) == 1 else None
+
+
+def dicom_report_patient_metadata(
+    source: str | Path,
+    *,
+    series_uid: str | None = None,
+) -> dict[str, str]:
+    """Read the minimal local DICOM demographics requested for a patient PDF.
+
+    These values are intentionally separate from the privacy-safe input
+    provenance and must not be copied into canonical case manifests or logs.
+    """
+
+    candidate = _select_candidate(source, series_uid=series_uid)
+    patient_name = _dicom_person_name(
+        _consistent_dicom_header_value(candidate.files, "0010|0010")
+    )
+    date_of_birth = _dicom_date(
+        _consistent_dicom_header_value(candidate.files, "0010|0030")
+    )
+    sex_value = _ascii_header_text(
+        _consistent_dicom_header_value(candidate.files, "0010|0040"),
+        maximum=8,
+    )
+    sex = sex_value.upper() if sex_value and sex_value.upper() in {"F", "M", "O", "U"} else None
+    scan_date = next(
+        (
+            parsed
+            for key in ("0008|002a", "0008|0022", "0008|0021", "0008|0020", "0008|0023")
+            if (parsed := _consistent_dicom_date(candidate.files, key)) is not None
+        ),
+        None,
+    )
+    return {
+        key: value
+        for key, value in (
+            ("patient_name", patient_name),
+            ("date_of_birth", date_of_birth),
+            ("scan_date", scan_date),
+            ("sex", sex),
+        )
+        if value is not None
+    }
 
 
 def _series_content_identity(files: tuple[Path, ...]) -> tuple[str, int]:

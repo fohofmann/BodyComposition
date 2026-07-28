@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from BodyComposition.measurement.aggregation import (
 )
 from BodyComposition.measurement.contracts import (
     BINS_PER_VERTEBRAL_TERRITORY,
+    HU_DISTRIBUTION_REQUIRED_COLUMNS,
     MEASUREMENT_SCHEMA_VERSION,
     SIGNATURE_REQUIRED_COLUMNS,
     SLICE_REQUIRED_COLUMNS,
@@ -21,11 +23,26 @@ from BodyComposition.measurement.contracts import (
     VERTEBRA_REQUIRED_COLUMNS,
     VertebralTerritory,
     canonical_arrow_schema,
+    validate_hu_distribution_contract,
     validate_signature_contract,
 )
 
-TABLE_NAMES = ("slices", "vertebrae", "summaries", "signature")
+TABLE_NAMES = (
+    "slices",
+    "vertebrae",
+    "summaries",
+    "signature",
+    "hu_distributions",
+)
 IDENTITY_COLUMNS = ("schema_version", "run_id", "analysis_id", "case_id")
+
+
+@dataclass(frozen=True)
+class SignatureComponents:
+    """The identity-linked longitudinal and global tissue-quality signature."""
+
+    longitudinal: pd.DataFrame
+    tissue_hu_distributions: pd.DataFrame
 
 
 def _validated_height_m(height_m: float | None) -> float | None:
@@ -151,6 +168,7 @@ def load_measurement_tables(directory: str | Path) -> dict[str, pd.DataFrame]:
         "vertebrae": VERTEBRA_REQUIRED_COLUMNS,
         "summaries": SUMMARY_REQUIRED_COLUMNS,
         "signature": SIGNATURE_REQUIRED_COLUMNS,
+        "hu_distributions": HU_DISTRIBUTION_REQUIRED_COLUMNS,
     }
     for name, table in tables.items():
         missing = sorted(required[name] - set(table.columns))
@@ -230,6 +248,10 @@ def load_measurement_tables(directory: str | Path) -> dict[str, pd.DataFrame]:
             )
     signature = tables["signature"]
     validate_signature_contract(signature, table_name="signature.parquet")
+    validate_hu_distribution_contract(
+        tables["hu_distributions"],
+        table_name="hu_distributions.parquet",
+    )
     return tables
 
 
@@ -237,6 +259,16 @@ def signature_measurements(directory: str | Path) -> pd.DataFrame:
     """Load the validated fixed-mm longitudinal signature for one case."""
 
     return load_measurement_tables(directory)["signature"]
+
+
+def load_signature(directory: str | Path) -> SignatureComponents:
+    """Load both canonical components of one body-composition signature."""
+
+    tables = load_measurement_tables(directory)
+    return SignatureComponents(
+        longitudinal=tables["signature"],
+        tissue_hu_distributions=tables["hu_distributions"],
+    )
 
 
 def l3_measurements(

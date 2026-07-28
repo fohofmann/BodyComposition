@@ -14,9 +14,9 @@ human review for the intended cohort.
 
 ## Release-candidate status
 
-Version `1.0.0rc1` is a deliberate breaking release. Legacy named pipelines,
-working-directory configuration, the old bulk DICOM converter, mutable-memory
-Python results, and the old command collection have been removed.
+Version `1.0.0rc1` defines one supported configuration, service, Python API,
+and command-line interface. See the [changelog](CHANGELOG.md) for migration
+details.
 
 The default ResEncL and selectable ResEncM tissue models are synchronized from
 their original public Hugging Face repositories at immutable revisions. Every
@@ -144,7 +144,7 @@ The public API never exposes the pipeline's internal action-memory dictionary.
 
 ## Container
 
-Build locally; no registry publication is part of this release-candidate work.
+Build the container locally:
 
 ```bash
 LOCK_SHA256=$(shasum -a 256 uv.lock | cut -d' ' -f1)
@@ -174,8 +174,8 @@ docker run --rm --gpus all \
 ```
 
 On Linux, ensure the mounted writable directories permit UID/GID `10001`.
-Linux x86-64 CPU/GPU and Linux arm64 GPU support must not be claimed until the
-corresponding locked image validation in the acceptance report is green.
+Validated and pending platform targets are listed in
+[known limitations](docs/known-limitations.md).
 
 ## Outputs and review
 
@@ -185,10 +185,17 @@ separately. Canonical tables are:
 
 - `tables/slices.parquet`: one row per physical CT slice;
 - `tables/vertebrae.parquet`: native vertebral territories with three physical
-  bins per detected vertebra, including T13, L6, and sacrum when present; and
-- `tables/summaries.parquet`: established case-level summaries; and
+  bins per detected vertebra, including T13, L6, and sacrum when present;
+- `tables/summaries.parquet`: established case-level summaries;
 - `tables/signature.parquet`: 100 fixed 20-mm bins with CSA, mean HU,
-  vertebral anchoring, coverage, and alignment confidence.
+  vertebral anchoring, coverage, and alignment confidence; and
+- `tables/hu_distributions.parquet`: whole-volume 5-HU distributions and exact
+  attenuation summaries for native SM, SAT, aVAT, and tVAT.
+
+Together, `signature.parquet` and `hu_distributions.parquet` form the default
+comparison signature. They share the case, run, analysis, and measurement
+schema identity; the global histogram rows are not duplicated into every
+longitudinal bin.
 
 Only vertebral-body masks feed downstream measurement and reporting. Full
 vertebra/posterior-element masks are retained only as optional upstream/QC

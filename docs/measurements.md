@@ -1,10 +1,11 @@
 # Canonical physical measurements
 
 The canonical pipeline writes one outcome-blind measurement bundle per case.
-Schema `3.1.0` preserves every acquired slice, compact native vertebral
+Schema `3.2.0` preserves every acquired slice, compact native vertebral
 summaries, established case summaries, and a comparable fixed-millimetre
-longitudinal signature. No tissue curve is stretched and no unscanned anatomy
-is imputed.
+longitudinal signature. Its second, identity-linked component stores fixed-bin
+whole-volume HU distributions for the four report tissues. No tissue curve is
+stretched and no unscanned anatomy is imputed.
 
 ## Authoritative files
 
@@ -13,15 +14,18 @@ is imputed.
   vertebral territory, including sacrum;
 - `tables/summaries.parquet`: one deterministic case-level row;
 - `tables/signature.parquet`: 100 fixed 20-mm bins in a versioned
-  vertebral-reference coordinate; and
+  vertebral-reference coordinate;
+- `tables/hu_distributions.parquet`: fixed 5-HU voxel histograms plus exact
+  mean, standard deviation, median, and quartiles for SM, SAT, aVAT, and tVAT
+  over the analyzed volume; and
 - `qc/qc.json`: provenance, validity, QC, and review status.
 
 `slices.parquet` remains the lossless longitudinal measurement source.
 `signature.parquet` is a compact comparison view derived from it. Every table
 row carries `schema_version`, `case_id`, `run_id`, and `analysis_id`; Parquet
 metadata repeats the identity and table name. The reader rejects missing
-tables/columns, changed field types or order, mixed identities, invalid fixed
-bins, and unsupported schema versions.
+tables/columns, incompatible field types, mixed identities, invalid fixed bins,
+and unsupported schema versions.
 
 ## Geometry and units
 
@@ -62,6 +66,25 @@ mean HU null with reason `empty_tissue`. An invalid measurement is null with
 its reason. Unscanned signature bins are null with coverage zero. These states
 must not be merged during analysis.
 
+## `hu_distributions.parquet`
+
+This table is the authoritative source for the PDF tissue-HU distributions.
+It contains 68 ordered bins from -190 to 150 HU for each of `SM`, `SAT`,
+`aVAT`, and `tVAT`; bins are 5 HU wide, left-closed/right-open, with the final
+bin closed at 150 HU. Tissue membership comes from the unfiltered model-native
+compartment labels, not the configured HU-restricted downstream definitions.
+Histogram values and exact linear-method quartiles come from the unchanged
+prepared CT voxels.
+
+The scope is always recorded as `analyzed_volume`, with the acquired physical
+inferior and superior voxel-cell bounds and the number of contributing slices.
+This remains correct for oblique images because the bounds use all eight
+physical image corners rather than only slice-centre positions. Counts
+below or above the fixed display range and non-finite values are recorded
+separately, never silently discarded. `voxel_fraction` uses all selected
+tissue voxels as its denominator, so clipped/non-finite counts remain
+accountable.
+
 ## Body/trunk support
 
 The default `tissue_segmentation_envelope_v1` builds a deterministic
@@ -73,8 +96,13 @@ per slice.
 `trunk_area_cm2` and `trunk_circumference_cm` include explicit contour,
 fragmentation, field-of-view, and longitudinal-gap QC. Circumference uses only
 the closed external contour; internal holes are not added. A contour touching
-the image boundary or a fragmented trunk remains observable but is invalid for
-strict summaries.
+the image boundary remains numerically observable in `slices.parquet`, with
+`valid=false` and reason `touching_image_boundary`, and is excluded from strict
+means because the value may be underestimated. Full-body and primary-trunk
+lateral FOV contact are recorded separately per slice and at case level. A
+closed, nonfragmented sacral contour may additionally provide a numeric pelvic
+observation under the explicit cropped-value policy below. A fragmented trunk
+is never promoted to that observed pelvic value.
 
 ## Native vertebral territories
 
@@ -125,29 +153,65 @@ still summarized when physical bounds and acquired slices are available.
 claim that the full anatomical territory was acquired. Downstream comparisons
 must retain territory completeness and bin coverage.
 
+For trunk circumference, a finite closed and nonfragmented contour that only
+fails strict validity because it touches the image boundary is retained as an
+observed, potentially underestimated value. The contributing bin is marked
+`trunk_mean_circumference_cm_value_is_fov_cropped=true`; the PDF displays `!`
+beside any whole-territory mean that includes such a bin. Contours with an
+internal gap, fragmentation, or no finite circumference remain invalid rather
+than being rescued by this rule.
+
 ## `summaries.parquet`
 
 The single case row contains deterministic views:
 
 - a complete 200-mm L3-centred slab when available;
 - a whole-L3-territory view;
-- minimum observed valid trunk circumference across the bounded T10-to-L5
+- minimum observed valid trunk circumference across the available T10-to-L5
   search;
 - anatomical mid-waist circumference when rib and iliac landmarks are valid;
 - maximum observed valid circumference in the bounded sacral territory; and
 - explicitly named waist-to-pelvic ratios.
 
-Numerical validity and scientific eligibility are separate. If the required
-anchors and at least one valid contour are present, an observed extremum is
-retained. It is eligible for an unqualified comparison only when the anatomical
-search, acquired interval, and valid-contour coverage are complete and the
-extremum is not at a search boundary. Waist-to-pelvic ratios are calculated
-when both component values are numerically valid and carry their own
-eligibility field. Missing anchors and searches with no valid contour remain
-null. The sacral maximum is called pelvic, not hip, until that clinical
+Numerical validity and scientific eligibility are separate. The minimum waist
+uses the observed bounded part of the T10-to-L5 range when either boundary
+level lies outside the scan; its value remains numeric but is marked
+`eligible=false`, reason `missing_anchor`, and retains the actual physical
+search bounds. It is eligible for an unqualified comparison only when both
+anchors, the anatomical sequence, acquired interval, and valid-contour
+coverage are complete and the extremum is not at a search boundary.
+Waist-to-pelvic ratios are calculated when both component values are
+numerically valid and carry their own eligibility field. A scan without any
+bounded T10-to-L5 territory remains null.
+
+The pelvic maximum requires an observed sacral territory and at least one
+strictly valid contour or one closed, nonfragmented boundary-cropped contour.
+If the selected maximum comes from a cropped contour, its value and derived
+ratios remain numeric but are marked `value_is_fov_cropped=true`,
+`eligible=false`, and `reason=touching_image_boundary`. The separate
+`search_touches_fov` flag records any contact in the sacral search even when
+the selected maximum itself is strict. These observations may underestimate
+the true circumference and are not asserted to be mathematical lower bounds.
+The sacral maximum is called pelvic, not hip, until that clinical
 interpretation is separately validated.
 
-## `signature.parquet`
+## Default signature
+
+The default comparison signature has two components linked by
+`schema_version`, `case_id`, `run_id`, and `analysis_id`:
+
+1. `signature.parquet` contains the compact longitudinal anatomy and tissue
+   profile; and
+2. `hu_distributions.parquet` contains the global native-tissue attenuation
+   shapes described above.
+
+This preserves both anatomical position and tissue-quality shape without
+copying 272 global histogram rows into each of 100 longitudinal bins.
+`load_signature()` returns both validated components;
+`signature_measurements()` remains the convenience reader for the
+longitudinal component only.
+
+### `signature.parquet`
 
 The default signature is a wide table with 100 rows. Each row spans exactly
 20 mm; `reference_center_mm` runs from -1000 to +980 mm in ascending physical
@@ -217,9 +281,10 @@ structural missingness with zero.
 
 ## Reader views
 
-`BodyComposition.measurement.api` validates the four tables and provides:
+`BodyComposition.measurement.api` validates the five tables and provides:
 
 - `load_measurement_tables`;
+- `load_signature`;
 - `signature_measurements`;
 - `l3_measurements`; and
 - `range_measurements`.

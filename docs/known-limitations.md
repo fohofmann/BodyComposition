@@ -48,7 +48,16 @@ table/padding, and field-of-view truncation can affect contour and
 circumference. The sacral maximum is called a pelvic circumference, not a
 validated hip circumference. Observed waist/pelvic extrema may be retained from
 an incomplete search, but their eligibility and coverage must be preserved.
-Missing anchors and searches without any valid closed contour remain null.
+The minimum-waist search retains an observed but ineligible value from the
+bounded T10-to-L5 portion when one boundary anchor is outside the scan. It
+remains null when no supported part of that range is bounded or no valid
+closed contour exists. The pelvic maximum remains null without a bounded
+sacral territory. A selected sacral contour that is closed and nonfragmented
+but touches the lateral FOV remains a numeric, explicitly FOV-cropped
+observation; it and ratios using it are ineligible as exact values and may
+underestimate the truth. Fragmented or otherwise untraceable boundary
+contours remain unavailable. Full-body contact, trunk contact, sacral-search
+contact, and selected-value cropping are recorded as separate flags.
 These measures remain research phenotypes.
 
 ## Longitudinal measurements

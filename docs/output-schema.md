@@ -24,7 +24,8 @@ configuration. The canonical layout is:
     │   │   ├── slices.parquet
     │   │   ├── vertebrae.parquet
     │   │   ├── summaries.parquet
-    │   │   └── signature.parquet
+    │   │   ├── signature.parquet
+    │   │   └── hu_distributions.parquet
     │   ├── qc/
     │   ├── reports/                           # optional
     │   └── logs/stages.jsonl
@@ -106,11 +107,14 @@ bodycomposition results review-queue output/runs/<run-id> --json
 
 ## Scientific tables
 
-`slices.parquet`, `vertebrae.parquet`, `summaries.parquet`, and
-`signature.parquet` use measurement schema `3.1.0`; their fields and units are
+`slices.parquet`, `vertebrae.parquet`, `summaries.parquet`,
+`signature.parquet`, and `hu_distributions.parquet` use measurement schema
+`3.2.0`; their fields and units are
 documented in [measurements.md](measurements.md). The signature is a
-translation-only fixed-millimetre view. It preserves measured physical scale,
-records coverage, and leaves unscanned bins null.
+two-component, identity-linked view: `signature.parquet` preserves
+translation-only fixed-millimetre anatomy, physical scale, coverage, and null
+unscanned bins; `hu_distributions.parquet` preserves whole-volume native
+tissue attenuation without repeating global bins across longitudinal rows.
 
 ## Schemas as package data
 

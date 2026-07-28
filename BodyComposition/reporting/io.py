@@ -169,6 +169,7 @@ def load_case_report_input(manifest_path: str | Path) -> CaseReportInput:
         slices=tables["slices"],
         vertebrae=tables["vertebrae"],
         summaries=tables["summaries"],
+        hu_distributions=tables["hu_distributions"],
         provenance=dict(measurement_qc.get("provenance", {})),
         qc_flags=tuple(
             _qc_flag(value, default_stage="measurement")
@@ -183,6 +184,7 @@ def load_case_report_input(manifest_path: str | Path) -> CaseReportInput:
         measurement_bundle=report_bundle,
         tissue_labels_zyx=tissue_labels,
         orientation=orientation,
+        patient_metadata=dict(payload.get("patient_metadata", {})),
         technical_metadata=dict(payload.get("technical_metadata", {})),
     )
 

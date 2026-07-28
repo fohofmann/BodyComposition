@@ -29,6 +29,7 @@ from BodyComposition.measurement.contracts import (
     MeasurementBundle,
     MeasurementIdentity,
 )
+from BodyComposition.measurement.distributions import build_tissue_hu_distributions
 from BodyComposition.measurement.physical import geometry_digest, in_plane_superior_span_mm
 from BodyComposition.measurement.signature import build_longitudinal_signature
 from BodyComposition.measurement.slices import (
@@ -197,6 +198,13 @@ def build_measurement_bundle(
         full_coverage_tolerance=full_coverage_tolerance,
     )
     definitions = settings.get("tissue_definitions", {})
+    hu_distributions = build_tissue_hu_distributions(
+        image_zyx=image_zyx,
+        compartment_labels_zyx=compartment_labels_zyx,
+        compartment_label_schema=compartment_label_schema,
+        geometry=geometry,
+        identity=identity,
+    )
     extra_signature_definitions = tuple(
         name
         for name, definition in definitions.items()
@@ -227,9 +235,7 @@ def build_measurement_bundle(
                 ),
                 observed={"in_plane_superior_span_mm": in_plane_span_mm},
                 thresholds={
-                    "maximum_unflagged_in_plane_superior_span_mm": (
-                        maximum_unflagged_span_mm
-                    )
+                    "maximum_unflagged_in_plane_superior_span_mm": (maximum_unflagged_span_mm)
                 },
                 suggested_review_action=(
                     "Review fixed-mm and vertebral-bin profiles before comparison, or "
@@ -342,14 +348,27 @@ def build_measurement_bundle(
                 },
             )
         )
-    lateral_fov_count = int(slices["trunk_touching_fov"].sum())
-    if lateral_fov_count:
+    body_fov_count = int(slices["body_touching_fov"].sum())
+    if body_fov_count:
+        flags.append(
+            QCFlag(
+                code="body_surface_touches_fov",
+                stage="measurement",
+                reason=(
+                    "The derived body surface touches the lateral image boundary "
+                    "on one or more slices."
+                ),
+                observed={"slice_count": body_fov_count},
+            )
+        )
+    trunk_fov_count = int(slices["trunk_touching_fov"].sum())
+    if trunk_fov_count:
         flags.append(
             QCFlag(
                 code="trunk_contour_touches_fov",
                 stage="measurement",
                 reason="The primary trunk contour touches the image boundary on one or more slices.",
-                observed={"slice_count": lateral_fov_count},
+                observed={"slice_count": trunk_fov_count},
             )
         )
     fragmented_slice_count = int(
@@ -465,12 +484,25 @@ def build_measurement_bundle(
             ),
         ),
     ):
+        value_is_fov_cropped = bool(
+            prefix == "ct_max_pelvic_circumference"
+            and summary.get(f"{prefix}_value_is_fov_cropped", False)
+        )
         if (
             not bool(summary.get(f"{prefix}_valid", False))
             or bool(summary.get(f"{prefix}_eligible", False))
-            or bool(summary.get(f"{prefix}_at_search_boundary", False))
+            or (
+                bool(summary.get(f"{prefix}_at_search_boundary", False))
+                and not value_is_fov_cropped
+            )
         ):
             continue
+        if value_is_fov_cropped:
+            code = "pelvic_maximum_fov_cropped"
+            description = (
+                "A numeric sacral pelvic observation is available from an "
+                "FOV-cropped contour and may underestimate the true maximum."
+            )
         flags.append(
             QCFlag(
                 code=code,
@@ -621,6 +653,7 @@ def build_measurement_bundle(
         vertebrae=vertebrae,
         summaries=summaries,
         signature=signature,
+        hu_distributions=hu_distributions,
         body_surface=body_surface,
         vertebral_extents=extents,
         vertebral_territories=territories,
@@ -632,6 +665,29 @@ def build_measurement_bundle(
                 "vertebral_territory_schema_version": (VERTEBRAL_TERRITORY_SCHEMA_VERSION),
                 "signature_schema_version": str(signature["signature_schema_version"].iloc[0]),
                 "signature_profile_id": str(signature["signature_profile_id"].iloc[0]),
+                "tissue_hu_distribution_schema_version": str(
+                    hu_distributions["distribution_schema_version"].iloc[0]
+                ),
+                "signature_components": [
+                    {
+                        "component": "longitudinal_anatomy",
+                        "table": "signature.parquet",
+                        "schema_version": str(signature["signature_schema_version"].iloc[0]),
+                        "rows": len(signature),
+                    },
+                    {
+                        "component": "global_tissue_hu",
+                        "table": "hu_distributions.parquet",
+                        "schema_version": str(
+                            hu_distributions["distribution_schema_version"].iloc[0]
+                        ),
+                        "scope": str(hu_distributions["distribution_scope"].iloc[0]),
+                        "source_semantics": str(hu_distributions["source_semantics"].iloc[0]),
+                        "tissues": (
+                            hu_distributions["tissue_key"].drop_duplicates().astype(str).tolist()
+                        ),
+                    },
+                ],
                 "signature_reference": {
                     "alignment_version": str(signature["reference_alignment_version"].iloc[0]),
                     "level": str(signature["reference_level"].iloc[0]),
@@ -650,9 +706,7 @@ def build_measurement_bundle(
                 "longitudinal_allocation": {
                     "method": "native_slice_center_v1",
                     "in_plane_superior_span_mm": in_plane_span_mm,
-                    "maximum_unflagged_in_plane_superior_span_mm": (
-                        maximum_unflagged_span_mm
-                    ),
+                    "maximum_unflagged_in_plane_superior_span_mm": (maximum_unflagged_span_mm),
                     "review_required": in_plane_span_mm > maximum_unflagged_span_mm,
                 },
                 "settings": dict(settings),

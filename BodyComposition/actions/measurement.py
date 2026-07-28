@@ -49,6 +49,7 @@ SLICE_TABLE = "tables/slices.parquet"
 VERTEBRA_TABLE = "tables/vertebrae.parquet"
 SUMMARY_TABLE = "tables/summaries.parquet"
 SIGNATURE_TABLE = "tables/signature.parquet"
+HU_DISTRIBUTION_TABLE = "tables/hu_distributions.parquet"
 TISSUE_LABEL_MASK = "masks/tissue_labels.nii.gz"
 TOTALSEG_BODY_LABEL = "masks/totalsegmentator_body.nii.gz"
 TOTALSEG_LANDMARK_LABEL = "masks/totalsegmentator_landmarks.nii.gz"
@@ -316,6 +317,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             "tmp/vertebra_measurements",
             "tmp/case_summaries",
             "tmp/longitudinal_signature",
+            "tmp/tissue_hu_distributions",
         ]
 
     def __call__(self, memory):
@@ -388,6 +390,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         memory["tmp/vertebra_measurements"] = bundle.vertebrae
         memory["tmp/case_summaries"] = bundle.summaries
         memory["tmp/longitudinal_signature"] = bundle.signature
+        memory["tmp/tissue_hu_distributions"] = bundle.hu_distributions
 
 
 class WriteMeasurementReview(PipelineAction):
@@ -419,6 +422,7 @@ class ExportMeasurementBundle(PipelineAction):
         "vertebrae": VERTEBRA_TABLE,
         "summaries": SUMMARY_TABLE,
         "signature": SIGNATURE_TABLE,
+        "hu_distributions": HU_DISTRIBUTION_TABLE,
     }
 
     def __init__(self, pipeline):

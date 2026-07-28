@@ -36,6 +36,14 @@ TECHNICAL_METADATA_FIELDS = frozenset(
         "scanner_model",
     }
 )
+PATIENT_METADATA_FIELDS = frozenset(
+    {
+        "patient_name",
+        "date_of_birth",
+        "scan_date",
+        "sex",
+    }
+)
 
 MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
     "sm_mean_csa_cm2": {
@@ -112,6 +120,7 @@ DEFAULT_MEASUREMENT_COLUMNS = (
 )
 
 _CASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def validate_case_id(case_id: str) -> str:
@@ -317,6 +326,7 @@ class ReportMeasurementData:
     slices: pd.DataFrame
     vertebrae: pd.DataFrame
     summaries: pd.DataFrame
+    hu_distributions: pd.DataFrame
     provenance: Mapping[str, Any] = field(default_factory=dict)
     qc_flags: tuple[QCFlag, ...] = ()
 
@@ -327,6 +337,7 @@ class ReportMeasurementData:
             ("slices", self.slices),
             ("vertebrae", self.vertebrae),
             ("summaries", self.summaries),
+            ("hu_distributions", self.hu_distributions),
         ):
             if not isinstance(table, pd.DataFrame):
                 raise TypeError(f"Report {name} must be a pandas DataFrame.")
@@ -345,6 +356,7 @@ class CaseReportInput:
     measurement_bundle: MeasurementBundle | ReportMeasurementData
     tissue_labels_zyx: np.ndarray
     orientation: OrientationResult | OrientationOutcome | Mapping[str, Any]
+    patient_metadata: Mapping[str, str | None] = field(default_factory=dict)
     technical_metadata: Mapping[str, str | None] = field(default_factory=dict)
     extra_review_entries: tuple[ReviewEntry, ...] = ()
 
@@ -369,6 +381,36 @@ class CaseReportInput:
             )
         if not np.issubdtype(labels.dtype, np.integer) or np.any(labels < 0):
             raise TypeError("Case reporting tissue labels must be non-negative integers.")
+        patient_metadata = dict(self.patient_metadata)
+        unknown_patient_fields = sorted(
+            set(patient_metadata) - PATIENT_METADATA_FIELDS
+        )
+        if unknown_patient_fields:
+            raise ValueError(
+                f"Unsupported report patient metadata fields: {unknown_patient_fields}."
+            )
+        normalized_patient_metadata: dict[str, str | None] = {}
+        for name, value in patient_metadata.items():
+            if value is None:
+                normalized_patient_metadata[name] = None
+                continue
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"Report patient metadata {name} must be a non-empty string or null."
+                )
+            normalized = " ".join(value.split())
+            if len(normalized) > (96 if name == "patient_name" else 16):
+                raise ValueError(f"Report patient metadata {name} is too long.")
+            normalized_patient_metadata[name] = normalized
+        for name in ("date_of_birth", "scan_date"):
+            value = normalized_patient_metadata.get(name)
+            if value is not None and not _ISO_DATE.fullmatch(value):
+                raise ValueError(f"Report patient metadata {name} must use YYYY-MM-DD.")
+        sex = normalized_patient_metadata.get("sex")
+        if sex is not None and sex not in {"F", "M", "O", "U"}:
+            raise ValueError("Report patient metadata sex must be F, M, O, or U.")
+        object.__setattr__(self, "patient_metadata", normalized_patient_metadata)
+
         metadata = dict(self.technical_metadata)
         unknown = sorted(set(metadata) - TECHNICAL_METADATA_FIELDS)
         if unknown:

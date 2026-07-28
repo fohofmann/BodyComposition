@@ -11,7 +11,10 @@ import SimpleITK as sitk
 import BodyComposition.service as service_module
 from BodyComposition import cli, convert_dicom, discover_dicom_series
 from BodyComposition.config import PipelineConfig
-from BodyComposition.dicom import DicomSeriesSelectionError
+from BodyComposition.dicom import (
+    DicomSeriesSelectionError,
+    dicom_report_patient_metadata,
+)
 from BodyComposition.model_manager import ModelStatus
 from BodyComposition.provenance import image_summary
 from BodyComposition.results import ExecutionStatus
@@ -56,9 +59,13 @@ def _write_dicom_series(
             "0008|0018": f"{series_uid}.{index + 1}",
             "0008|0060": modality,
             "0008|0070": "Research Test Imaging",
+            "0008|0020": "20260718",
+            "0008|0022": "20260719",
             "0008|1090": "Synthetic CT 1.0",
             "0010|0010": "Identifying^Patient",
             "0010|0020": "MRN-123456",
+            "0010|0030": "19841203",
+            "0010|0040": "F",
             "0018|0050": str(spacing_xyz[2]),
             "0020|000d": study_uid,
             "0020|000e": series_uid,
@@ -115,6 +122,12 @@ def test_dicom_conversion_preserves_pixels_geometry_and_excludes_identifiers(tmp
     assert summary["dicom"]["image_position_patient_complete"]
     assert summary["dicom"]["scanner_manufacturer"] == "Research Test Imaging"
     assert summary["dicom"]["scanner_model"] == "Synthetic CT 1.0"
+    assert dicom_report_patient_metadata(source) == {
+        "patient_name": "Patient Identifying",
+        "date_of_birth": "1984-12-03",
+        "scan_date": "2026-07-19",
+        "sex": "F",
+    }
     serialized = json.dumps(summary)
     assert uid not in serialized
     assert "MRN-123456" not in serialized
@@ -203,6 +216,7 @@ def test_pipeline_accepts_dicom_without_persisting_the_temporary_conversion(
             captured["path"] = image.path
             captured["array"] = image.data.copy()
             captured["input_summary"] = memory["tmp/input_summary"]
+            captured["patient_metadata"] = memory["tmp/report_patient_metadata"]
 
     model = ModelStatus(
         model_id="test-model",
@@ -247,9 +261,17 @@ def test_pipeline_accepts_dicom_without_persisting_the_temporary_conversion(
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
     assert manifest["input"]["input_format"] == "dicom"
     assert manifest["input"]["dicom"]["series_instance_uid_sha256"]
+    assert captured["patient_metadata"] == {
+        "patient_name": "Patient Identifying",
+        "date_of_birth": "1984-12-03",
+        "scan_date": "2026-07-19",
+        "sex": "F",
+    }
     manifest_text = json.dumps(manifest)
     assert uid not in manifest_text
     assert "private-patient-name" not in manifest_text
+    assert "Patient Identifying" not in manifest_text
+    assert "1984-12-03" not in manifest_text
     assert not any(
         item["relative_path"].endswith("converted_input.nii.gz") for item in manifest["artifacts"]
     )

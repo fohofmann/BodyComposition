@@ -22,9 +22,8 @@ json_schema = configuration_schema()
 ```
 
 Unknown keys, wrong container types, unsupported backend IDs, and invalid
-runtime values fail before models are loaded. An override is recursively
-merged onto defaults, but it is not a compatibility layer for old pipeline
-names.
+runtime values fail before models are loaded. Overrides are recursively merged
+onto defaults, and unsupported keys are rejected.
 
 ## Minimal override
 
@@ -52,7 +51,7 @@ the authoritative reference.
 | `vertebrae.backend` | vertebral-body segmentation and native labeling | `spineps_veridah_ct_v1`, `vertebral_bodies_resenc_l`, `vertebral_bodies_resenc_m` |
 | `tissue.backend` | anatomical body-composition compartments | `bodycomposition_resenc_l_v1`, `bodycomposition_resenc_m_v1` |
 | `body_surface.backend` | measurement support for trunk/body envelope | `tissue_segmentation_envelope_v1`, `totalsegmentator_body_task299_v1`, `deterministic_body_mask_v1` |
-| `measurements` | tissue definitions, physical territories, fixed-mm signature, landmarks, QC | canonical schema 3.1 |
+| `measurements` | tissue definitions, physical territories, fixed-mm and native-tissue HU signature components, landmarks, QC | canonical schema 3.2 |
 | `reporting` | derived one-page PDF | disabled by default; enabled default `spine_profile_v2`; optional `spine_overview_v1` |
 
 No backend silently falls back to another. Changing a backend or a scientific
@@ -159,11 +158,3 @@ They make alternative published HU windows or preprocessing explicit and are
 validated in tests. They do not define clinical phenotypes and do not alter
 the raw prepared CT used for reported attenuation. See
 [tissue definitions](tissue_definitions.md).
-
-## Migration from pre-1.0
-
-Remove the old `method`, named-pipeline YAML, global `config/config.yaml`, and
-command-specific configuration. Generate a new default, then copy only the
-scientific changes you intend to retain. Replace old pipeline names with the
-corresponding explicit backend fields. There is intentionally no runtime
-translation or deprecation shim.

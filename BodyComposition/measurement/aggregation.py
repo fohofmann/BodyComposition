@@ -28,6 +28,17 @@ from BodyComposition.vertebral.contracts import VertebralResult
 DEFAULT_FULL_COVERAGE_TOLERANCE = 0.999
 AREA_SUFFIX = "_area_cm2"
 HU_SUFFIX = "_mean_hu"
+WAIST_SEARCH_LEVELS = (
+    "T10",
+    "T11",
+    "T12",
+    "T13",
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5",
+)
 
 
 def anatomical_rank(label: str) -> int:
@@ -488,9 +499,44 @@ def aggregate_physical_range(
             slices["trunk_circumference_cm"],
             errors="coerce",
         ).to_numpy(dtype=float)
-        value_valid = (
+        strict_value_valid = (
             contributing & np.isfinite(values) & _validity_column(slices, "trunk_contour_valid")
         )
+        touching_fov = (
+            slices["trunk_touching_fov"].fillna(False).to_numpy(dtype=bool)
+            if "trunk_touching_fov" in slices
+            else np.zeros(len(slices), dtype=bool)
+        )
+        contour_closed = (
+            slices["trunk_contour_closed"].fillna(False).to_numpy(dtype=bool)
+            if "trunk_contour_closed" in slices
+            else np.zeros(len(slices), dtype=bool)
+        )
+        fragmented = (
+            slices["trunk_mask_fragmented"].fillna(False).to_numpy(dtype=bool)
+            if "trunk_mask_fragmented" in slices
+            else np.zeros(len(slices), dtype=bool)
+        )
+        internal_gap = (
+            slices["trunk_mask_internal_gap"].fillna(False).to_numpy(dtype=bool)
+            if "trunk_mask_internal_gap" in slices
+            else np.zeros(len(slices), dtype=bool)
+        )
+        contour_reason = (
+            slices["trunk_contour_reason"].fillna("").astype(str).to_numpy()
+            if "trunk_contour_reason" in slices
+            else np.full(len(slices), "", dtype=object)
+        )
+        fov_cropped_observed = (
+            contributing
+            & np.isfinite(values)
+            & touching_fov
+            & contour_closed
+            & ~fragmented
+            & ~internal_gap
+            & (contour_reason == "touching_image_boundary")
+        )
+        value_valid = strict_value_valid | fov_cropped_observed
         metric_coverage = _metric_coverage(
             slices,
             value_valid,
@@ -514,6 +560,9 @@ def aggregate_physical_range(
             metric_valid,
             metric_reason(),
             metric_coverage,
+        )
+        output["trunk_mean_circumference_cm_value_is_fov_cropped"] = bool(
+            metric_valid and np.any(fov_cropped_observed)
         )
 
     slice_thickness_normal_mm = slices["slice_thickness_normal_mm"].to_numpy(dtype=float)
@@ -664,9 +713,7 @@ def aggregate_named_range(
 ) -> dict[str, Any]:
     anchors = [territories.get(start_level), territories.get(end_level)]
     has_bounds = all(
-        anchor is not None
-        and anchor.inferior_mm is not None
-        and anchor.superior_mm is not None
+        anchor is not None and anchor.inferior_mm is not None and anchor.superior_mm is not None
         for anchor in anchors
     )
     valid_anchors = all(
@@ -713,12 +760,8 @@ def aggregate_named_range(
             "range_name": f"{start_level}_{end_level}",
             "start_level": start_level,
             "end_level": end_level,
-            "range_anatomically_complete": bool(
-                has_bounds and anatomical_reason is None
-            ),
-            "range_eligible": bool(
-                output.get("range_valid", False) and anatomical_reason is None
-            ),
+            "range_anatomically_complete": bool(has_bounds and anatomical_reason is None),
+            "range_eligible": bool(output.get("range_valid", False) and anatomical_reason is None),
             "range_eligibility_reason": anatomical_reason,
         }
     )
@@ -962,6 +1005,7 @@ def _extremum(
     kind: str,
     full_coverage_tolerance: float,
     anatomical_eligibility_reason: str | None = None,
+    allow_fov_cropped: bool = False,
 ) -> dict[str, Any]:
     if kind not in {"minimum", "maximum"}:
         raise ValueError("Extremum kind must be minimum or maximum.")
@@ -972,13 +1016,33 @@ def _extremum(
         superior_mm,
     )
     contributing = overlap > 0
-    contour_valid = slices["trunk_contour_valid"].fillna(False).to_numpy(
-        dtype=bool
-    ) & pd.to_numeric(
-        slices["trunk_circumference_cm"],
-        errors="coerce",
-    ).notna().to_numpy(dtype=bool)
+    numeric_contour = (
+        pd.to_numeric(
+            slices["trunk_circumference_cm"],
+            errors="coerce",
+        )
+        .notna()
+        .to_numpy(dtype=bool)
+    )
+    contour_valid = (
+        slices["trunk_contour_valid"].fillna(False).to_numpy(dtype=bool) & numeric_contour
+    )
+    touching_fov = slices["trunk_touching_fov"].fillna(False).to_numpy(dtype=bool)
+    contour_closed = slices["trunk_contour_closed"].fillna(False).to_numpy(dtype=bool)
+    fragmented = slices["trunk_mask_fragmented"].fillna(False).to_numpy(dtype=bool)
+    contour_reason = slices["trunk_contour_reason"].astype("string")
+    fov_cropped = (
+        numeric_contour
+        & touching_fov
+        & contour_closed
+        & ~fragmented
+        & contour_reason.eq("touching_image_boundary").fillna(False).to_numpy(dtype=bool)
+    )
     valid_contributing = contributing & contour_valid
+    fov_cropped_contributing = contributing & fov_cropped
+    candidate_contributing = valid_contributing | (
+        fov_cropped_contributing if allow_fov_cropped else False
+    )
     acquisition_coverage = _metric_coverage(
         slices,
         contributing,
@@ -1000,6 +1064,7 @@ def _extremum(
         "search_slice_count": int(np.count_nonzero(contributing)),
         "search_valid_slice_count": int(np.count_nonzero(valid_contributing)),
         "search_anatomically_complete": anatomical_eligibility_reason is None,
+        "search_touches_fov": bool(np.any(contributing & touching_fov)),
     }
     if acquisition_coverage <= 0:
         return {
@@ -1008,14 +1073,26 @@ def _extremum(
             "eligible": False,
             "reason": "outside_fov",
         }
-    if not np.any(valid_contributing):
+    if not np.any(candidate_contributing):
+        observed_reasons = []
+        if "trunk_contour_reason" in slices:
+            observed_reasons = (
+                slices.loc[contributing, "trunk_contour_reason"]
+                .dropna()
+                .astype(str)
+                .unique()
+                .tolist()
+            )
         return {
             **common,
             "valid": False,
             "eligible": False,
-            "reason": "invalid_measurement",
+            "reason": (
+                observed_reasons[0] if len(observed_reasons) == 1 else "invalid_measurement"
+            ),
         }
-    candidates = slices.loc[valid_contributing]
+    candidates = slices.loc[candidate_contributing].copy()
+    candidates["_fov_cropped_candidate"] = fov_cropped[candidate_contributing]
     positions = candidates["position_superior_mm"].to_numpy(dtype=float)
     values = candidates["trunk_circumference_cm"].to_numpy(dtype=float)
     extreme = float(np.min(values) if kind == "minimum" else np.max(values))
@@ -1029,16 +1106,21 @@ def _extremum(
     selectable = interior if not interior.empty else tied
     search_midpoint = (inferior_mm + superior_mm) / 2.0
     index = (
-        selectable["position_superior_mm"].sub(search_midpoint).abs().sort_values(
-            kind="stable"
-        ).index[0]
+        selectable["position_superior_mm"]
+        .sub(search_midpoint)
+        .abs()
+        .sort_values(kind="stable")
+        .index[0]
     )
-    selected = slices.loc[index]
+    selected = candidates.loc[index]
     boundary = bool(
         np.isclose(selected["position_superior_mm"], positions.min())
         or np.isclose(selected["position_superior_mm"], positions.max())
     )
-    if anatomical_eligibility_reason is not None:
+    value_is_fov_cropped = bool(allow_fov_cropped and selected["_fov_cropped_candidate"])
+    if value_is_fov_cropped:
+        reason = "touching_image_boundary"
+    elif anatomical_eligibility_reason is not None:
         reason = anatomical_eligibility_reason
     elif acquisition_coverage < full_coverage_tolerance:
         reason = "partial_fov"
@@ -1057,6 +1139,7 @@ def _extremum(
         "value_cm": float(selected["trunk_circumference_cm"]),
         "position_superior_mm": float(selected["position_superior_mm"]),
         "slice_id": int(selected["slice_id"]),
+        "value_is_fov_cropped": value_is_fov_cropped,
     }
 
 
@@ -1071,6 +1154,12 @@ def build_case_summaries(
     full_coverage_tolerance: float = DEFAULT_FULL_COVERAGE_TOLERANCE,
 ) -> pd.DataFrame:
     row: dict[str, Any] = {**identity.as_columns()}
+    body_touching_fov = slices["body_touching_fov"].fillna(False).astype(bool)
+    row["body_surface_touches_fov"] = bool(body_touching_fov.any())
+    row["body_surface_touches_fov_slice_count"] = int(body_touching_fov.sum())
+    trunk_touching_fov = slices["trunk_touching_fov"].fillna(False).astype(bool)
+    row["trunk_contour_touches_fov"] = bool(trunk_touching_fov.any())
+    row["trunk_contour_touches_fov_slice_count"] = int(trunk_touching_fov.sum())
 
     l3_extent = extents.get("L3")
     if (
@@ -1130,35 +1219,52 @@ def build_case_summaries(
     for key, value in l3_summary.items():
         row[f"l3_territory_{key}"] = value
 
-    t10 = territories.get("T10")
-    l5 = territories.get("L5")
-    waist_has_bounds = all(
-        territory is not None
+    observed_waist_territories = [
+        territory
+        for level in WAIST_SEARCH_LEVELS
+        if (territory := territories.get(level)) is not None
         and territory.inferior_mm is not None
         and territory.superior_mm is not None
-        for territory in (t10, l5)
-    )
-    if waist_has_bounds:
-        assert t10 is not None and t10.superior_mm is not None
-        assert l5 is not None and l5.inferior_mm is not None
-        waist_anatomical_reason = next(
-            (
-                territory.missing_reason or "missing_anchor"
-                for territory in (t10, l5)
-                if territory is not None and not territory.complete
-            ),
-            None,
+    ]
+    if observed_waist_territories:
+        waist_inferior_mm = min(
+            float(territory.inferior_mm)
+            for territory in observed_waist_territories
+            if territory.inferior_mm is not None
         )
+        waist_superior_mm = max(
+            float(territory.superior_mm)
+            for territory in observed_waist_territories
+            if territory.superior_mm is not None
+        )
+        t10 = territories.get("T10")
+        l5 = territories.get("L5")
+        waist_has_both_anchors = all(
+            territory is not None
+            and territory.inferior_mm is not None
+            and territory.superior_mm is not None
+            for territory in (t10, l5)
+        )
+        waist_anatomical_reason = None if waist_has_both_anchors else "missing_anchor"
+        if waist_anatomical_reason is None:
+            waist_anatomical_reason = next(
+                (
+                    territory.missing_reason or "missing_anchor"
+                    for territory in (t10, l5)
+                    if territory is not None and not territory.complete
+                ),
+                None,
+            )
         if waist_anatomical_reason is None and _interval_has_sequence_gap(
             territories,
-            float(l5.inferior_mm),
-            float(t10.superior_mm),
+            waist_inferior_mm,
+            waist_superior_mm,
         ):
             waist_anatomical_reason = "sequence_gap"
         waist = _extremum(
             slices,
-            float(l5.inferior_mm),
-            float(t10.superior_mm),
+            waist_inferior_mm,
+            waist_superior_mm,
             kind="minimum",
             full_coverage_tolerance=full_coverage_tolerance,
             anatomical_eligibility_reason=waist_anatomical_reason,
@@ -1299,6 +1405,7 @@ def build_case_summaries(
             kind="maximum",
             full_coverage_tolerance=full_coverage_tolerance,
             anatomical_eligibility_reason=pelvic_anatomical_reason,
+            allow_fov_cropped=True,
         )
     else:
         pelvic = {"valid": False, "reason": "missing_anchor", "eligible": False}
@@ -1310,6 +1417,8 @@ def build_case_summaries(
     row[f"{prefix}_position_superior_mm"] = pelvic.get("position_superior_mm", np.nan)
     row[f"{prefix}_slice_id"] = pelvic.get("slice_id", pd.NA)
     row[f"{prefix}_at_search_boundary"] = bool(pelvic.get("boundary", False))
+    row[f"{prefix}_search_touches_fov"] = bool(pelvic.get("search_touches_fov", False))
+    row[f"{prefix}_value_is_fov_cropped"] = bool(pelvic.get("value_is_fov_cropped", False))
     for key in (
         "search_inferior_mm",
         "search_superior_mm",
@@ -1364,12 +1473,18 @@ def build_case_summaries(
     row["ct_min_waist_to_pelvic_ratio_valid"] = min_ratio_valid
     row["ct_min_waist_to_pelvic_ratio_eligible"] = min_ratio_eligible
     row["ct_min_waist_to_pelvic_ratio_reason"] = min_ratio_reason
+    row["ct_min_waist_to_pelvic_ratio_value_is_fov_cropped"] = bool(
+        min_ratio_valid and pelvic.get("value_is_fov_cropped", False)
+    )
     row["ct_midwaist_to_pelvic_ratio"] = (
         row["ct_midwaist_circumference_cm"] / pelvic_value if mid_ratio_valid else np.nan
     )
     row["ct_midwaist_to_pelvic_ratio_valid"] = mid_ratio_valid
     row["ct_midwaist_to_pelvic_ratio_eligible"] = mid_ratio_eligible
     row["ct_midwaist_to_pelvic_ratio_reason"] = mid_ratio_reason
+    row["ct_midwaist_to_pelvic_ratio_value_is_fov_cropped"] = bool(
+        mid_ratio_valid and pelvic.get("value_is_fov_cropped", False)
+    )
     return pd.DataFrame([row])
 
 

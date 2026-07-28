@@ -52,7 +52,7 @@ upstream artifact does not justify using posterior elements for territories.
 
 ## Measurement review
 
-Use `qc/measurement_review.png`, `qc/qc.json`, and the four canonical tables.
+Use `qc/measurement_review.png`, `qc/qc.json`, and the five canonical tables.
 Important conditions include body/trunk contour contact with the image edge,
 fragmentation, internal gaps, abrupt circumference changes, incomplete
 vertebral territories, insufficient coverage, invalid landmarks, and extrema
@@ -62,6 +62,12 @@ Missing measurements remain null with validity and reason columns. Observed
 anthropometric extrema from incomplete searches retain a numeric value but are
 marked ineligible with a reason and coverage. Do not replace either state with
 zero. A valid zero means the tissue was assessed and absent.
+
+FOV contact is orthogonal to numerical availability. The slice table records
+full-body and primary-trunk contact separately; the case summary records their
+counts. A sacral maximum measured from a boundary-cropped but closed,
+nonfragmented trunk contour remains numeric and propagates to the ratios, but
+is marked FOV-cropped and ineligible as an exact anthropometric value.
 
 ## Adjudication
 

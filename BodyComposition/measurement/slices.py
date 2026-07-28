@@ -112,17 +112,13 @@ def _slice_composition_ratio_columns(
         errors="coerce",
     ).to_numpy(dtype=float)
     denominator_counts = [
-        pd.to_numeric(table[f"{prefix}_voxel_count"], errors="coerce").to_numpy(
-            dtype=float
-        )
+        pd.to_numeric(table[f"{prefix}_voxel_count"], errors="coerce").to_numpy(dtype=float)
         for prefix in denominator
     ]
     denominator_count = np.sum(denominator_counts, axis=0)
     components_valid = np.ones(len(table), dtype=bool)
     for prefix in dict.fromkeys(required):
-        components_valid &= table[f"{prefix}_area_valid"].fillna(False).to_numpy(
-            dtype=bool
-        )
+        components_valid &= table[f"{prefix}_area_valid"].fillna(False).to_numpy(dtype=bool)
     valid = (
         components_valid
         & np.isfinite(numerator_count)
@@ -168,9 +164,7 @@ def calculate_canonical_slice_measurements(
     )
     schema = _validated_label_schema(tissue_label_schema)
     unknown = sorted(
-        int(value)
-        for value in np.unique(labels)
-        if value != 0 and int(value) not in schema
+        int(value) for value in np.unique(labels) if value != 0 and int(value) not in schema
     )
     if unknown:
         raise ValueError(f"Tissue mask contains labels outside its schema: {unknown}.")
@@ -189,8 +183,7 @@ def calculate_canonical_slice_measurements(
     )
     if unknown_compartments:
         raise ValueError(
-            "Compartment mask contains labels outside its schema: "
-            f"{unknown_compartments}."
+            f"Compartment mask contains labels outside its schema: {unknown_compartments}."
         )
 
     table = slice_geometry_table(geometry)
@@ -208,6 +201,14 @@ def calculate_canonical_slice_measurements(
     table["body_mask_internal_gap"] = body_internal_gaps[storage]
     table["trunk_mask_internal_gap"] = trunk_internal_gaps[storage]
     table["trunk_area_cm2"] = trunk_counts[storage].astype(float) * pixel_area_cm2
+    body = body_surface.body_mask_zyx
+    body_touching = (
+        body[:, 0, :].any(axis=1)
+        | body[:, -1, :].any(axis=1)
+        | body[:, :, 0].any(axis=1)
+        | body[:, :, -1].any(axis=1)
+    )
+    table["body_touching_fov"] = body_touching[storage]
 
     trunk_perimeters: list[float | None] = []
     trunk_components: list[int] = []
@@ -232,12 +233,7 @@ def calculate_canonical_slice_measurements(
     fragmented = np.asarray(trunk_components, dtype=int) > 1
     touching = np.asarray(trunk_touching, dtype=bool)
     nonempty_trunk = trunk_counts[storage] > 0
-    area_valid = (
-        nonempty_trunk
-        & ~touching
-        & ~fragmented
-        & ~trunk_internal_gaps[storage]
-    )
+    area_valid = nonempty_trunk & ~touching & ~fragmented & ~trunk_internal_gaps[storage]
     contour_valid = np.asarray(trunk_valid, dtype=bool) & ~fragmented
     table["trunk_area_valid"] = area_valid
     table["trunk_area_reason"] = np.where(
@@ -272,14 +268,16 @@ def calculate_canonical_slice_measurements(
         compartment_names.add(name)
         if name in {"avat", "tvat", "vat"}:
             vat_masks[name] = tissue_mask
-        tissue_columns.update(_tissue_measurement_columns(
-            name=name,
-            tissue_mask_zyx=tissue_mask,
-            image_zyx=image,
-            body_mask_zyx=body_surface.body_mask_zyx,
-            storage_indices_z=storage,
-            pixel_area_cm2=pixel_area_cm2,
-        ))
+        tissue_columns.update(
+            _tissue_measurement_columns(
+                name=name,
+                tissue_mask_zyx=tissue_mask,
+                image_zyx=image,
+                body_mask_zyx=body_surface.body_mask_zyx,
+                storage_indices_z=storage,
+                pixel_area_cm2=pixel_area_cm2,
+            )
+        )
 
     if "avat" in vat_masks and "tvat" in vat_masks:
         total_vat_mask = vat_masks["avat"] | vat_masks["tvat"]
@@ -291,14 +289,16 @@ def calculate_canonical_slice_measurements(
         total_vat_mask = None
         tissue_columns["total_vat_source"] = ["unavailable"] * len(table)
     if total_vat_mask is not None:
-        tissue_columns.update(_tissue_measurement_columns(
-            name="total_vat",
-            tissue_mask_zyx=total_vat_mask,
-            image_zyx=image,
-            body_mask_zyx=body_surface.body_mask_zyx,
-            storage_indices_z=storage,
-            pixel_area_cm2=pixel_area_cm2,
-        ))
+        tissue_columns.update(
+            _tissue_measurement_columns(
+                name="total_vat",
+                tissue_mask_zyx=total_vat_mask,
+                image_zyx=image,
+                body_mask_zyx=body_surface.body_mask_zyx,
+                storage_indices_z=storage,
+                pixel_area_cm2=pixel_area_cm2,
+            )
+        )
     else:
         tissue_columns.update(
             {
@@ -333,14 +333,16 @@ def calculate_canonical_slice_measurements(
             tissue_definitions,
             spacing_xyz=geometry.spacing_xyz,
         ):
-            tissue_columns.update(_tissue_measurement_columns(
-                name=name,
-                tissue_mask_zyx=tissue_mask,
-                image_zyx=image,
-                body_mask_zyx=body_surface.body_mask_zyx,
-                storage_indices_z=storage,
-                pixel_area_cm2=pixel_area_cm2,
-            ))
+            tissue_columns.update(
+                _tissue_measurement_columns(
+                    name=name,
+                    tissue_mask_zyx=tissue_mask,
+                    image_zyx=image,
+                    body_mask_zyx=body_surface.body_mask_zyx,
+                    storage_indices_z=storage,
+                    pixel_area_cm2=pixel_area_cm2,
+                )
+            )
 
     table = pd.concat(
         [table, pd.DataFrame(tissue_columns, index=table.index)],
@@ -349,12 +351,14 @@ def calculate_canonical_slice_measurements(
     if tissue_definitions:
         ratio_columns: dict[str, Any] = {}
         for ratio_name, numerator, denominator in DERIVED_RATIO_DEFINITIONS:
-            ratio_columns.update(_slice_composition_ratio_columns(
-                table,
-                name=ratio_name,
-                numerator=numerator,
-                denominator=denominator,
-            ))
+            ratio_columns.update(
+                _slice_composition_ratio_columns(
+                    table,
+                    name=ratio_name,
+                    numerator=numerator,
+                    denominator=denominator,
+                )
+            )
         table = pd.concat(
             [table, pd.DataFrame(ratio_columns, index=table.index)],
             axis=1,

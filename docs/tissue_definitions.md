@@ -1,6 +1,6 @@
 # CT compartments and tissue definitions
 
-This document defines the tissue contract for measurement schema `3.1.0`.
+This document defines the tissue contract for measurement schema `3.2.0`.
 The default is intentionally small: preserve the model-native anatomical
 compartments, measure their raw CT attenuation, and add only the conventional
 muscle and adipose HU filters needed for broad clinical comparability.
@@ -101,6 +101,9 @@ Enabled non-default definitions are appended to `slices.parquet`, the
 vertebral/range aggregates, and `signature.parquet`. The fixed signature grid
 and default core channels remain unchanged, so a study can use the common core
 and add prespecified profile-specific features without redefining it.
+`hu_distributions.parquet` is deliberately independent of these filters: it
+always uses the complete model-native SM, SAT, aVAT, and tVAT compartments and
+the unchanged prepared CT values.
 
 ## Shipped sensitivity profiles
 

@@ -308,6 +308,42 @@ def test_fixed_signature_removes_scanner_offset_without_stretching_profile():
     assert baseline.loc[50, "sm_mean_hu"] == pytest.approx(36.0)
 
 
+def test_signature_retains_observed_values_for_incomplete_dominant_territory():
+    identity = MeasurementIdentity("case-001", "run-001", "analysis-001")
+    territory = VertebralTerritory(
+        native_label=15,
+        anatomical_label="L3",
+        inferior_mm=-20.0,
+        superior_mm=20.0,
+        centroid_lps_xyz=(0.0, 0.0, 0.0),
+        centroid_superior_mm=0.0,
+        extent_valid=True,
+        complete=False,
+        missing_reason="truncated_vertebra",
+    )
+
+    signature, _alignment = build_longitudinal_signature(
+        _signature_slices(0.0),
+        {"L3": _extent("L3", 0.0)},
+        {"L3": territory},
+        identity,
+        tissue_profile_id="test_profile_v1",
+        full_coverage_tolerance=0.999,
+    )
+
+    observed = signature.loc[50]
+    assert observed["dominant_vertebral_level"] == "L3"
+    assert observed["vertebral_assignment_status"] == "assigned_partial_edge"
+    assert observed["sm_mean_csa_cm2_valid"]
+    assert observed["sm_mean_csa_cm2"] == pytest.approx(25.0)
+    assert observed["sm_mean_hu_valid"]
+    assert observed["sm_mean_hu"] == pytest.approx(36.0)
+    outside = signature.loc[52]
+    assert not outside["bin_valid"]
+    assert pd.isna(outside["sm_mean_csa_cm2"])
+    assert outside["sm_mean_csa_cm2_reason"] == "outside_fov"
+
+
 def test_signature_contract_rejects_non_translation_physical_bounds():
     identity = MeasurementIdentity("case-001", "run-001", "analysis-001")
     signature, _ = build_longitudinal_signature(
@@ -340,9 +376,6 @@ def test_trunk_fraction_is_invalid_when_numerator_and_denominator_coverage_diffe
     row = signature.loc[50]
     assert row["sm_mean_csa_cm2_valid"]
     assert row["trunk_mean_csa_cm2_valid"]
-    assert (
-        row["sm_mean_csa_cm2_coverage_fraction"]
-        != row["trunk_mean_csa_cm2_coverage_fraction"]
-    )
+    assert row["sm_mean_csa_cm2_coverage_fraction"] != row["trunk_mean_csa_cm2_coverage_fraction"]
     assert not row["sm_mean_csa_fraction_of_trunk_valid"]
     assert row["sm_mean_csa_fraction_of_trunk_reason"] == "invalid_measurement"

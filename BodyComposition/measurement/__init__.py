@@ -10,8 +10,10 @@ from BodyComposition.measurement.aggregation import (
     select_l3_view,
 )
 from BodyComposition.measurement.api import (
+    SignatureComponents,
     l3_measurements,
     load_measurement_tables,
+    load_signature,
     range_measurements,
     signature_measurements,
 )
@@ -38,6 +40,7 @@ __all__ = [
     "LandmarkSet",
     "MeasurementBundle",
     "MeasurementIdentity",
+    "SignatureComponents",
     "VertebralExtent",
     "VertebralTerritory",
     "aggregate_named_range",
@@ -52,6 +55,7 @@ __all__ = [
     "tissue_segmentation_envelope",
     "landmarks_from_totalsegmentator",
     "l3_measurements",
+    "load_signature",
     "load_measurement_tables",
     "range_measurements",
     "select_l3_view",

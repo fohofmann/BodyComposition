@@ -86,6 +86,11 @@ def make_slice_table(lower_edges, upper_edges, *, area=None, hu=None):
             "slice_thickness_normal_mm": thickness,
             "normal_mm_per_superior_mm": np.ones(len(lower)),
             "trunk_contour_valid": np.ones(len(lower), dtype=bool),
+            "trunk_contour_reason": np.full(len(lower), None, dtype=object),
+            "trunk_contour_closed": np.ones(len(lower), dtype=bool),
+            "body_touching_fov": np.zeros(len(lower), dtype=bool),
+            "trunk_touching_fov": np.zeros(len(lower), dtype=bool),
+            "trunk_mask_fragmented": np.zeros(len(lower), dtype=bool),
             "trunk_circumference_cm": np.full(len(lower), 100.0),
             "trunk_area_cm2": np.full(len(lower), 80.0),
             "trunk_area_valid": np.ones(len(lower), dtype=bool),
@@ -122,6 +127,61 @@ def test_vertebral_extents_use_body_labels_and_remove_isolated_voxels():
     assert extent.removed_voxel_fraction == pytest.approx(1 / 81)
     assert extent.inferior_mm == pytest.approx(4.5)
     assert extent.superior_mm == pytest.approx(9.5)
+
+
+def test_cranial_fov_touching_t11_retains_observed_bins():
+    shape = (40, 12, 14)
+    geometry = make_geometry(shape)
+    body = np.zeros(shape, dtype=np.uint8)
+    body[32:40, 4:8, 5:9] = 18
+    body[18:26, 4:8, 5:9] = 19
+    result = VertebralResult(
+        backend_id="synthetic",
+        execution_status=ExecutionStatus.SUCCEEDED,
+        geometry=geometry,
+        whole_vertebra_labels=None,
+        vertebral_body_labels=body,
+        label_schema={18: "T11", 19: "T12"},
+    )
+
+    extents = derive_vertebral_extents(result)
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-0.5, 39.5, 1.0),
+        np.arange(0.5, 40.5, 1.0),
+        area=np.linspace(20.0, 40.0, 40),
+    )
+    displayed_tissues = (
+        "skeletal_muscle_tissue_hu_m29_150",
+        "sat_total_hu_m190_m30",
+        "vat_total_hu_m190_m30",
+    )
+    for index, tissue in enumerate(displayed_tissues, start=1):
+        slices[f"{tissue}_area_cm2"] = np.linspace(
+            10.0 * index,
+            20.0 * index,
+            len(slices),
+        )
+        slices[f"{tissue}_area_valid"] = True
+        slices[f"{tissue}_voxel_count"] = 100
+        slices[f"{tissue}_mean_hu"] = 10.0 * index
+        slices[f"{tissue}_hu_valid"] = True
+    table = build_vertebra_table(slices, extents, territories, IDENTITY)
+    t11 = table.loc[table["vertebral_level"].eq("T11")]
+
+    assert extents["T11"].valid
+    assert not extents["T11"].complete
+    assert extents["T11"].missing_reason == "truncated_vertebra"
+    assert not t11["territory_complete"].any()
+    assert set(t11["territory_reason"]) == {"truncated_vertebra"}
+    assert t11["bin_valid"].all()
+    assert t11["sm_mean_csa_cm2_valid"].all()
+    assert t11["sm_mean_csa_cm2"].notna().all()
+    assert t11["trunk_mean_circumference_cm_valid"].all()
+    assert t11["trunk_mean_circumference_cm"].notna().all()
+    for tissue in displayed_tissues:
+        assert t11[f"{tissue}_mean_csa_cm2_valid"].all()
+        assert t11[f"{tissue}_mean_csa_cm2"].notna().all()
 
 
 def test_midpoint_territories_assign_intervertebral_slices_without_stretching():
@@ -292,9 +352,7 @@ def test_partial_bin_volume_reconstruction_uses_metric_coverage():
         )
     )
 
-    assert l3["sm_mean_csa_cm2_coverage_fraction"].tolist() == pytest.approx(
-        [1.0, 0.5, 0.0]
-    )
+    assert l3["sm_mean_csa_cm2_coverage_fraction"].tolist() == pytest.approx([1.0, 0.5, 0.0])
     assert reconstructed == pytest.approx(whole["sm_volume_cm3"])
 
 
@@ -410,7 +468,85 @@ def test_partial_anatomical_extrema_are_observed_but_not_unqualified():
     assert summary["ct_min_waist_to_pelvic_ratio_reason"] == "missing_neighbor"
 
 
-def test_extrema_remain_missing_when_every_candidate_contour_is_cropped():
+@pytest.mark.parametrize(
+    ("levels", "expected_inferior_level", "expected_superior_level"),
+    (
+        (("T11", "T12", "L1", "L2", "L3", "L4", "L5"), "L5", "T11"),
+        (("T10", "T11", "T12", "L1", "L2", "L3", "L4"), "L4", "T10"),
+    ),
+)
+def test_partial_observed_waist_is_retained_when_one_boundary_anchor_is_missing(
+    levels,
+    expected_inferior_level,
+    expected_superior_level,
+):
+    centers = np.arange(len(levels), 0, -1, dtype=float) * 20.0
+    extents = {
+        level: make_extent(
+            level,
+            center - 5.0,
+            center + 5.0,
+            native_label=index + 1,
+        )
+        for index, (level, center) in enumerate(zip(levels, centers, strict=True))
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(10.0, float(centers[0] + 10.0), 5.0),
+        np.arange(15.0, float(centers[0] + 15.0), 5.0),
+    )
+    slices["trunk_circumference_cm"] = np.linspace(95.0, 105.0, len(slices))
+    candidate = slices["position_superior_mm"].between(
+        float(territories[expected_inferior_level].inferior_mm),
+        float(territories[expected_superior_level].superior_mm),
+    )
+    selected_index = slices.loc[candidate].index[len(slices.loc[candidate]) // 2]
+    slices.loc[selected_index, "trunk_circumference_cm"] = 80.0
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert summary["ct_min_trunk_circumference_t10_l5_cm"] == pytest.approx(80.0)
+    assert summary["ct_min_trunk_circumference_t10_l5_valid"]
+    assert not summary["ct_min_trunk_circumference_t10_l5_eligible"]
+    assert summary["ct_min_trunk_circumference_t10_l5_reason"] == "missing_anchor"
+    assert not summary["ct_min_trunk_circumference_t10_l5_search_anatomically_complete"]
+    assert summary["ct_min_trunk_circumference_t10_l5_search_inferior_mm"] == pytest.approx(
+        float(territories[expected_inferior_level].inferior_mm)
+    )
+    assert summary["ct_min_trunk_circumference_t10_l5_search_superior_mm"] == pytest.approx(
+        float(territories[expected_superior_level].superior_mm)
+    )
+
+
+def test_waist_remains_missing_without_any_observed_t10_l5_territory():
+    extents = {
+        "T9": make_extent("T9", 40.0, 50.0, native_label=9),
+        "SACRUM": make_extent("SACRUM", 0.0, 20.0, native_label=26),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(0.0, 50.0, 5.0),
+        np.arange(5.0, 55.0, 5.0),
+    )
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert not summary["ct_min_trunk_circumference_t10_l5_valid"]
+    assert pd.isna(summary["ct_min_trunk_circumference_t10_l5_cm"])
+    assert summary["ct_min_trunk_circumference_t10_l5_reason"] == "missing_anchor"
+
+
+def test_pelvic_max_retains_fov_cropped_observation_with_explicit_flags():
     extents = {
         "T10": make_extent("T10", 80.0, 90.0, native_label=17),
         "L5": make_extent("L5", 20.0, 30.0, native_label=24),
@@ -424,6 +560,81 @@ def test_extrema_remain_missing_when_every_candidate_contour_is_cropped():
     sacral = slices["position_superior_mm"].le(7.5)
     slices.loc[sacral, "trunk_contour_valid"] = False
     slices.loc[sacral, "trunk_circumference_cm"] = 101.0
+    slices.loc[sacral, "trunk_contour_reason"] = "touching_image_boundary"
+    slices.loc[sacral, "trunk_touching_fov"] = True
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert summary["ct_max_pelvic_circumference_valid"]
+    assert not summary["ct_max_pelvic_circumference_eligible"]
+    assert summary["ct_max_pelvic_circumference_cm"] == pytest.approx(101.0)
+    assert summary["ct_max_pelvic_circumference_reason"] == "touching_image_boundary"
+    assert summary["ct_max_pelvic_circumference_search_touches_fov"]
+    assert summary["ct_max_pelvic_circumference_value_is_fov_cropped"]
+    assert summary["trunk_contour_touches_fov"]
+    assert summary["trunk_contour_touches_fov_slice_count"] == int(sacral.sum())
+    assert summary["ct_min_waist_to_pelvic_ratio_valid"]
+    assert not summary["ct_min_waist_to_pelvic_ratio_eligible"]
+    assert summary["ct_min_waist_to_pelvic_ratio"] == pytest.approx(100.0 / 101.0)
+    assert summary["ct_min_waist_to_pelvic_ratio_value_is_fov_cropped"]
+
+
+def test_pelvic_fov_search_does_not_mislabel_a_strict_selected_maximum():
+    extents = {
+        "T10": make_extent("T10", 80.0, 90.0, native_label=17),
+        "L5": make_extent("L5", 20.0, 30.0, native_label=24),
+        "SACRUM": make_extent("SACRUM", -20.0, 0.0, native_label=26),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 90.0, 5.0),
+        np.arange(-15.0, 95.0, 5.0),
+    )
+    sacral_indices = slices.index[slices["position_superior_mm"].le(7.5)]
+    cropped_index, strict_index = sacral_indices[:2]
+    slices.loc[cropped_index, "trunk_contour_valid"] = False
+    slices.loc[cropped_index, "trunk_circumference_cm"] = 110.0
+    slices.loc[cropped_index, "trunk_contour_reason"] = "touching_image_boundary"
+    slices.loc[cropped_index, "trunk_touching_fov"] = True
+    slices.loc[strict_index, "trunk_circumference_cm"] = 120.0
+
+    summary = build_case_summaries(
+        slices,
+        extents,
+        territories,
+        IDENTITY,
+    ).iloc[0]
+
+    assert summary["ct_max_pelvic_circumference_cm"] == pytest.approx(120.0)
+    assert summary["ct_max_pelvic_circumference_valid"]
+    assert not summary["ct_max_pelvic_circumference_eligible"]
+    assert summary["ct_max_pelvic_circumference_search_touches_fov"]
+    assert not summary["ct_max_pelvic_circumference_value_is_fov_cropped"]
+    assert not summary["ct_min_waist_to_pelvic_ratio_value_is_fov_cropped"]
+
+
+def test_fragmented_boundary_contour_is_not_promoted_to_pelvic_maximum():
+    extents = {
+        "T10": make_extent("T10", 80.0, 90.0, native_label=17),
+        "L5": make_extent("L5", 20.0, 30.0, native_label=24),
+        "SACRUM": make_extent("SACRUM", -20.0, 0.0, native_label=26),
+    }
+    territories = derive_vertebral_territories(extents)
+    slices = make_slice_table(
+        np.arange(-20.0, 90.0, 5.0),
+        np.arange(-15.0, 95.0, 5.0),
+    )
+    sacral = slices["position_superior_mm"].le(7.5)
+    slices.loc[sacral, "trunk_contour_valid"] = False
+    slices.loc[sacral, "trunk_circumference_cm"] = 101.0
+    slices.loc[sacral, "trunk_contour_reason"] = "touching_image_boundary"
+    slices.loc[sacral, "trunk_touching_fov"] = True
+    slices.loc[sacral, "trunk_mask_fragmented"] = True
 
     summary = build_case_summaries(
         slices,
@@ -434,9 +645,8 @@ def test_extrema_remain_missing_when_every_candidate_contour_is_cropped():
 
     assert not summary["ct_max_pelvic_circumference_valid"]
     assert pd.isna(summary["ct_max_pelvic_circumference_cm"])
-    assert summary["ct_max_pelvic_circumference_reason"] == "invalid_measurement"
-    assert not summary["ct_min_waist_to_pelvic_ratio_valid"]
-    assert pd.isna(summary["ct_min_waist_to_pelvic_ratio"])
+    assert summary["ct_max_pelvic_circumference_search_touches_fov"]
+    assert not summary["ct_max_pelvic_circumference_value_is_fov_cropped"]
 
 
 def test_partial_contour_search_retains_observed_extremum_with_ineligible_qc():
@@ -509,9 +719,7 @@ def test_internal_enumeration_gap_retains_waist_but_marks_it_ineligible():
     assert summary["ct_min_trunk_circumference_t10_l5_valid"]
     assert not summary["ct_min_trunk_circumference_t10_l5_eligible"]
     assert summary["ct_min_trunk_circumference_t10_l5_reason"] == "sequence_gap"
-    assert not summary[
-        "ct_min_trunk_circumference_t10_l5_search_anatomically_complete"
-    ]
+    assert not summary["ct_min_trunk_circumference_t10_l5_search_anatomically_complete"]
 
 
 def test_sequence_gap_at_waist_search_boundary_is_not_treated_as_complete():

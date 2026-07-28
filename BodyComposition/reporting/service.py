@@ -8,6 +8,7 @@ import os
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -20,6 +21,11 @@ import reportlab
 import SimpleITK as sitk
 from pypdf import PdfReader, PdfWriter
 
+from BodyComposition.measurement.contracts import (
+    MEASUREMENT_SCHEMA_VERSION,
+    VERTEBRAL_TERRITORY_SCHEMA_VERSION,
+    validate_hu_distribution_contract,
+)
 from BodyComposition.measurement.physical import slice_geometry_table
 from BodyComposition.reporting.contracts import (
     CASE_MANIFEST_NAME,
@@ -50,6 +56,7 @@ from BodyComposition.reporting.render import (
     PAGE_HEIGHT,
     PAGE_WIDTH,
     font_manifest,
+    page_number_overlay,
     render_case_page,
     render_failure_page,
     render_review_summary_page,
@@ -192,6 +199,46 @@ def _validate_slice_geometry(case: CaseReportInput, geometry: ImageGeometry) -> 
 def _validate_case_sources(case: CaseReportInput) -> None:
     """Reject mixed or stale orientation, vertebral, and measurement inputs."""
 
+    measurement_tables = [
+        ("slices", case.measurement_bundle.slices),
+        ("vertebrae", case.measurement_bundle.vertebrae),
+        ("summaries", case.measurement_bundle.summaries),
+        ("hu_distributions", case.measurement_bundle.hu_distributions),
+    ]
+    signature = getattr(case.measurement_bundle, "signature", None)
+    if signature is not None:
+        measurement_tables.append(("signature", signature))
+    for table_name, table in measurement_tables:
+        if (
+            "schema_version" not in table
+            or not table["schema_version"].eq(MEASUREMENT_SCHEMA_VERSION).all()
+        ):
+            raise ReportValidationError(
+                f"Report table {table_name!r} does not use the current measurement schema "
+                f"{MEASUREMENT_SCHEMA_VERSION}; regenerate measurements before reporting."
+            )
+    try:
+        validate_hu_distribution_contract(
+            case.measurement_bundle.hu_distributions,
+            table_name="report hu_distributions",
+        )
+    except ValueError as error:
+        raise ReportValidationError(
+            "Report tissue HU distributions violate the current native-compartment "
+            "contract; regenerate measurements before reporting."
+        ) from error
+    vertebrae = case.measurement_bundle.vertebrae
+    if (
+        "vertebral_territory_schema_version" not in vertebrae
+        or not vertebrae["vertebral_territory_schema_version"]
+        .eq(VERTEBRAL_TERRITORY_SCHEMA_VERSION)
+        .all()
+    ):
+        raise ReportValidationError(
+            "Report vertebral measurements use a stale territory policy; "
+            "regenerate measurements before reporting."
+        )
+
     orientation = _orientation_data(case)
     expected_digest = orientation.get("prepared_pixel_sha256")
     if not isinstance(expected_digest, str) or not re.fullmatch(r"[a-f0-9]{64}", expected_digest):
@@ -203,9 +250,7 @@ def _validate_case_sources(case: CaseReportInput) -> None:
             "The report CT pixels disagree with the supplied orientation result."
         )
     if "orientation_changed" not in orientation:
-        raise ReportValidationError(
-            "The supplied orientation result lacks orientation_changed."
-        )
+        raise ReportValidationError("The supplied orientation result lacks orientation_changed.")
 
     prepared_geometry = ImageGeometry.from_sitk(case.prepared_image)
     if case.vertebral_result.geometry is None:
@@ -429,6 +474,10 @@ def _source_artifacts(case: CaseReportInput) -> list[dict[str, str]]:
         {"name": "slices.parquet_content", "sha256": _table_digest(bundle.slices)},
         {"name": "vertebrae.parquet_content", "sha256": _table_digest(bundle.vertebrae)},
         {"name": "summaries.parquet_content", "sha256": _table_digest(bundle.summaries)},
+        {
+            "name": "hu_distributions.parquet_content",
+            "sha256": _table_digest(bundle.hu_distributions),
+        },
         {"name": "orientation_report", "sha256": _digest_payload(_orientation_data(case))},
     ]
 
@@ -438,12 +487,21 @@ def _case_identity_payload(
     settings: ReportingSettings,
     source_artifacts: list[dict[str, str]],
 ) -> dict[str, Any]:
+    patient_metadata = {
+        key: value
+        for key, value in sorted(case.patient_metadata.items())
+        if value is not None
+    }
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "case_id": case.case_id,
         "analysis_id": case.measurement_bundle.identity.analysis_id,
         "layout": settings.layout,
         "configuration": settings.normalized(),
+        "patient_header": {
+            "present_fields": list(patient_metadata),
+            "content_sha256": _digest_payload(patient_metadata),
+        },
         "technical_metadata": dict(case.technical_metadata),
         "measurement_definitions": {
             name: MEASUREMENT_DEFINITIONS[name] for name in settings.measurement_columns
@@ -690,7 +748,7 @@ def render_case_report(
             "display": {
                 "ct_window_hu": list(settings.ct_window),
                 "overlay_opacity": settings.overlay_opacity,
-                "palette": "vertebral_region_v1_and_okabe_ito_tissue_v1",
+                "palette": "vertebral_region_modern_v2_and_warm_tissue_v2",
                 "measurement_columns": list(settings.measurement_columns),
                 "numeric_precision": settings.numeric_precision,
                 "missing_value_symbol": settings.missing_value_symbol,
@@ -817,7 +875,7 @@ def render_failed_case_report(
             "display": {
                 "ct_window_hu": list(settings.ct_window),
                 "overlay_opacity": settings.overlay_opacity,
-                "palette": "vertebral_region_v1_and_okabe_ito_tissue_v1",
+                "palette": "vertebral_region_modern_v2_and_warm_tissue_v2",
                 "measurement_columns": list(settings.measurement_columns),
                 "numeric_precision": settings.numeric_precision,
                 "missing_value_symbol": settings.missing_value_symbol,
@@ -892,6 +950,7 @@ def collate_reports(
         }
     )
     summary_offset = 1 if flagged else 0
+    expected_pages = len(case_reports) + summary_offset
     summary_rows = [
         {
             "case_id": item.case_id,
@@ -914,8 +973,8 @@ def collate_reports(
         if flagged:
             render_review_summary_page(
                 temporary_summary,
-                export_report_id=export_report_id,
                 total_cases=len(case_reports),
+                page_count=expected_pages,
                 rows=summary_rows,
             )
             _validate_pdf(temporary_summary, expected_pages=1)
@@ -924,6 +983,12 @@ def collate_reports(
             )
         for item in case_reports:
             writer.append(str(item.pdf_path), pages=(0, 1), outline_item=item.case_id)
+        for page_index in range(summary_offset, expected_pages):
+            overlay = PdfReader(
+                BytesIO(page_number_overlay(page_index + 1, expected_pages)),
+                strict=True,
+            )
+            writer.pages[page_index].merge_page(overlay.pages[0], over=True)
         writer.add_metadata(
             {
                 "/Title": f"BodyComposition export {export_id}",
@@ -935,7 +1000,6 @@ def collate_reports(
         )
         with temporary_pdf.open("wb") as handle:
             writer.write(handle)
-        expected_pages = len(case_reports) + summary_offset
         _validate_pdf(temporary_pdf, expected_pages=expected_pages)
         combined_sha256 = _sha256(temporary_pdf)
         cases = [

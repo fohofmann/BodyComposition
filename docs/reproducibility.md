@@ -61,11 +61,13 @@ imputed. Absolute scanner coordinates must not be treated as cross-patient
 registration without their anatomical assignment and coverage context.
 
 Use the three-bin `vertebrae.parquet` for compact anatomical summaries and
-`summaries.parquet` for prespecified established views. The default
-`signature.parquet` provides a frozen 100-by-20-mm translation-only comparison
-grid. Retain its alignment method/confidence, coverage, variants, and
-missingness in every cohort analysis. Alternative functional representations
-or added tissue profiles remain separate versioned analysis contracts.
+`summaries.parquet` for prespecified established views. The default comparison
+signature consists of the frozen 100-by-20-mm translation-only grid in
+`signature.parquet` plus whole-volume native SM/SAT/aVAT/tVAT attenuation
+distributions in `hu_distributions.parquet`. Retain alignment
+method/confidence, coverage, variants, histogram tails, and missingness in
+every cohort analysis. Alternative functional representations or added tissue
+profiles remain separate versioned analysis contracts.
 
 ## Acceptance archive
 

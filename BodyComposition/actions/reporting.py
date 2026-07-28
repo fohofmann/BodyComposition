@@ -42,6 +42,7 @@ class RenderCaseReport(PipelineAction):
             measurement_bundle=memory["tmp/measurement_bundle"],
             tissue_labels_zyx=memory[TISSUE_LABEL_MASK].data,
             orientation=memory["tmp/orientation_result"],
+            patient_metadata=dict(memory.get("tmp/report_patient_metadata", {})),
             technical_metadata=dict(memory.get("tmp/report_metadata", {})),
         )
         output_directory = Path(memory["workspace"]) / "reports"

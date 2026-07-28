@@ -29,6 +29,7 @@ from BodyComposition.measurement.api import (
     TABLE_NAMES,
     l3_measurements,
     load_measurement_tables,
+    load_signature,
     range_measurements,
     signature_measurements,
 )
@@ -156,14 +157,151 @@ def test_complete_bundle_validates_three_native_territory_bins(base_config):
     assert bundle.summaries.iloc[0]["l3_200mm_slab_valid"]
     assert "orientation_changed" not in bundle.slices
     assert bundle.provenance["orientation"]["state"] == "PASS_METADATA_MATCH"
-    assert set(TABLE_NAMES) == {"slices", "vertebrae", "summaries", "signature"}
+    assert set(TABLE_NAMES) == {
+        "slices",
+        "vertebrae",
+        "summaries",
+        "signature",
+        "hu_distributions",
+    }
+    assert bundle.hu_distributions["tissue_key"].drop_duplicates().tolist() == [
+        "sm",
+        "sat",
+        "avat",
+        "tvat",
+    ]
+    assert bundle.hu_distributions.groupby("tissue_key").size().eq(68).all()
+    assert bundle.hu_distributions["distribution_scope"].eq("analyzed_volume").all()
+
+
+def test_hu_distributions_use_native_compartments_not_filtered_masks(base_config):
+    image, compartments, geometry, body_surface, vertebral_result = make_measurement_inputs(
+        base_config
+    )
+    filtered_labels = compartments.copy()
+    native_sm_voxels = ((0, 5, 5), (0, 5, 6), (0, 5, 7))
+    assert all(compartments[voxel] == 1 for voxel in native_sm_voxels)
+    image[native_sm_voxels[0]] = -100
+    image[native_sm_voxels[1]] = -250
+    image[native_sm_voxels[2]] = 160
+    for voxel in native_sm_voxels:
+        filtered_labels[voxel] = 0
+
+    bundle = build_measurement_bundle(
+        image_zyx=image,
+        tissue_labels_zyx=filtered_labels,
+        geometry=geometry,
+        tissue_label_schema=base_config["LBL_TISSUE"],
+        tissue_backend_id="synthetic",
+        tissue_preprocessing={"hu_denoise": False},
+        compartment_labels_zyx=compartments,
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
+        body_surface=body_surface,
+        vertebral_result=vertebral_result,
+        identity=MeasurementIdentity("case-native-hu", "run-001", "analysis-001"),
+        landmarks=None,
+        settings=base_config["measurements"],
+    )
+
+    sm = bundle.hu_distributions.loc[bundle.hu_distributions["tissue_key"].eq("sm")]
+    native_count = int(np.count_nonzero(compartments == 1))
+    filtered_count = int(np.count_nonzero(filtered_labels == 1))
+    assert native_count == filtered_count + len(native_sm_voxels)
+    assert sm["source_semantics"].eq("model_native_compartment").all()
+    assert sm["source_label_ids"].eq("1").all()
+    assert sm["total_voxel_count"].eq(native_count).all()
+    out_of_filtered_range_bin = sm.loc[sm["bin_lower_hu"].eq(-100.0) & sm["bin_upper_hu"].eq(-95.0)]
+    assert out_of_filtered_range_bin["voxel_count"].tolist() == [1]
+    assert sm["below_histogram_voxel_count"].eq(1).all()
+    assert sm["above_histogram_voxel_count"].eq(1).all()
+    assert sm["in_histogram_voxel_count"].eq(native_count - 2).all()
+    assert sm["mean_hu"].eq(float(np.mean(image[compartments == 1]))).all()
+    assert sm["total_volume_cm3"].eq(native_count * geometry.voxel_volume_mm3 / 1000.0).all()
+
+
+def test_body_fov_contact_is_distinct_from_trunk_contour_contact(base_config):
+    image, tissues, geometry, _, vertebral_result = make_measurement_inputs(base_config)
+    body_labels = np.zeros(image.shape, dtype=np.uint8)
+    body_labels[:, 2:-2, 2:-2] = 1
+    body_labels[:, 10:12, 0] = 2
+    body_surface = body_surface_from_totalsegmentator(body_labels, geometry)
+
+    bundle = build_measurement_bundle(
+        image_zyx=image,
+        tissue_labels_zyx=tissues,
+        geometry=geometry,
+        tissue_label_schema=base_config["LBL_TISSUE"],
+        tissue_backend_id="synthetic",
+        tissue_preprocessing={"hu_denoise": False},
+        compartment_labels_zyx=tissues,
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
+        body_surface=body_surface,
+        vertebral_result=vertebral_result,
+        identity=MeasurementIdentity("case-body-fov", "run-001", "analysis-001"),
+        landmarks=None,
+        settings=base_config["measurements"],
+    )
+
+    summary = bundle.summaries.iloc[0]
+    assert bundle.slices["body_touching_fov"].all()
+    assert not bundle.slices["trunk_touching_fov"].any()
+    assert summary["body_surface_touches_fov"]
+    assert summary["body_surface_touches_fov_slice_count"] == len(bundle.slices)
+    assert not summary["trunk_contour_touches_fov"]
+    assert any(flag.code == "body_surface_touches_fov" for flag in bundle.qc_flags)
+
+
+def test_cropped_pelvic_value_keeps_selected_slice_provenance(base_config):
+    image, tissues, geometry, _, vertebral_result = make_measurement_inputs(base_config)
+    body_labels = np.zeros(image.shape, dtype=np.uint8)
+    body_labels[:, 2:-2, :-2] = 1
+    body_surface = body_surface_from_totalsegmentator(body_labels, geometry)
+
+    bundle = build_measurement_bundle(
+        image_zyx=image,
+        tissue_labels_zyx=tissues,
+        geometry=geometry,
+        tissue_label_schema=base_config["LBL_TISSUE"],
+        tissue_backend_id="synthetic",
+        tissue_preprocessing={"hu_denoise": False},
+        compartment_labels_zyx=tissues,
+        compartment_label_schema=base_config["LBL_TISSUE_COMPARTMENTS"],
+        body_surface=body_surface,
+        vertebral_result=vertebral_result,
+        identity=MeasurementIdentity("case-cropped-pelvis", "run-001", "analysis-001"),
+        landmarks=None,
+        settings=base_config["measurements"],
+    )
+
+    summary = bundle.summaries.iloc[0]
+    assert summary["ct_max_pelvic_circumference_value_is_fov_cropped"]
+    assert summary["ct_max_pelvic_circumference_valid"]
+    assert not summary["ct_max_pelvic_circumference_eligible"]
+    assert any(flag.code == "pelvic_maximum_fov_cropped" for flag in bundle.qc_flags)
+
+    corrupted_slices = bundle.slices.copy()
+    selected_slice_id = int(summary["ct_max_pelvic_circumference_slice_id"])
+    corrupted_slices.loc[
+        corrupted_slices["slice_id"].eq(selected_slice_id),
+        "trunk_touching_fov",
+    ] = False
+    corrupted_summary = bundle.summaries.copy()
+    corrupted_summary.loc[
+        :,
+        "trunk_contour_touches_fov_slice_count",
+    ] -= 1
+    with pytest.raises(ValueError, match="source slice"):
+        replace(
+            bundle,
+            slices=corrupted_slices,
+            summaries=corrupted_summary,
+        )
 
 
 def test_oblique_longitudinal_allocation_is_recorded_and_flagged(base_config):
     axial, image, geometry, tissues, vertebral_result = make_bundle(base_config)
     assert not any(
-        flag.code == "oblique_longitudinal_allocation_approximate"
-        for flag in axial.qc_flags
+        flag.code == "oblique_longitudinal_allocation_approximate" for flag in axial.qc_flags
     )
     assert axial.provenance["measurement"]["longitudinal_allocation"] == {
         "method": "native_slice_center_v1",
@@ -198,8 +336,7 @@ def test_oblique_longitudinal_allocation_is_recorded_and_flagged(base_config):
     )
 
     assert any(
-        flag.code == "oblique_longitudinal_allocation_approximate"
-        for flag in oblique.qc_flags
+        flag.code == "oblique_longitudinal_allocation_approximate" for flag in oblique.qc_flags
     )
     allocation = oblique.provenance["measurement"]["longitudinal_allocation"]
     assert allocation["in_plane_superior_span_mm"] == pytest.approx(
@@ -225,7 +362,13 @@ def test_oblique_longitudinal_allocation_is_recorded_and_flagged(base_config):
         "ct_max_pelvic_circumference_search_acquisition_coverage_fraction",
         "ct_max_pelvic_circumference_search_anatomically_complete",
         "ct_max_pelvic_circumference_at_search_boundary",
+        "ct_max_pelvic_circumference_search_touches_fov",
+        "ct_max_pelvic_circumference_value_is_fov_cropped",
         "ct_max_pelvic_search_definition",
+        "body_surface_touches_fov",
+        "body_surface_touches_fov_slice_count",
+        "trunk_contour_touches_fov",
+        "trunk_contour_touches_fov_slice_count",
     ],
 )
 def test_summary_contract_rejects_missing_safety_fields(base_config, column):
@@ -248,6 +391,15 @@ def test_summary_contract_rejects_eligibility_that_contradicts_qc(base_config):
 
     with pytest.raises(ValueError, match="eligibility contradicts"):
         replace(bundle, summaries=summaries)
+
+
+def test_hu_distribution_contract_rejects_null_native_source_metadata(base_config):
+    bundle, *_ = make_bundle(base_config)
+    distributions = bundle.hu_distributions.copy()
+    distributions.loc[distributions["tissue_key"].eq("sm"), "source_label_ids"] = pd.NA
+
+    with pytest.raises(ValueError, match="inconsistent metadata"):
+        replace(bundle, hu_distributions=distributions)
 
 
 def test_slice_table_is_the_longitudinal_csa_and_hu_feature_source(base_config):
@@ -300,9 +452,7 @@ def test_empty_vertebral_segmentation_preserves_slices_and_explicit_qc(base_conf
     assert len(bundle.slices) == image.shape[0]
     assert bundle.vertebrae.empty
     assert bundle.slices["assigned_vertebral_level"].isna().all()
-    assert set(bundle.slices["vertebral_assignment_status"]) == {
-        "no_valid_territory"
-    }
+    assert set(bundle.slices["vertebral_assignment_status"]) == {"no_valid_territory"}
     assert len(bundle.signature) == 100
     assert not bundle.signature["reference_alignment_valid"].any()
     assert not bundle.signature["bin_valid"].any()
@@ -351,9 +501,7 @@ def test_bundle_surfaces_fragmented_trunk_and_backend_neutral_variant_qc(base_co
 def test_ambiguous_sequence_variant_stays_continuous_and_is_flagged(
     base_config,
 ):
-    image, tissues, geometry, body_surface, vertebral_result = make_measurement_inputs(
-        base_config
-    )
+    image, tissues, geometry, body_surface, vertebral_result = make_measurement_inputs(base_config)
     vertebral = vertebral_result.vertebral_body_labels.copy()
     vertebral[vertebral == 17] = 0
     vertebral_result = replace(
@@ -409,6 +557,22 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
     assert tables["vertebrae"][["vertebral_level", "territory_bin"]].to_numpy().tolist() == (
         bundle.vertebrae[["vertebral_level", "territory_bin"]].to_numpy().tolist()
     )
+    distributions = tables["hu_distributions"]
+    assert distributions.groupby("tissue_key").size().eq(68).all()
+    assert distributions["bin_width_hu"].eq(5.0).all()
+    assert distributions["histogram_min_hu"].eq(-190.0).all()
+    assert distributions["histogram_max_hu"].eq(150.0).all()
+    for tissue, expected_median in {
+        "sm": 40.0,
+        "sat": -100.0,
+        "avat": -90.0,
+        "tvat": -70.0,
+    }.items():
+        rows = distributions.loc[distributions["tissue_key"].eq(tissue)]
+        assert rows["distribution_valid"].all()
+        assert rows["median_hu"].eq(expected_median).all()
+        assert rows["voxel_count"].sum() == rows["total_voxel_count"].iloc[0]
+        assert rows["voxel_fraction"].sum() == pytest.approx(1.0)
     signature = signature_measurements(table_directory)
     assert signature["signature_bin"].tolist() == list(range(100))
     assert signature["signature_profile_id"].nunique() == 1
@@ -425,9 +589,26 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
     assert outside["sm_mean_csa_cm2_coverage_fraction"].eq(0).all()
     assert outside["sm_mean_hu_reason"].eq("outside_fov").all()
     assert outside["trunk_mean_csa_cm2_reason"].eq("outside_fov").all()
-    assert l3_measurements(table_directory, aggregation="territory_mean").iloc[0][
-        "aggregation"
-    ] == "territory_mean"
+    signature_components = load_signature(table_directory)
+    assert signature_components.longitudinal.equals(signature)
+    assert signature_components.tissue_hu_distributions.equals(distributions)
+    for component in (
+        signature_components.longitudinal,
+        signature_components.tissue_hu_distributions,
+    ):
+        assert component["case_id"].eq(bundle.identity.case_id).all()
+        assert component["run_id"].eq(bundle.identity.run_id).all()
+        assert component["analysis_id"].eq(bundle.identity.analysis_id).all()
+    provenance_components = bundle.provenance["measurement"]["signature_components"]
+    assert [component["table"] for component in provenance_components] == [
+        "signature.parquet",
+        "hu_distributions.parquet",
+    ]
+    assert provenance_components[1]["source_semantics"] == ("model_native_compartment")
+    assert (
+        l3_measurements(table_directory, aggregation="territory_mean").iloc[0]["aggregation"]
+        == "territory_mean"
+    )
     assert l3_measurements(table_directory, aggregation="slice").iloc[0]["aggregation"] == "slice"
     indexed_l3 = l3_measurements(
         table_directory,
@@ -454,17 +635,13 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
         end_level="L5",
         height_m=2.0,
     ).iloc[0]
-    assert indexed_range[
-        "skeletal_muscle_tissue_hu_m29_150_volume_index_cm3_m2"
-    ] == pytest.approx(
+    assert indexed_range["skeletal_muscle_tissue_hu_m29_150_volume_index_cm3_m2"] == pytest.approx(
         indexed_range["skeletal_muscle_tissue_hu_m29_150_volume_cm3"] / 4.0
     )
     with pytest.raises(ValueError, match="positive"):
         l3_measurements(table_directory, height_m=0.0)
     qc = json.loads((tmp_path / "qc" / "qc.json").read_text())
-    schema = json.loads(
-        Path("BodyComposition/schemas/measurement_qc.schema.json").read_text()
-    )
+    schema = json.loads(Path("BodyComposition/schemas/measurement_qc.schema.json").read_text())
     jsonschema.validate(qc, schema)
     assert qc["provenance"]["vertebral"]["backend_id"] == "synthetic_body_only"
     assert qc["provenance"]["orientation"]["state"] == "PASS_METADATA_MATCH"
@@ -503,9 +680,7 @@ def test_parquet_reader_rejects_missing_vertebral_territory_bin(base_config, tmp
     vertebrae_path = tmp_path / "tables" / "vertebrae.parquet"
     vertebrae = pq.read_table(vertebrae_path)
     frame = vertebrae.to_pandas()
-    removed_row = frame.index[
-        frame["vertebral_level"].eq("L3") & frame["territory_bin"].eq(2)
-    ][0]
+    removed_row = frame.index[frame["vertebral_level"].eq("L3") & frame["territory_bin"].eq(2)][0]
     corrupted = vertebrae.take(
         pa.array(
             [index for index in range(len(frame)) if index != removed_row],
@@ -571,6 +746,39 @@ def test_parquet_reader_rejects_shifted_signature_grid(base_config, tmp_path):
         load_measurement_tables(signature_path.parent)
 
 
+def test_parquet_reader_rejects_shifted_hu_distribution_grid(base_config, tmp_path):
+    bundle, _, _, _, _ = make_bundle(base_config)
+    action = ExportMeasurementBundle(
+        SimpleNamespace(config=base_config, timestamp=123, device="cpu")
+    )
+    action(
+        {
+            "id": "case-001",
+            "workspace": tmp_path,
+            "tmp/measurement_bundle": bundle,
+        }
+    )
+
+    distribution_path = tmp_path / "tables" / "hu_distributions.parquet"
+    parquet_schema = pq.read_schema(distribution_path)
+    metadata = parquet_schema.metadata
+    distributions = pd.read_parquet(distribution_path)
+    distributions.loc[0, "bin_lower_hu"] = -189.0
+    corrupted = pa.Table.from_pandas(
+        distributions,
+        schema=parquet_schema.remove_metadata(),
+        preserve_index=False,
+        safe=True,
+    )
+    pq.write_table(
+        corrupted.replace_schema_metadata(metadata),
+        distribution_path,
+    )
+
+    with pytest.raises(ValueError, match="fixed HU grid"):
+        load_measurement_tables(distribution_path.parent)
+
+
 def test_missing_anatomy_keeps_identical_nullable_parquet_schemas(
     base_config,
     tmp_path,
@@ -592,8 +800,7 @@ def test_missing_anatomy_keeps_identical_nullable_parquet_schemas(
         )
         table_directory = workspace / "tables"
         schemas[state] = {
-            name: pq.read_schema(table_directory / f"{name}.parquet")
-            for name in TABLE_NAMES
+            name: pq.read_schema(table_directory / f"{name}.parquet") for name in TABLE_NAMES
         }
         load_measurement_tables(table_directory)
 
@@ -603,9 +810,7 @@ def test_missing_anatomy_keeps_identical_nullable_parquet_schemas(
             check_metadata=True,
         )
     assert schemas["missing"]["vertebrae"].field("territory_bin").type == pa.int64()
-    assert schemas["missing"]["slices"].field(
-        "assigned_vertebral_level"
-    ).type == pa.string()
+    assert schemas["missing"]["slices"].field("assigned_vertebral_level").type == pa.string()
     assert "sm_volume_cm3" not in missing.vertebrae
     assert "sm_mean_csa_cm2" in missing.vertebrae
 
@@ -630,9 +835,7 @@ def test_range_api_reuses_the_analysis_coverage_tolerance(base_config, tmp_path)
         "territory_superior_mm",
     ] = acquisition_upper
     bundle = replace(bundle, slices=slices, vertebrae=vertebrae)
-    action = ExportMeasurementBundle(
-        SimpleNamespace(config=config, timestamp=123, device="cpu")
-    )
+    action = ExportMeasurementBundle(SimpleNamespace(config=config, timestamp=123, device="cpu"))
     action(
         {
             "id": "case-001",
@@ -726,9 +929,7 @@ def test_measurement_analysis_identity_is_order_stable_and_content_sensitive(bas
         ),
         replace(
             vertebral_result,
-            vertebral_body_labels=np.asfortranarray(
-                vertebral_result.vertebral_body_labels
-            ),
+            vertebral_body_labels=np.asfortranarray(vertebral_result.vertebral_body_labels),
         ),
         {"alpha": 1, "beta": 2},
     )
@@ -819,18 +1020,16 @@ def test_measurement_identity_configuration_excludes_output_and_review_policy(ba
     output_only["enabled"] = not output_only["enabled"]
     output_only["review"]["enabled"] = not output_only["review"]["enabled"]
     output_only["export"]["parquet"] = not output_only["export"]["parquet"]
-    output_only["body_surface"]["save_mask"] = not output_only["body_surface"][
-        "save_mask"
-    ]
+    output_only["body_surface"]["save_mask"] = not output_only["body_surface"]["save_mask"]
 
-    assert _scientific_measurement_configuration(
-        settings
-    ) == _scientific_measurement_configuration(output_only)
+    assert _scientific_measurement_configuration(settings) == _scientific_measurement_configuration(
+        output_only
+    )
 
     output_only["body_surface"]["smoothing_sigma_mm"] += 1
-    assert _scientific_measurement_configuration(
-        settings
-    ) != _scientific_measurement_configuration(output_only)
+    assert _scientific_measurement_configuration(settings) != _scientific_measurement_configuration(
+        output_only
+    )
 
 
 def test_canonical_pipeline_uses_full_prepared_domain_and_body_label_source(pipeline_stub):
@@ -948,9 +1147,7 @@ def test_measurement_support_verifies_asset_before_predictor_initialization(
     events = []
     report = object()
     predictor = object()
-    pipeline_stub.prepare_exclusive_model = lambda action: events.append(
-        ("exclusive", action.task)
-    )
+    pipeline_stub.prepare_exclusive_model = lambda action: events.append(("exclusive", action.task))
     monkeypatch.setattr(
         "BodyComposition.actions.segm_totalsegmentator.require_measurement_model",
         lambda task, root: events.append(("verify", task, Path(root))) or report,
@@ -980,9 +1177,7 @@ def test_default_model_sync_omits_optional_body_model_but_keeps_landmarks():
 
 
 def test_configured_model_sync_respects_optional_measurement_support():
-    config = PipelineConfig.model_validate(
-        {"measurements": {"landmarks": {"enabled": False}}}
-    )
+    config = PipelineConfig.model_validate({"measurements": {"landmarks": {"enabled": False}}})
     models = required_model_ids(config)
     assert "totalsegmentator_body_task299_v1" not in models
     assert "totalsegmentator_total_task297_landmarks_v1" not in models

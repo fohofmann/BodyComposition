@@ -74,30 +74,39 @@ def _region_and_number(label: str) -> tuple[str, int]:
 
 
 def vertebral_color(anatomical_label: str) -> tuple[int, int, int]:
-    """Stable region-family palette with label/boundary redundancy."""
+    """Stable modern region-family palette with label/boundary redundancy."""
 
     region, number = _region_and_number(anatomical_label)
     base = {
-        "C": (0.57, 0.68, 0.50),
-        "T": (0.47, 0.60, 0.43),
-        "L": (0.08, 0.78, 0.52),
-        "S": (0.79, 0.48, 0.52),
-        "U": (0.0, 0.0, 0.55),
+        "C": (0.50, 0.40, 0.52),
+        "T": (0.58, 0.48, 0.54),
+        "L": (0.73, 0.38, 0.58),
+        "S": (0.96, 0.42, 0.56),
+        "U": (0.60, 0.15, 0.55),
     }[region]
     hue, saturation, lightness = base
-    lightness = float(np.clip(lightness + ((number - 1) % 5 - 2) * 0.045, 0.34, 0.74))
+    lightness = float(np.clip(lightness + ((number - 1) % 5 - 2) * 0.035, 0.36, 0.72))
     red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
     return tuple(int(round(channel * 255)) for channel in (red, green, blue))
 
 
 def tissue_color(name: str) -> tuple[int, int, int]:
+    """Warm scientific palette shared by plots, legends, and axial overlays."""
+
     return {
-        "sm": (0, 114, 178),
-        "sat": (240, 228, 66),
-        "avat": (213, 94, 0),
-        "tvat": (0, 158, 115),
-        "vat": (213, 94, 0),
+        "sm": (142, 47, 62),
+        "sat": (242, 213, 122),
+        "avat": (215, 154, 59),
+        "tvat": (155, 122, 46),
+        "vat": (215, 154, 59),
     }[name]
+
+
+def display_vertebral_level(anatomical_label: str) -> str:
+    """Return the compact reader-facing label without changing canonical anatomy."""
+
+    normalized = str(anatomical_label).upper().replace(" ", "")
+    return "S" if normalized == "SACRUM" else str(anatomical_label)
 
 
 def _physical_cell_bounds(geometry: ImageGeometry) -> tuple[np.ndarray, np.ndarray]:
