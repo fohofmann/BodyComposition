@@ -47,11 +47,12 @@ the authoritative reference.
 
 | Section | Purpose | Released choices |
 | --- | --- | --- |
+| `analysis.scope` | tissue-analysis extent | `full_ct`, `l3_vertebral_level` |
 | `orientation` | anatomy-based integrity check and safe lossless repair | `ctdeeprot_2d_v1`, policy `check_and_safe_repair` |
 | `vertebrae.backend` | vertebral-body segmentation and native labeling | `spineps_veridah_ct_v1`, `vertebral_bodies_resenc_l`, `vertebral_bodies_resenc_m` |
 | `tissue.backend` | anatomical body-composition compartments | `bodycomposition_resenc_l_v1`, `bodycomposition_resenc_m_v1` |
 | `body_surface.backend` | measurement support for trunk/body envelope | `tissue_segmentation_envelope_v1`, `totalsegmentator_body_task299_v1`, `deterministic_body_mask_v1` |
-| `measurements` | tissue definitions, physical territories, fixed-mm and native-tissue HU signature components, landmarks, QC | canonical schema 3.2 |
+| `measurements` | HU-filtered tissue definitions, physical territories, fixed-mm and native-compartment HU signature components, landmarks, QC | canonical schema 3.4 |
 | `reporting` | derived one-page PDF | disabled by default; enabled default `spine_profile_v2`; optional `spine_overview_v1` |
 
 No backend silently falls back to another. Changing a backend or a scientific
@@ -92,8 +93,10 @@ fields.
 
 `runtime.cpu_threads` is an upper bound; zero uses the process CPU affinity.
 `runtime.max_workers` is fixed to one. To use multiple GPUs or processes, start
-the same batch command multiple times against the same shared output. Each
-process claims whole cases and owns one externally assigned accelerator.
+the same batch command multiple times against the same shared output. Scheduler
+workers should add `--worker` so surplus processes release their allocation
+when only live claims remain. Each process claims whole cases and owns one
+externally assigned accelerator.
 
 `runtime.timeout_seconds` is the pipeline-execution budget, starting when the
 model stages begin and checked between those stages. Preflight and DICOM
@@ -106,12 +109,23 @@ With fail-fast enabled, unstarted cases receive explicit cancelled manifests.
 available. `runtime.allow_dirty=false` blocks cohort execution from an
 uncommitted source tree. Set it only for clearly recorded development runs;
 dirty runs cannot pass the release gate.
+`runtime.unload_models_between_stages=true` keeps only the currently executing
+model bundle resident. The `--low-resource` shortcut enables it together with
+the L3 analysis scope and both ResEncM backends.
 
 Output toggles control persisted derivatives, not scientific inference. The
 run stores the queue-compatible configuration projection; each case manifest
 stores the complete redacted configuration of the worker that produced it.
 Reporting requires `output.save_tissue_labels=true` because the axial overlay
 must remain reproducible from the immutable case bundle.
+
+`output.save_csv_tables=true` writes deterministic CSV mirrors beside all five
+canonical case-level Parquet tables and beside the three batch aggregate
+tables. Parquet is always retained and remains authoritative.
+`bodycomposition analyze --no-csv` and `bodycomposition batch --no-csv` are
+shortcuts for setting this value to `false`; they do not change the scientific
+measurement identity. The output choice remains part of the shared run
+configuration so workers cannot produce different artifact sets in one run.
 
 ## Environment variables
 

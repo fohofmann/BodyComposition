@@ -13,9 +13,11 @@ bodycomposition results review-queue output/runs/<run-id> --json
 ```
 
 Then open the linked case manifest and canonical artifacts. If PDF reporting is
-enabled, affected cases have a warning annotation on their individual page and
-the combined PDF begins with a manual-review summary when any case is flagged.
-The PDF is a convenience view; JSON, NIfTI, and Parquet remain authoritative.
+enabled, affected cases retain plain-language Notes on their individual page.
+The combined PDF always begins with a run-summary cover; its review count and
+issue totals summarize the current completed-case snapshot without adjudicating
+the findings. The PDF is a convenience view; JSON, NIfTI, and Parquet remain
+authoritative.
 
 ## Orientation states
 

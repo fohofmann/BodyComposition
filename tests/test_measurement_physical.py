@@ -260,7 +260,7 @@ def test_oblique_anisotropic_elliptical_solid_matches_voxel_volume_reference():
     )
     voxel_count_per_slice = int(np.count_nonzero(ellipse_yx))
     expected_area_cm2 = voxel_count_per_slice * geometry.in_plane_area_mm2 / 100.0
-    assert table["sm_area_cm2"].to_numpy() == pytest.approx(
+    assert table["sm_compartment_area_cm2"].to_numpy() == pytest.approx(
         np.full(shape[0], expected_area_cm2),
         rel=1e-12,
     )
@@ -272,13 +272,13 @@ def test_oblique_anisotropic_elliptical_solid_matches_voxel_volume_reference():
     )
     expected_volume_cm3 = int(np.count_nonzero(labels)) * geometry.voxel_volume_mm3 / 1000.0
     assert aggregate["range_valid"]
-    assert aggregate["sm_volume_cm3"] == pytest.approx(
+    assert aggregate["sm_compartment_volume_cm3"] == pytest.approx(
         expected_volume_cm3,
         rel=1e-12,
     )
 
 
-def test_slice_measurements_are_concise_and_preserve_native_and_total_vat_areas():
+def test_slice_measurements_are_concise_and_preserve_native_and_vat_compartment_union_areas():
     shape = (2, 12, 14)
     geometry = make_geometry(shape, spacing_xyz=(1.0, 1.0, 2.0))
     image = np.zeros(shape, dtype=np.int16)
@@ -319,21 +319,21 @@ def test_slice_measurements_are_concise_and_preserve_native_and_total_vat_areas(
     )
 
     first = table.iloc[0]
-    assert first["sm_voxel_count"] == 8
-    assert first["total_segmented_tissue_voxel_count"] == 24
-    assert first["total_segmented_tissue_area_cm2"] == pytest.approx(0.24)
-    assert first["total_vat_voxel_count"] == 8
-    assert first["total_vat_area_cm2"] == pytest.approx(
-        first["avat_area_cm2"] + first["tvat_area_cm2"]
+    assert first["sm_compartment_voxel_count"] == 8
+    assert first["total_segmented_compartment_voxel_count"] == 24
+    assert first["total_segmented_compartment_area_cm2"] == pytest.approx(0.24)
+    assert first["vat_compartment_union_voxel_count"] == 8
+    assert first["vat_compartment_union_area_cm2"] == pytest.approx(
+        first["avat_compartment_area_cm2"] + first["tvat_compartment_area_cm2"]
     )
-    assert first["total_vat_source"] == "avat_plus_tvat"
-    assert first["sm_mean_hu"] == pytest.approx(40.0)
+    assert first["vat_compartment_union_source"] == "avat_plus_tvat"
+    assert first["sm_compartment_mean_hu"] == pytest.approx(40.0)
     assert "sm_fraction_body_area" not in table
     assert "body_outer_perimeter_cm" not in table
     second = table.iloc[1]
-    assert not second["sm_area_valid"]
-    assert second["sm_area_reason"] == "invalid_measurement"
-    assert second["tissue_outside_body_voxel_count"] == 1
+    assert not second["sm_compartment_area_valid"]
+    assert second["sm_compartment_area_reason"] == "invalid_measurement"
+    assert second["compartment_outside_body_voxel_count"] == 1
     assert not second["slice_measurement_valid"]
 
 
@@ -391,13 +391,13 @@ def test_exact_range_overlap_weights_area_volume_and_hu_with_variable_thickness(
             "slice_slab_superior_mm": [2.0, 5.0, 9.0],
             "slice_thickness_normal_mm": [2.0, 3.0, 4.0],
             "normal_mm_per_superior_mm": [1.0, 1.0, 1.0],
-            "sm_area_cm2": [10.0, 20.0, 30.0],
+            "sm_compartment_area_cm2": [10.0, 20.0, 30.0],
             "sm_body_compartment_area_cm2": [10.0, 20.0, 30.0],
             "sm_trunk_compartment_area_cm2": [10.0, 20.0, 30.0],
             "body_area_cm2": [100.0, 100.0, 100.0],
             "trunk_area_cm2": [80.0, 80.0, 80.0],
-            "sm_voxel_count": [2, 4, 8],
-            "sm_mean_hu": [10.0, 20.0, 40.0],
+            "sm_compartment_voxel_count": [2, 4, 8],
+            "sm_compartment_mean_hu": [10.0, 20.0, 40.0],
         }
     )
 
@@ -405,20 +405,22 @@ def test_exact_range_overlap_weights_area_volume_and_hu_with_variable_thickness(
 
     assert result["range_valid"]
     assert result["coverage_fraction"] == pytest.approx(1.0)
-    assert result["sm_mean_csa_cm2"] == pytest.approx((10 * 1 + 20 * 3 + 30 * 2) / 6)
-    assert result["sm_volume_cm3"] == pytest.approx((10 * 1 + 20 * 3 + 30 * 2) / 10)
-    assert result["sm_mean_hu"] == pytest.approx((10 * 1 + 20 * 4 + 40 * 4) / 9)
+    assert result["sm_compartment_mean_csa_cm2"] == pytest.approx((10 * 1 + 20 * 3 + 30 * 2) / 6)
+    assert result["sm_compartment_volume_cm3"] == pytest.approx(
+        (10 * 1 + 20 * 3 + 30 * 2) / 10
+    )
+    assert result["sm_compartment_mean_hu"] == pytest.approx((10 * 1 + 20 * 4 + 40 * 4) / 9)
     assert result["contributing_slice_ids"] == [0, 1, 2]
 
     strict = aggregate_physical_range(slices, 0.0, 10.0)
     partial = aggregate_physical_range(slices, 0.0, 10.0, allow_partial=True)
     assert not strict["range_valid"]
     assert strict["range_missing_reason"] == "partial_fov"
-    assert np.isnan(strict["sm_volume_cm3"])
-    assert strict["sm_volume_cm3_reason"] == "partial_fov"
+    assert np.isnan(strict["sm_compartment_volume_cm3"])
+    assert strict["sm_compartment_volume_cm3_reason"] == "partial_fov"
     assert partial["range_valid"]
     assert partial["coverage_fraction"] == pytest.approx(0.9)
-    assert partial["sm_volume_cm3"] == pytest.approx(20.0)
+    assert partial["sm_compartment_volume_cm3"] == pytest.approx(20.0)
 
 
 def test_range_aggregation_honors_metric_specific_surface_and_tissue_validity():
@@ -433,17 +435,17 @@ def test_range_aggregation_honors_metric_specific_surface_and_tissue_validity():
             "body_area_valid": [True, False],
             "trunk_area_cm2": [80.0, 70.0],
             "trunk_area_valid": [True, False],
-            "sm_area_cm2": [10.0, 20.0],
-            "sm_area_valid": [True, True],
+            "sm_compartment_area_cm2": [10.0, 20.0],
+            "sm_compartment_area_valid": [True, True],
             "sm_body_compartment_area_cm2": [10.0, 20.0],
             "sm_trunk_compartment_area_cm2": [10.0, 20.0],
             "body_outer_perimeter_cm": [120.0, 115.0],
             "body_contour_valid": [True, False],
             "trunk_circumference_cm": [90.0, 85.0],
             "trunk_contour_valid": [True, False],
-            "sm_voxel_count": [10, 20],
-            "sm_mean_hu": [30.0, 40.0],
-            "sm_hu_valid": [True, True],
+            "sm_compartment_voxel_count": [10, 20],
+            "sm_compartment_mean_hu": [30.0, 40.0],
+            "sm_compartment_hu_valid": [True, True],
         }
     )
 
@@ -451,8 +453,8 @@ def test_range_aggregation_honors_metric_specific_surface_and_tissue_validity():
     partial = aggregate_physical_range(slices, 0.0, 4.0, allow_partial=True)
 
     assert strict["range_valid"]
-    assert strict["sm_mean_csa_cm2"] == pytest.approx(15.0)
-    assert strict["sm_mean_hu"] == pytest.approx((30 * 10 + 40 * 20) / 30)
+    assert strict["sm_compartment_mean_csa_cm2"] == pytest.approx(15.0)
+    assert strict["sm_compartment_mean_hu"] == pytest.approx((30 * 10 + 40 * 20) / 30)
     assert not strict["body_mean_csa_cm2_valid"]
     assert not strict["trunk_mean_circumference_cm_valid"]
     assert np.isnan(strict["trunk_mean_circumference_cm"])
@@ -494,14 +496,14 @@ def test_strict_pooled_hu_rejects_invalid_nonempty_slices_but_not_empty_tissue()
         "slice_slab_superior_mm": [2.0, 4.0],
         "slice_thickness_normal_mm": [2.0, 2.0],
         "normal_mm_per_superior_mm": [1.0, 1.0],
-        "sm_area_cm2": [10.0, 20.0],
+        "sm_compartment_area_cm2": [10.0, 20.0],
     }
     invalid_nonempty = pd.DataFrame(
         {
             **base,
-            "sm_voxel_count": [10, 20],
-            "sm_mean_hu": [30.0, 40.0],
-            "sm_hu_valid": [True, False],
+            "sm_compartment_voxel_count": [10, 20],
+            "sm_compartment_mean_hu": [30.0, 40.0],
+            "sm_compartment_hu_valid": [True, False],
         }
     )
 
@@ -513,22 +515,22 @@ def test_strict_pooled_hu_rejects_invalid_nonempty_slices_but_not_empty_tissue()
         allow_partial=True,
     )
 
-    assert not strict["sm_mean_hu_valid"]
-    assert strict["sm_mean_hu_reason"] == "invalid_measurement"
-    assert np.isnan(strict["sm_mean_hu"])
-    assert partial["sm_mean_hu_valid"]
-    assert partial["sm_mean_hu"] == pytest.approx(30.0)
-    assert partial["sm_mean_hu_coverage_fraction"] == pytest.approx(0.5)
+    assert not strict["sm_compartment_mean_hu_valid"]
+    assert strict["sm_compartment_mean_hu_reason"] == "invalid_measurement"
+    assert np.isnan(strict["sm_compartment_mean_hu"])
+    assert partial["sm_compartment_mean_hu_valid"]
+    assert partial["sm_compartment_mean_hu"] == pytest.approx(30.0)
+    assert partial["sm_compartment_mean_hu_coverage_fraction"] == pytest.approx(0.5)
 
     empty_second_slice = invalid_nonempty.copy()
-    empty_second_slice.loc[1, "sm_voxel_count"] = 0
-    empty_second_slice.loc[1, "sm_mean_hu"] = np.nan
-    empty_second_slice.loc[1, "sm_hu_valid"] = False
+    empty_second_slice.loc[1, "sm_compartment_voxel_count"] = 0
+    empty_second_slice.loc[1, "sm_compartment_mean_hu"] = np.nan
+    empty_second_slice.loc[1, "sm_compartment_hu_valid"] = False
     pooled = aggregate_physical_range(empty_second_slice, 0.0, 4.0)
 
-    assert pooled["sm_mean_hu_valid"]
-    assert pooled["sm_mean_hu"] == pytest.approx(30.0)
-    assert pooled["sm_mean_hu_coverage_fraction"] == pytest.approx(0.5)
+    assert pooled["sm_compartment_mean_hu_valid"]
+    assert pooled["sm_compartment_mean_hu"] == pytest.approx(30.0)
+    assert pooled["sm_compartment_mean_hu_coverage_fraction"] == pytest.approx(0.5)
 
 
 def test_fragmented_trunk_is_observed_but_ineligible_for_canonical_summaries():

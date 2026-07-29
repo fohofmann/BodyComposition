@@ -93,7 +93,9 @@ def image_summary(
         "input_format": "nifti",
         "geometry": geometry_summary,
     }
-    return image, summary
+    from BodyComposition.dicom import enrich_nifti_summary_from_conversion_metadata
+
+    return image, enrich_nifti_summary_from_conversion_metadata(source, summary)
 
 
 def _run_git(root: Path, *arguments: str) -> bytes | None:

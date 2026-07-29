@@ -22,7 +22,7 @@ reports/report_manifest.json
 ```
 
 within its immutable case bundle. A multi-case batch with `combined_pdf=true`
-collates the current run order to:
+maintains the current run order at:
 
 ```text
 aggregate/reports/<run-id>/case_reports.pdf
@@ -30,9 +30,67 @@ aggregate/reports/<run-id>/report_manifest.json
 ```
 
 “Current run” means the explicit immutable batch manifest, never directory
-discovery. Individual pages are retained. If collation fails, the run manifest
-records the reporting failure and the scientifically complete case bundles
-remain authoritative.
+discovery. The combined document always starts with one A4-landscape run cover,
+followed directly by all currently finished individual case pages in immutable
+manifest order. The cover summarizes planned and included case counts, mean
+finished-case runtime, the complete run's start, finish, and elapsed wall time,
+pipeline and model identifiers, runtime context, execution and case-level
+quality-control issue counts, and privacy-safe input/output directory labels.
+In-progress covers explicitly
+show that the finish time and duration remain in progress. The
+cover does not print case/failure folder templates, combined-PDF paths, or
+ordering implementation details; those remain in the manifest. Internal
+worker execution strategy is likewise audit-only. Instead of printing an
+opaque configuration digest, the cover uses a compact key/value table for a
+curated subset of active settings. A row is eligible only when the setting is
+user-configurable and either changes scientific results or is important for
+reproducibility. The cover therefore includes analysis scope; orientation
+policy and decision thresholds; primary prediction models; body-surface
+derivation and cleanup; measurement coverage and vertebral cleanup; separate
+SM and AT filters; and deterministic execution. It intentionally excludes
+display-only settings such as overlay, projection, layout, and numeric
+formatting; throughput controls such as device, batch size, workers, and
+timeout; output/persistence switches; and routine QC-only thresholds.
+The complete digest and normalized configuration remain in the manifest and
+`normalized_config.yaml` for exhaustive reproducibility. The raw derived
+body-surface backend identifier and optional rib/iliac landmark backend remain
+recorded but are not printed; the actual body-surface parameters are printed
+instead. Reader-facing model and configuration rows follow execution order.
+The cover body uses three
+vertical zones: pipeline/configuration on the left; compact runtime, directory,
+and progress sections in the middle; and a full-height Issues column on the
+right. The Issues column combines execution failures with case-level
+quality-control findings. Each finding is reported as affected cases and the
+percentage of included cases; the column header states the total included
+denominator as `N`. Finding types may overlap within one case.
+Routine cranial or caudal vertebral contact with the field-of-view boundary is
+not printed there, but remains available in the canonical review records.
+
+After every terminal case, the service rebuilds the combined document in a
+temporary file and validates the PDF together with its audit manifest. The
+pair is then installed in an immutable hidden version directory and a single
+relative `.current` symlink is replaced atomically. The two stable public names
+resolve through that pointer:
+
+```text
+case_reports.pdf      -> .current/case_reports.pdf
+report_manifest.json  -> .current/report_manifest.json
+.current              -> .snapshots/<report-id>
+```
+
+The active snapshot and one rollback generation are retained. Existing
+pre-snapshot direct files are validated and migrated automatically on the next
+refresh. A stopped worker therefore leaves the prior complete pair in place;
+it cannot expose a newly rendered PDF with an older manifest. Programmatic
+readers that require a transactionally fixed pair should resolve `.current`
+once, read both immutable files from that selected directory, and verify the
+manifest digest. The stable aliases remain convenient for normal PDF readers.
+Restarting the same immutable run discovers terminal case manifests and
+refreshes the document before continuing. The cover is marked `IN PROGRESS`
+until every planned case has a terminal result. Individual pages are always
+retained. If collation fails, the run manifest records the reporting failure
+and keeps links to any previously validated combined snapshot; the
+scientifically complete case bundles remain authoritative.
 
 ## Layouts
 
@@ -41,7 +99,7 @@ physical-space sagittal thick-slab CT projection with color-coded and
 text-labeled vertebral-body instances. The displayed sagittal field of view is
 cropped to the vertebral-body mask with fixed physical margins so the spine is
 legible without changing its geometry. It is followed from left to right by the
-vertebral summary table and an axial tissue-segmentation view at L3 (or an
+vertebral summary table and an axial filtered-tissue view at L3 (or an
 explicitly labeled nearest-level fallback). Compact technical-metadata and
 case identity share one compact header; a full-width Notes region completes the
 page. The rightmost column is an aligned stack containing the axial
@@ -51,15 +109,17 @@ The header and Notes region plus the right-column sections use a common 10-point
 content inset and 18-point title baseline offset. The analytical body uses an open
 editorial grid: aligned headings, whitespace, and 0.6-point neutral rules
 separate the panels without repeated rounded dashboard cards. The header and
-Notes region have no outer border; Notes retains its internal title rule and
-column separators. Notes is a flat bullet register without subheadings. Every
+Notes region have no outer border; Notes uses whitespace below its title and
+retains only the column separators. Notes is a flat bullet register without
+subheadings. Every
 printable plain-language observation is retained and balanced across three
 columns, or four when the three-column layout cannot fit. A register beyond
 that audited capacity fails rather than being truncated or summarized.
 
 `spine_profile_v2` is the default when reporting is enabled. It retains the
-sagittal and axial views and adds an unsmoothed stacked tissue-area profile
-plus four voxel-level tissue-HU distributions. The area profile is aligned to
+sagittal and axial views and adds an unsmoothed `Tissue area` profile plus four
+voxel-level native-compartment HU histograms under `HU distribution`. The area
+profile is aligned to
 the sagittal view's physical superior-coordinate axis and
 stacks conventional skeletal-muscle tissue, SAT, aVAT, and tVAT; trunk area is
 an unfilled reference curve. Sections with a strictly valid trunk-area
@@ -69,17 +129,24 @@ underestimation. Missing or otherwise invalid observations remain genuine gaps
 and are never interpolated. The HU panel uses the unfiltered model-native
 SM, SAT, aVAT, and tVAT compartments with the unchanged prepared CT values;
 the configured HU-restricted downstream masks do not determine histogram
-membership. It shows a fixed histogram resolution over -190 to 150 HU, exact
+membership. The `HU distribution` detail line therefore uses the standard
+funnel and `HU filter inactive`. It shows a fixed histogram resolution over
+-190 to 150 HU, exact
 voxel-level median and interquartile range, and one peak-normalized distribution
-shape per tissue over the complete analyzed volume. Exact median and IQR values
+shape per compartment over the complete analyzed volume. Exact median and IQR values
 remain in the row summary, while only the median is drawn as a reference line;
-there is no shaded IQR/background band. The normalization makes
-shape legible but deliberately does not encode cross-tissue voxel-count
-magnitude; exact counts and any clipped values remain in
-`hu_distributions.parquet` and the report audit. A star on a tissue summary
-and the axis note identify mass outside the fixed display range. Its fixed left-to-right order
-is sagittal spine, tissue-area profile, tissue-HU distributions, vertebral
-summary, and axial example. The table
+there is no shaded IQR/background band and no vertical threshold guide. The
+fixed -30 HU tick and the filter definition above the tissue-area profile carry
+the relevant threshold context without adding an ambiguous grey region. The normalization makes
+shape legible but deliberately does not encode cross-compartment voxel-count
+magnitude. The peak normalization is audit-only and has no separate printed
+caption. Exact counts and any clipped values remain in
+`hu_distributions.parquet` and the report audit. Values outside the fixed
+display range remain in that audit but do not add a star or axis annotation to
+the printed panel. Its fixed left-to-right order is sagittal spine, tissue-area
+profile, HU distribution, measurements, and axial example. The `Measurements`
+panel prints the active HU ranges on its first detail line and identifies the
+whole-level mean on the second. The table
 uses a regular categorical grid with equal-height rows because anatomical
 position is already shown by the labeled spine and must not make the numerical
 table irregular.
@@ -92,22 +159,36 @@ boundaries provide a non-color distinction.
 
 The default one-page table does not duplicate the HU-distribution channels as
 attenuation columns. It contains whole-territory SM, VAT, and SAT areas plus
-trunk circumference; exact per-tissue slice attenuation remains in
+trunk circumference; exact per-channel slice attenuation remains in
 `slices.parquet`, while voxel distributions are in
 `hu_distributions.parquet`. Tissue abbreviations are rendered consistently as `SM`,
-`SAT`, `aVAT`, and `tVAT`; the table's `VAT` column is the explicit total of
-the two visceral compartments.
+`SAT`, `aVAT`, and `tVAT`; the table's `VAT` column is the explicit union of
+the filtered aVAT and tVAT tissue views.
+
+HU-filter state uses one shared visual convention: a plain funnel followed by
+an explicit text state. Active measurements show the exact ranges
+(`SM -29..150 | AT -190..-30 HU`), where `AT` means adipose tissue. Inactive
+measurements show `HU filter inactive`; the icon is not struck through. The
+default tissue-area profile and measurements table use the active ranges; the
+native-compartment HU panel is explicitly inactive. If a custom measurements
+table contains only unfiltered compartment metrics, the heading remains
+`Measurements` and the inactive caption is used. Mixed custom tables retain the
+applied ranges and are marked `mixed`.
 
 The sagittal localization view adds directly labeled horizontal markers at the
-physical positions used for `Waist min` and `Pelvic max`. Waist min uses a
-solid line and pelvic max a dashed line, with a white keyline so both remain
-visible over the CT. The key-anthropometry section uses the same nomenclature.
-Its footnote defines `*` as unavailable or not fully eligible; the HU panel
-separately defines its own star as attenuation mass outside the displayed
-histogram range. Vertebral level names are compact translucent badges centered
-on their vertebral centroids. They use collision-only vertical separation and
-no leader lines, reducing clutter while preserving an immediate label-to-body
-relationship.
+physical positions used for `Waist min` and `Pelvic max`. Both use the same
+solid, white-keylined rule and the same left-aligned label treatment. Labels
+sit fully below the rule, with an above-rule fallback only at an image edge.
+The key-anthropometry section uses the same nomenclature.
+Its footnote defines `*` as an incomplete anatomical range or a contour that
+reaches the field-of-view edge. Vertebral level
+names are compact translucent white badges centered on their vertebral
+centroids. They use collision-only vertical separation and no leader lines,
+reducing clutter while preserving an immediate label-to-body relationship.
+The sagittal projection method and the sagittal and axial CT windows remain in
+the report manifest's display audit for reproducibility, but are not printed in
+the reader-facing panels. Area units use the compact baseline notation `cm2` to
+avoid disrupting the fixed one-page layout.
 
 Both layouts:
 
@@ -137,8 +218,8 @@ document. `SACRUM` remains the canonical machine-readable anatomy but is
 displayed as `S` in the spine view and vertebral table. The deterministic
 report ID remains in the manifest for exact-content linking and collation but
 is not printed because its short form is not useful reader-facing information.
-The unboxed Notes region retains only its internal title rule and column
-separators.
+The unboxed Notes region uses whitespace below its title and retains only its
+column separators.
 The analysis date, input format and complete voxel size, pipeline version,
 runtime, scanner, and model identifiers are consolidated in the right-column
 technical-context section. The complete voxel size and measured slice-normal
@@ -163,7 +244,7 @@ level is inferred silently.
 Technical metadata is deliberately allowlisted. It may include the analysis
 date, input format, package/pipeline version, runtime backend and hardware,
 scanner manufacturer/model, voxel spacing, slice thickness, and orientation,
-vertebral, and tissue model identifiers. The displayed date is the analysis
+vertebral, and compartment-model identifiers. The displayed date is the analysis
 timestamp. The separate header scan date prefers the DICOM acquisition date,
 then series, study, or content date. Public demonstration
 cases may also carry an allowlisted data-attribution note. These fields are
@@ -181,7 +262,7 @@ at 8-point type with at least 11 points of row height. The manifest records the
 actual row count, row height, and calculated capacity. An input beyond the
 audited capacity fails instead of producing a clipped table.
 
-## Manual-review summary
+## Run cover and review summary
 
 Canonical orientation, vertebral, measurement, pipeline, and reporting flags
 are copied without adjudication. A repaired orientation states that the CT was
@@ -194,15 +275,13 @@ independently actionable. They remain unchanged in the report manifest and
 canonical quality-control record. Boundary findings that can invalidate a
 measurement, such as a trunk contour reaching the image edge, remain visible.
 
-For `N` cases, the combined PDF has:
-
-- exactly `N` pages when no case is flagged; or
-- exactly `N + 1` pages when any case is flagged, with the manual-review
-  summary first and case bookmarks/page numbers shifted accordingly.
-
-The summary is limited to 24 affected cases. A larger flagged export fails
-atomically and must be split; cases are never silently omitted.
-Every combined page is stamped `Page x of y` after collation.
+For `N` currently included cases, the combined PDF always has exactly `N + 1`
+pages: one run cover followed by the ordered case pages. Review findings are
+represented by the review-case count on the cover and retained in full,
+including per-code counts, in the combined report manifest. Large flagged
+cohorts therefore do not require a separate review-index page or split solely
+because of cover-page capacity. Every combined page is stamped `Page x of y`
+for the current validated snapshot.
 
 ## Failure pages
 

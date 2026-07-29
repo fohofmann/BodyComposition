@@ -38,14 +38,14 @@
       "uniqueItems": true,
       "items": {
         "enum": [
-          "sm_mean_csa_cm2",
-          "sm_mean_hu",
+          "sm_compartment_mean_csa_cm2",
+          "sm_compartment_mean_hu",
           "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
           "skeletal_muscle_tissue_hu_m29_150_mean_hu",
-          "vat_total_hu_m190_m30_mean_csa_cm2",
-          "sat_total_hu_m190_m30_mean_csa_cm2",
-          "total_vat_mean_csa_cm2",
-          "sat_mean_csa_cm2",
+          "vat_tissue_hu_m190_m30_mean_csa_cm2",
+          "sat_tissue_hu_m190_m30_mean_csa_cm2",
+          "vat_compartment_union_mean_csa_cm2",
+          "sat_compartment_mean_csa_cm2",
           "trunk_mean_circumference_cm"
         ]
       }

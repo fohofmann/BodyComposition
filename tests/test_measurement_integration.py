@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 import SimpleITK as sitk
 
+import BodyComposition.service as service_module
 from BodyComposition.actions.measurement import (
     CreateBodySurface,
     ExportMeasurementBundle,
@@ -164,13 +165,13 @@ def test_complete_bundle_validates_three_native_territory_bins(base_config):
         "signature",
         "hu_distributions",
     }
-    assert bundle.hu_distributions["tissue_key"].drop_duplicates().tolist() == [
+    assert bundle.hu_distributions["compartment_key"].drop_duplicates().tolist() == [
         "sm",
         "sat",
         "avat",
         "tvat",
     ]
-    assert bundle.hu_distributions.groupby("tissue_key").size().eq(68).all()
+    assert bundle.hu_distributions.groupby("compartment_key").size().eq(68).all()
     assert bundle.hu_distributions["distribution_scope"].eq("analyzed_volume").all()
 
 
@@ -186,6 +187,16 @@ def test_hu_distributions_use_native_compartments_not_filtered_masks(base_config
     image[native_sm_voxels[2]] = 160
     for voxel in native_sm_voxels:
         filtered_labels[voxel] = 0
+    adipose_outside_window = {
+        "sat": ((0, 9, 6), (0, 9, 7)),
+        "avat": ((0, 11, 7), (0, 11, 8)),
+        "tvat": ((0, 13, 8), (0, 13, 9)),
+    }
+    for voxels in adipose_outside_window.values():
+        image[voxels[0]] = -191
+        image[voxels[1]] = -29
+        for voxel in voxels:
+            filtered_labels[voxel] = 0
 
     bundle = build_measurement_bundle(
         image_zyx=image,
@@ -203,7 +214,7 @@ def test_hu_distributions_use_native_compartments_not_filtered_masks(base_config
         settings=base_config["measurements"],
     )
 
-    sm = bundle.hu_distributions.loc[bundle.hu_distributions["tissue_key"].eq("sm")]
+    sm = bundle.hu_distributions.loc[bundle.hu_distributions["compartment_key"].eq("sm")]
     native_count = int(np.count_nonzero(compartments == 1))
     filtered_count = int(np.count_nonzero(filtered_labels == 1))
     assert native_count == filtered_count + len(native_sm_voxels)
@@ -217,6 +228,21 @@ def test_hu_distributions_use_native_compartments_not_filtered_masks(base_config
     assert sm["in_histogram_voxel_count"].eq(native_count - 2).all()
     assert sm["mean_hu"].eq(float(np.mean(image[compartments == 1]))).all()
     assert sm["total_volume_cm3"].eq(native_count * geometry.voxel_volume_mm3 / 1000.0).all()
+    assert bundle.slices["sm_compartment_voxel_count"].sum() == native_count
+    assert (
+        bundle.slices["skeletal_muscle_tissue_hu_m29_150_voxel_count"].sum()
+        == filtered_count
+    )
+    for name, label in (("sat", 3), ("avat", 4), ("tvat", 5)):
+        assert bundle.slices[f"{name}_compartment_voxel_count"].sum() == np.count_nonzero(
+            compartments == label
+        )
+        assert bundle.slices[f"{name}_tissue_hu_m190_m30_voxel_count"].sum() == (
+            np.count_nonzero(filtered_labels == label)
+        )
+    assert bundle.slices["vat_tissue_hu_m190_m30_voxel_count"].sum() == np.count_nonzero(
+        np.isin(filtered_labels, (4, 5))
+    )
 
 
 def test_body_fov_contact_is_distinct_from_trunk_contour_contact(base_config):
@@ -396,7 +422,7 @@ def test_summary_contract_rejects_eligibility_that_contradicts_qc(base_config):
 def test_hu_distribution_contract_rejects_null_native_source_metadata(base_config):
     bundle, *_ = make_bundle(base_config)
     distributions = bundle.hu_distributions.copy()
-    distributions.loc[distributions["tissue_key"].eq("sm"), "source_label_ids"] = pd.NA
+    distributions.loc[distributions["compartment_key"].eq("sm"), "source_label_ids"] = pd.NA
 
     with pytest.raises(ValueError, match="inconsistent metadata"):
         replace(bundle, hu_distributions=distributions)
@@ -409,15 +435,15 @@ def test_slice_table_is_the_longitudinal_csa_and_hu_feature_source(base_config):
     assert np.all(np.diff(slices["position_superior_mm"].to_numpy(dtype=float)) > 0)
     assert slices["assigned_vertebral_level"].notna().any()
     for tissue in (
-        "sm",
-        "sat",
-        "avat",
-        "tvat",
-        "total_vat",
+        "sm_compartment",
+        "sat_compartment",
+        "avat_compartment",
+        "tvat_compartment",
+        "vat_compartment_union",
         "skeletal_muscle_tissue_hu_m29_150",
-        "sat_total_hu_m190_m30",
-        "avat_hu_m190_m30",
-        "tvat_hu_m190_m30",
+        "sat_tissue_hu_m190_m30",
+        "avat_tissue_hu_m190_m30",
+        "tvat_tissue_hu_m190_m30",
     ):
         required = {
             f"{tissue}_area_cm2",
@@ -429,7 +455,7 @@ def test_slice_table_is_the_longitudinal_csa_and_hu_feature_source(base_config):
         }
         assert required.issubset(slices.columns)
 
-    assert slices.loc[slices["sm_hu_valid"], "sm_mean_hu"].notna().all()
+    assert slices.loc[slices["sm_compartment_hu_valid"], "sm_compartment_mean_hu"].notna().all()
 
 
 def test_named_tissue_profile_appends_signature_features_without_changing_core():
@@ -439,10 +465,10 @@ def test_named_tissue_profile_appends_signature_features_without_changing_core()
 
     bundle, *_ = make_bundle(config)
 
-    assert "vat_total_hu_m150_m50_mean_csa_cm2" in bundle.signature
-    assert "vat_total_hu_m150_m50_mean_hu" in bundle.signature
-    assert "vat_total_hu_m150_m50_mean_csa_fraction_of_trunk" in bundle.signature
-    assert "sm_mean_csa_cm2" in bundle.signature
+    assert "vat_tissue_hu_m150_m50_mean_csa_cm2" in bundle.signature
+    assert "vat_tissue_hu_m150_m50_mean_hu" in bundle.signature
+    assert "vat_tissue_hu_m150_m50_mean_csa_fraction_of_trunk" in bundle.signature
+    assert "sm_compartment_mean_csa_cm2" in bundle.signature
     assert "imat_hu_m190_m30_mean_csa_cm2" not in bundle.signature
 
 
@@ -551,6 +577,29 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
     action.validate_outputs(memory)
 
     table_directory = tmp_path / "tables"
+    assert base_config["measurements"]["export"] == {
+        "parquet": True,
+        "csv": True,
+    }
+    for name in TABLE_NAMES:
+        csv_path = table_directory / f"{name}.csv"
+        assert csv_path.is_file()
+        csv_table = pd.read_csv(csv_path)
+        canonical = getattr(bundle, name)
+        assert csv_table.columns.tolist() == canonical.columns.tolist()
+        assert len(csv_table) == len(canonical)
+        if not canonical.empty:
+            assert csv_table["case_id"].eq(bundle.identity.case_id).all()
+            assert csv_table["run_id"].eq(bundle.identity.run_id).all()
+            assert csv_table["analysis_id"].eq(bundle.identity.analysis_id).all()
+    encoded_slice_ids = pd.read_csv(
+        table_directory / "summaries.csv",
+        dtype={"l3_territory_contributing_slice_ids": "string"},
+    )["l3_territory_contributing_slice_ids"].dropna()
+    parsed_slice_ids = [json.loads(value) for value in encoded_slice_ids]
+    assert all(isinstance(value, list) for value in parsed_slice_ids)
+    assert any(parsed_slice_ids)
+
     tables = load_measurement_tables(table_directory)
     assert set(tables) == set(TABLE_NAMES)
     assert len(tables["slices"]) == len(bundle.slices)
@@ -558,7 +607,7 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
         bundle.vertebrae[["vertebral_level", "territory_bin"]].to_numpy().tolist()
     )
     distributions = tables["hu_distributions"]
-    assert distributions.groupby("tissue_key").size().eq(68).all()
+    assert distributions.groupby("compartment_key").size().eq(68).all()
     assert distributions["bin_width_hu"].eq(5.0).all()
     assert distributions["histogram_min_hu"].eq(-190.0).all()
     assert distributions["histogram_max_hu"].eq(150.0).all()
@@ -568,7 +617,7 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
         "avat": -90.0,
         "tvat": -70.0,
     }.items():
-        rows = distributions.loc[distributions["tissue_key"].eq(tissue)]
+        rows = distributions.loc[distributions["compartment_key"].eq(tissue)]
         assert rows["distribution_valid"].all()
         assert rows["median_hu"].eq(expected_median).all()
         assert rows["voxel_count"].sum() == rows["total_voxel_count"].iloc[0]
@@ -580,21 +629,21 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
     outside = signature.loc[signature["coverage_fraction"].eq(0)]
     assert not observed.empty
     assert not outside.empty
-    assert observed["sm_mean_csa_cm2_valid"].all()
-    assert observed["sm_mean_hu_valid"].all()
-    assert observed["heart_mean_csa_cm2"].eq(0).all()
-    assert not observed["heart_mean_hu_valid"].any()
-    assert outside["sm_mean_csa_cm2"].isna().all()
-    assert outside["sm_mean_csa_cm2_reason"].eq("outside_fov").all()
-    assert outside["sm_mean_csa_cm2_coverage_fraction"].eq(0).all()
-    assert outside["sm_mean_hu_reason"].eq("outside_fov").all()
+    assert observed["sm_compartment_mean_csa_cm2_valid"].all()
+    assert observed["sm_compartment_mean_hu_valid"].all()
+    assert observed["heart_compartment_mean_csa_cm2"].eq(0).all()
+    assert not observed["heart_compartment_mean_hu_valid"].any()
+    assert outside["sm_compartment_mean_csa_cm2"].isna().all()
+    assert outside["sm_compartment_mean_csa_cm2_reason"].eq("outside_fov").all()
+    assert outside["sm_compartment_mean_csa_cm2_coverage_fraction"].eq(0).all()
+    assert outside["sm_compartment_mean_hu_reason"].eq("outside_fov").all()
     assert outside["trunk_mean_csa_cm2_reason"].eq("outside_fov").all()
     signature_components = load_signature(table_directory)
     assert signature_components.longitudinal.equals(signature)
-    assert signature_components.tissue_hu_distributions.equals(distributions)
+    assert signature_components.compartment_hu_distributions.equals(distributions)
     for component in (
         signature_components.longitudinal,
-        signature_components.tissue_hu_distributions,
+        signature_components.compartment_hu_distributions,
     ):
         assert component["case_id"].eq(bundle.identity.case_id).all()
         assert component["run_id"].eq(bundle.identity.run_id).all()
@@ -662,6 +711,113 @@ def test_parquet_export_round_trip_and_api_views(base_config, tmp_path):
     pq.write_table(corrupted.replace_schema_metadata(metadata), summaries_path)
     with pytest.raises(ValueError, match="inconsistent analysis_id"):
         load_measurement_tables(table_directory)
+
+
+def test_csv_mirrors_can_be_disabled_without_disabling_parquet(base_config, tmp_path):
+    config = deepcopy(base_config)
+    config["measurements"]["export"]["csv"] = False
+    bundle, *_ = make_bundle(config)
+    action = ExportMeasurementBundle(
+        SimpleNamespace(config=config, timestamp=123, device="cpu")
+    )
+    memory = {
+        "id": "case-001",
+        "workspace": tmp_path,
+        "tmp/measurement_bundle": bundle,
+    }
+
+    action(memory)
+    action.validate_outputs(memory)
+
+    assert all((tmp_path / "tables" / f"{name}.parquet").is_file() for name in TABLE_NAMES)
+    assert not list((tmp_path / "tables").glob("*.csv"))
+    assert not any(key.endswith("_csv") for key in memory["tmp/measurement_bundle"].paths)
+
+
+def test_validated_parquet_bundle_can_be_exported_to_csv_without_mutation(
+    base_config,
+    tmp_path,
+):
+    config = deepcopy(base_config)
+    config["measurements"]["export"]["csv"] = False
+    original, *_ = make_bundle(config)
+    identity = MeasurementIdentity("case-001", "run-001", "a" * 64)
+    tables = {}
+    for name in TABLE_NAMES:
+        table = getattr(original, name).copy()
+        for column, value in identity.as_columns().items():
+            table[column] = value
+        tables[name] = table
+    bundle = replace(original, identity=identity, **tables)
+    case_root = tmp_path / "case"
+    action = ExportMeasurementBundle(
+        SimpleNamespace(config=config, timestamp=123, device="cpu")
+    )
+    action(
+        {
+            "id": identity.case_id,
+            "workspace": case_root,
+            "tmp/measurement_bundle": bundle,
+        }
+    )
+    manifest = service_module._case_manifest(
+        case_id=identity.case_id,
+        run_id=identity.run_id,
+        analysis_id=identity.analysis_id,
+        attempt_id="attempt-1",
+        execution_status=service_module.ExecutionStatus.SUCCEEDED,
+        qc_status=service_module.QCStatus.PASS,
+        flags=(),
+        input_summary={
+            "source_reference": "content-addressed-local-input",
+            "source_content_sha256": None,
+            "source_byte_size": None,
+            "input_pixel_sha256": "b" * 64,
+            "input_format": "nifti",
+            "geometry": {},
+        },
+        provenance={},
+        scientific={},
+        started_at="2026-07-29T00:00:00+00:00",
+        duration_seconds=1.0,
+        artifacts=service_module._artifact_inventory(case_root),
+    )
+    manifest_path = service_module._atomic_json(
+        manifest,
+        case_root / "case_manifest.json",
+    )
+    source_digests = {
+        path.relative_to(case_root): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in case_root.rglob("*")
+        if path.is_file()
+    }
+
+    destination = tmp_path / "csv-export"
+    paths = service_module.export_result_csv(manifest_path, destination)
+
+    assert set(paths) == set(TABLE_NAMES)
+    assert all(path.is_file() for path in paths.values())
+    assert {
+        path.relative_to(case_root): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in case_root.rglob("*")
+        if path.is_file()
+    } == source_digests
+    assert service_module.export_result_csv(manifest_path, destination) == paths
+
+    paths["slices"].write_text("different\n", encoding="utf-8")
+    with pytest.raises(FileExistsError, match="other content"):
+        service_module.export_result_csv(manifest_path, destination)
+    restored = service_module.export_result_csv(
+        manifest_path,
+        destination,
+        overwrite=True,
+    )
+    assert len(pd.read_csv(restored["slices"])) == len(bundle.slices)
+    with pytest.raises(ValueError, match="outside the immutable case bundle"):
+        service_module.export_result_csv(
+            manifest_path,
+            case_root / "derived-csv",
+        )
 
 
 def test_parquet_reader_rejects_missing_vertebral_territory_bin(base_config, tmp_path):
@@ -811,8 +967,8 @@ def test_missing_anatomy_keeps_identical_nullable_parquet_schemas(
         )
     assert schemas["missing"]["vertebrae"].field("territory_bin").type == pa.int64()
     assert schemas["missing"]["slices"].field("assigned_vertebral_level").type == pa.string()
-    assert "sm_volume_cm3" not in missing.vertebrae
-    assert "sm_mean_csa_cm2" in missing.vertebrae
+    assert "sm_compartment_volume_cm3" not in missing.vertebrae
+    assert "sm_compartment_mean_csa_cm2" in missing.vertebrae
 
 
 def test_range_api_reuses_the_analysis_coverage_tolerance(base_config, tmp_path):

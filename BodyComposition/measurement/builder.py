@@ -29,7 +29,7 @@ from BodyComposition.measurement.contracts import (
     MeasurementBundle,
     MeasurementIdentity,
 )
-from BodyComposition.measurement.distributions import build_tissue_hu_distributions
+from BodyComposition.measurement.distributions import build_compartment_hu_distributions
 from BodyComposition.measurement.physical import geometry_digest, in_plane_superior_span_mm
 from BodyComposition.measurement.signature import build_longitudinal_signature
 from BodyComposition.measurement.slices import (
@@ -135,9 +135,25 @@ def build_measurement_bundle(
     landmarks: LandmarkSet | None,
     settings: Mapping[str, Any],
     orientation_provenance: Mapping[str, Any] | None = None,
+    analysis_scope: str = "full_ct",
+    analyzed_slices_z: np.ndarray | None = None,
+    analysis_region_provenance: Mapping[str, Any] | None = None,
 ) -> MeasurementBundle:
     """Build all canonical tables from one immutable set of prepared inputs."""
 
+    if analyzed_slices_z is not None:
+        available = np.asarray(analyzed_slices_z)
+        expected = (geometry.size_xyz[2],)
+        if available.ndim != 1 or available.shape != expected or available.dtype != np.bool_:
+            raise ValueError(
+                f"analyzed_slices_z must be a boolean array with shape {expected}."
+            )
+        if np.any(compartment_labels_zyx[~available] != 0) or np.any(
+            tissue_labels_zyx[~available] != 0
+        ):
+            raise ValueError(
+                "Scoped tissue labels contain predictions outside the analyzed slices."
+            )
     if vertebral_result.geometry is None:
         raise ValueError("The vertebral result has no geometry.")
     assert_same_physical_domain(
@@ -170,6 +186,8 @@ def build_measurement_bundle(
         compartment_labels_zyx=compartment_labels_zyx,
         compartment_label_schema=compartment_label_schema,
         tissue_definitions=settings.get("tissue_definitions"),
+        analysis_scope=analysis_scope,
+        analyzed_slices_z=analyzed_slices_z,
     )
     orientation = dict(orientation_provenance or {})
     slices["full_coverage_tolerance"] = full_coverage_tolerance
@@ -198,12 +216,13 @@ def build_measurement_bundle(
         full_coverage_tolerance=full_coverage_tolerance,
     )
     definitions = settings.get("tissue_definitions", {})
-    hu_distributions = build_tissue_hu_distributions(
+    hu_distributions = build_compartment_hu_distributions(
         image_zyx=image_zyx,
         compartment_labels_zyx=compartment_labels_zyx,
         compartment_label_schema=compartment_label_schema,
         geometry=geometry,
         identity=identity,
+        analyzed_slices_z=analyzed_slices_z,
     )
     extra_signature_definitions = tuple(
         name
@@ -221,6 +240,23 @@ def build_measurement_bundle(
     )
 
     flags: list[QCFlag] = [*body_surface.qc_flags, *vertebral_result.qc_flags]
+    if analysis_scope == "l3_vertebral_level":
+        flags.append(
+            QCFlag(
+                code="l3_scoped_tissue_analysis",
+                stage="measurement",
+                severity=QCSeverity.INFO,
+                reason=(
+                    "Tissue inference and measurements were intentionally restricted "
+                    "to the detected L3 vertebral territory."
+                ),
+                observed=dict(analysis_region_provenance or {}),
+                suggested_review_action=(
+                    "Use body_composition_analysis_available and metric coverage when comparing "
+                    "this result with full-CT analyses."
+                ),
+            )
+        )
     in_plane_span_mm = in_plane_superior_span_mm(geometry)
     maximum_unflagged_span_mm = SIGNATURE_BIN_WIDTH_MM / 2.0
     if in_plane_span_mm > maximum_unflagged_span_mm:
@@ -335,16 +371,19 @@ def build_measurement_bundle(
                 ),
             )
         )
-    if bool(slices["tissue_exceeds_body_area"].any()):
+    if bool(slices["compartment_exceeds_body_area"].any()):
         flags.append(
             QCFlag(
-                code="tissue_exceeds_body_area",
+                code="compartment_exceeds_body_area",
                 stage="measurement",
                 severity=QCSeverity.ERROR,
-                reason="At least one tissue-label voxel lies outside the aligned body mask.",
+                reason=(
+                    "At least one model-native compartment voxel lies outside "
+                    "the aligned body mask."
+                ),
                 observed={
-                    "slice_count": int(slices["tissue_exceeds_body_area"].sum()),
-                    "voxel_count": int(slices["tissue_outside_body_voxel_count"].sum()),
+                    "slice_count": int(slices["compartment_exceeds_body_area"].sum()),
+                    "voxel_count": int(slices["compartment_outside_body_voxel_count"].sum()),
                 },
             )
         )
@@ -456,7 +495,13 @@ def build_measurement_bundle(
                 stage="measurement",
                 severity=(
                     QCSeverity.INFO
-                    if summary["l3_200mm_slab_reason"] in {"outside_fov", "partial_fov"}
+                    if summary["l3_200mm_slab_reason"]
+                    in {
+                        "outside_fov",
+                        "partial_fov",
+                        "outside_analysis_region",
+                        "partial_analysis_region",
+                    }
                     else QCSeverity.WARNING
                 ),
                 reason="The complete L3-centered 200-mm slab could not be measured.",
@@ -547,7 +592,14 @@ def build_measurement_bundle(
                 stage="measurement",
                 severity=(
                     QCSeverity.INFO
-                    if reason in {"missing_anchor", "outside_fov", "partial_fov"}
+                    if reason
+                    in {
+                        "missing_anchor",
+                        "outside_fov",
+                        "partial_fov",
+                        "outside_analysis_region",
+                        "partial_analysis_region",
+                    }
                     else QCSeverity.WARNING
                 ),
                 reason=description,
@@ -573,7 +625,10 @@ def build_measurement_bundle(
             "The sacral pelvic maximum occurs at the search boundary.",
         ),
     ):
-        if bool(summary.get(f"{prefix}_at_search_boundary", False)):
+        if (
+            analysis_scope != "l3_vertebral_level"
+            and bool(summary.get(f"{prefix}_at_search_boundary", False))
+        ):
             flags.append(
                 QCFlag(
                     code=code,
@@ -665,7 +720,7 @@ def build_measurement_bundle(
                 "vertebral_territory_schema_version": (VERTEBRAL_TERRITORY_SCHEMA_VERSION),
                 "signature_schema_version": str(signature["signature_schema_version"].iloc[0]),
                 "signature_profile_id": str(signature["signature_profile_id"].iloc[0]),
-                "tissue_hu_distribution_schema_version": str(
+                "compartment_hu_distribution_schema_version": str(
                     hu_distributions["distribution_schema_version"].iloc[0]
                 ),
                 "signature_components": [
@@ -676,15 +731,15 @@ def build_measurement_bundle(
                         "rows": len(signature),
                     },
                     {
-                        "component": "global_tissue_hu",
+                        "component": "global_compartment_hu",
                         "table": "hu_distributions.parquet",
                         "schema_version": str(
                             hu_distributions["distribution_schema_version"].iloc[0]
                         ),
                         "scope": str(hu_distributions["distribution_scope"].iloc[0]),
                         "source_semantics": str(hu_distributions["source_semantics"].iloc[0]),
-                        "tissues": (
-                            hu_distributions["tissue_key"].drop_duplicates().astype(str).tolist()
+                        "compartments": (
+                            hu_distributions["compartment_key"].drop_duplicates().astype(str).tolist()
                         ),
                     },
                 ],
@@ -711,19 +766,28 @@ def build_measurement_bundle(
                 },
                 "settings": dict(settings),
             },
-            "tissue": {
-                "backend_id": tissue_backend_id,
-                "label_sha256": array_sha256(tissue_labels_zyx),
-                "label_schema": {
-                    str(label): name for label, name in sorted(tissue_label_schema.items())
+            "body_composition": {
+                "analysis_scope": analysis_scope,
+                "analysis_region": dict(analysis_region_provenance or {}),
+                "compartments": {
+                    "backend_id": tissue_backend_id,
+                    "sha256": array_sha256(compartment_labels_zyx),
+                    "label_schema": {
+                        str(label): name
+                        for label, name in sorted(compartment_label_schema.items())
+                    },
+                    "source": "model_native",
+                    "inference_context": dict(tissue_preprocessing),
                 },
-                "preprocessing": dict(tissue_preprocessing),
-                "compartment_sha256": array_sha256(compartment_labels_zyx),
-                "compartment_schema": {
-                    str(label): name for label, name in sorted(compartment_label_schema.items())
+                "tissues": {
+                    "profile_id": str(settings["tissue_profile_id"]),
+                    "sha256": array_sha256(tissue_labels_zyx),
+                    "label_schema": {
+                        str(label): name
+                        for label, name in sorted(tissue_label_schema.items())
+                    },
+                    "definitions": dict(settings.get("tissue_definitions", {})),
                 },
-                "compartment_source": "raw_model_labels",
-                "definitions": dict(settings.get("tissue_definitions", {})),
             },
             "body_surface": {
                 "backend_id": body_surface.backend_id,

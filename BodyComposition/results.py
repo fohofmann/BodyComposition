@@ -208,3 +208,57 @@ class BatchResult:
             "reporting": dict(self.reporting) if self.reporting is not None else None,
             "cases": [case.as_dict() for case in self.cases],
         }
+
+
+@dataclass(frozen=True)
+class BatchWorkerResult:
+    """Successful scheduler-worker exit while the shared run continues."""
+
+    run_id: str
+    output_path: Path
+    cases: tuple[CaseResult, ...]
+    planned_case_count: int
+    active_case_count: int
+    schema_version: str = RUN_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        validate_public_id(self.run_id, name="run_id")
+        if any(case.run_id != self.run_id for case in self.cases):
+            raise ValueError("All observed case results must belong to the worker run_id.")
+        if len({case.case_id for case in self.cases}) != len(self.cases):
+            raise ValueError("A worker result cannot contain duplicate case IDs.")
+        if self.planned_case_count <= 0:
+            raise ValueError("A worker result requires a positive planned case count.")
+        if len(self.cases) >= self.planned_case_count:
+            raise ValueError("A drained worker result must leave at least one case unfinished.")
+        if self.active_case_count <= 0:
+            raise ValueError("A drained worker result requires at least one active case.")
+        if self.active_case_count > self.planned_case_count - len(self.cases):
+            raise ValueError("Active case count exceeds the unfinished case count.")
+
+    @property
+    def execution_status(self) -> ExecutionStatus:
+        return ExecutionStatus.RUNNING
+
+    @property
+    def manifest_path(self) -> None:
+        return None
+
+    @property
+    def remaining_case_count(self) -> int:
+        return self.planned_case_count - len(self.cases)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "execution_status": self.execution_status.value,
+            "worker_status": "drained",
+            "output_path": str(self.output_path),
+            "manifest_path": None,
+            "planned_case_count": self.planned_case_count,
+            "terminal_case_count": len(self.cases),
+            "active_case_count": self.active_case_count,
+            "remaining_case_count": self.remaining_case_count,
+            "cases": [case.as_dict() for case in self.cases],
+        }

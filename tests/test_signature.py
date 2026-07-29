@@ -65,7 +65,7 @@ def _signature_slices(position_offset_mm: float) -> pd.DataFrame:
         }
     )
     for _, source in SIGNATURE_CORE_CHANNELS:
-        if source == "sm":
+        if source == "sm_compartment":
             area = np.asarray([10.0, 20.0, 30.0, 40.0])
             mean_hu = np.asarray([20.0, 30.0, 40.0, 50.0])
             count = np.asarray([10, 20, 30, 40])
@@ -81,6 +81,22 @@ def _signature_slices(position_offset_mm: float) -> pd.DataFrame:
         table[f"{source}_hu_valid"] = valid
         table[f"{source}_voxel_count"] = count
     return table
+
+
+def test_default_signature_channels_preserve_public_semantics():
+    assert SIGNATURE_CORE_CHANNELS == (
+        ("sm_compartment", "sm_compartment"),
+        (
+            "skeletal_muscle_tissue_hu_m29_150",
+            "skeletal_muscle_tissue_hu_m29_150",
+        ),
+        ("sat_tissue_hu_m190_m30", "sat_tissue_hu_m190_m30"),
+        ("avat_tissue_hu_m190_m30", "avat_tissue_hu_m190_m30"),
+        ("tvat_tissue_hu_m190_m30", "tvat_tissue_hu_m190_m30"),
+        ("bone_compartment", "bone_compartment"),
+        ("heart_compartment", "heart_compartment"),
+        ("lung_compartment", "lung_compartment"),
+    )
 
 
 def test_reference_alignment_uses_observed_l3_without_rescaling():
@@ -289,9 +305,9 @@ def test_fixed_signature_removes_scanner_offset_without_stretching_profile():
         "reference_center_mm",
         "reference_superior_mm",
         "coverage_fraction",
-        "sm_mean_csa_cm2",
-        "sm_mean_hu",
-        "sm_mean_csa_fraction_of_trunk",
+        "sm_compartment_mean_csa_cm2",
+        "sm_compartment_mean_hu",
+        "sm_compartment_mean_csa_fraction_of_trunk",
     ):
         pd.testing.assert_series_equal(
             baseline[column],
@@ -304,8 +320,8 @@ def test_fixed_signature_removes_scanner_offset_without_stretching_profile():
         500.0,
         equal_nan=True,
     )
-    assert baseline.loc[50, "sm_mean_csa_cm2"] == pytest.approx(25.0)
-    assert baseline.loc[50, "sm_mean_hu"] == pytest.approx(36.0)
+    assert baseline.loc[50, "sm_compartment_mean_csa_cm2"] == pytest.approx(25.0)
+    assert baseline.loc[50, "sm_compartment_mean_hu"] == pytest.approx(36.0)
 
 
 def test_signature_retains_observed_values_for_incomplete_dominant_territory():
@@ -334,14 +350,14 @@ def test_signature_retains_observed_values_for_incomplete_dominant_territory():
     observed = signature.loc[50]
     assert observed["dominant_vertebral_level"] == "L3"
     assert observed["vertebral_assignment_status"] == "assigned_partial_edge"
-    assert observed["sm_mean_csa_cm2_valid"]
-    assert observed["sm_mean_csa_cm2"] == pytest.approx(25.0)
-    assert observed["sm_mean_hu_valid"]
-    assert observed["sm_mean_hu"] == pytest.approx(36.0)
+    assert observed["sm_compartment_mean_csa_cm2_valid"]
+    assert observed["sm_compartment_mean_csa_cm2"] == pytest.approx(25.0)
+    assert observed["sm_compartment_mean_hu_valid"]
+    assert observed["sm_compartment_mean_hu"] == pytest.approx(36.0)
     outside = signature.loc[52]
     assert not outside["bin_valid"]
-    assert pd.isna(outside["sm_mean_csa_cm2"])
-    assert outside["sm_mean_csa_cm2_reason"] == "outside_fov"
+    assert pd.isna(outside["sm_compartment_mean_csa_cm2"])
+    assert outside["sm_compartment_mean_csa_cm2_reason"] == "outside_fov"
 
 
 def test_signature_contract_rejects_non_translation_physical_bounds():
@@ -374,8 +390,8 @@ def test_trunk_fraction_is_invalid_when_numerator_and_denominator_coverage_diffe
     )
 
     row = signature.loc[50]
-    assert row["sm_mean_csa_cm2_valid"]
+    assert row["sm_compartment_mean_csa_cm2_valid"]
     assert row["trunk_mean_csa_cm2_valid"]
-    assert row["sm_mean_csa_cm2_coverage_fraction"] != row["trunk_mean_csa_cm2_coverage_fraction"]
-    assert not row["sm_mean_csa_fraction_of_trunk_valid"]
-    assert row["sm_mean_csa_fraction_of_trunk_reason"] == "invalid_measurement"
+    assert row["sm_compartment_mean_csa_cm2_coverage_fraction"] != row["trunk_mean_csa_cm2_coverage_fraction"]
+    assert not row["sm_compartment_mean_csa_fraction_of_trunk_valid"]
+    assert row["sm_compartment_mean_csa_fraction_of_trunk_reason"] == "invalid_measurement"

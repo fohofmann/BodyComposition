@@ -14,8 +14,9 @@ not implement separate pipelines.
 3. Segment and label vertebral bodies. The default adapter uses upstream
    SPINEPS 2.0.0, its pinned VERIDAH CT-labeling model, and TPTBox 0.7.5
    VibeSeg crop inference.
-4. Segment anatomical tissue compartments with the selected internal nnU-Net
-   v2 model.
+4. Segment anatomical compartments with the selected internal nnU-Net
+   v2 model. In the explicit low-resource scope, localize L3 first and supply
+   only an L3-centred z region to the ResEncM tissue model.
 5. Derive the body/trunk measurement support, optional TotalSegmentator
    landmarks, per-slice measurements, three-bin native vertebral summaries,
    established case summaries, and QC.
@@ -48,8 +49,11 @@ The explicit convention is:
 - longitudinal ordering: the physical superior axis, not storage index.
 
 Every segmentation output is checked against the prepared CT's full physical
-domain. Label resampling uses nearest-neighbour interpolation. Geometry is not
-accepted merely because array shapes match.
+domain. The low-resource z crop is an index region with an affine-derived
+origin; it does not resize pixels. nnU-Net returns the cropped prediction at
+the input shape, after which only the L3 target is pasted onto the full
+prepared grid. Label resampling elsewhere uses nearest-neighbour
+interpolation. Geometry is not accepted merely because array shapes match.
 
 ## Vertebral contract
 

@@ -10,11 +10,8 @@ SPINEPS_SOURCE_COMMIT = "ad622b87d9e4b81fb6a88df2a8050bd40f7046d5"
 SPINEPS_WHEEL_SHA256 = "5a5feec1268b71ccf5d2c4400cd7f4ca68d7673bdb16814956e238de18c5b40b"
 SPINEPS_SOURCE_LICENSE = "Apache-2.0"
 
-# TPTBox 0.7.5's repository and bundled license declare Apache-2.0. A
-# discrepancy in its wheel metadata remains explicit in model provenance.
 TPTBOX_COMPAT_VERSION = "0.7.5"
 TPTBOX_SOURCE_LICENSE = "Apache-2.0"
-TPTBOX_LICENSE_STATUS = "apache_2_0_with_wheel_metadata_discrepancy"
 
 VIBESEG_SOURCE_REPOSITORY = "https://github.com/robert-graf/VIBESegmentator"
 VIBESEG_SOURCE_LICENSE = "Apache-2.0"
@@ -23,6 +20,12 @@ MODEL_WEIGHT_REDISTRIBUTION_MODE = "user_model_sync"
 VIBESEG_CROP_DATASET_ID = 100
 VIBESEG_CROP_RELEASE = "v1.0.0"
 MODEL_BUNDLE_VERSION = "spineps-veridah-ct-v1"
+# Canonical SHA-256 digests of the complete expanded file inventories produced
+# by the exact size/SHA-pinned upstream archives below. These package-owned
+# pins authenticate installed caches without retaining duplicate source ZIPs.
+VIBESEG_CROP_INSTALLED_INVENTORY_SHA256 = (
+    "755b78daacf25d9b6496cb1dec424b130ed8acff62b41d0980300e0a50b4fcc2"
+)
 
 VERTEBRA_CORPUS_SEMANTIC_LABEL = 49
 SACRUM_BODY_SEMANTIC_LABEL = 73
@@ -83,6 +86,7 @@ class ModelAssetSpec:
     url: str
     bytes: int
     sha256: str
+    installed_inventory_sha256: str
     install_dir: str
 
     def __post_init__(self) -> None:
@@ -92,6 +96,11 @@ class ModelAssetSpec:
             raise ValueError("Model archive size must be positive.")
         if len(self.sha256) != 64 or any(character not in "0123456789abcdef" for character in self.sha256):
             raise ValueError("Model archive SHA-256 must be lowercase hexadecimal.")
+        if len(self.installed_inventory_sha256) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in self.installed_inventory_sha256
+        ):
+            raise ValueError("Installed model inventory SHA-256 must be lowercase hexadecimal.")
         if not self.url.startswith("https://github.com/Hendrik-code/spineps/releases/download/"):
             raise ValueError("SPINEPS model assets must use an exact upstream release URL.")
 
@@ -125,6 +134,9 @@ SPINEPS_MODEL_ASSETS = (
         url="https://github.com/Hendrik-code/spineps/releases/download/v1.4.2/ct.zip",
         bytes=765_437_777,
         sha256="744a18a2a25955b2a45deff15b3dda2425fd80b715f8e97500151405abaa495e",
+        installed_inventory_sha256=(
+            "349936738121fb0ab396e2a910528d8d7110a5cf043b87dff5d71a00e6116a50"
+        ),
         install_dir="semantic_ct",
     ),
     ModelAssetSpec(
@@ -135,6 +147,9 @@ SPINEPS_MODEL_ASSETS = (
         url="https://github.com/Hendrik-code/spineps/releases/download/v1.4.2/CT_instance.zip",
         bytes=5_160_620,
         sha256="ea943c44afb46782dfe4cd66fc017837c191e555087fa9490fadd8fd8c413cf7",
+        installed_inventory_sha256=(
+            "d8b58de9d436f1d786279a7d17af9bd66aa1acc8bebcd584db72b7f4bc4b2b56"
+        ),
         install_dir="instance_ct",
     ),
     ModelAssetSpec(
@@ -145,6 +160,9 @@ SPINEPS_MODEL_ASSETS = (
         url="https://github.com/Hendrik-code/spineps/releases/download/v1.4.0/ct_labeling.zip",
         bytes=87_702_976,
         sha256="a3b583d9a1dca19a92b7ccb466d08ba7464fa90752ef7e2be53817d4b43496f5",
+        installed_inventory_sha256=(
+            "3f3fe9a26820447fb01a38dfe862e218867a1cb37f2dded032719c37c0b6d4a7"
+        ),
         install_dir="labeling_ct",
     ),
 )

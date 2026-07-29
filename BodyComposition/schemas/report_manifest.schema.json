@@ -14,7 +14,7 @@
     "manual_review_required"
   ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "1.1.0"},
     "manifest_type": {"enum": ["case", "export"]},
     "report_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "layout": {"enum": ["spine_overview_v1", "spine_profile_v2"]},
@@ -78,7 +78,28 @@
       }
     },
     "cases": {"type": "array", "minItems": 1},
+    "cover_page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["included", "page_number", "summary", "audit"],
+      "properties": {
+        "included": {"const": true},
+        "page_number": {"const": 1},
+        "summary": {"type": "object"},
+        "audit": {"type": "object"}
+      }
+    },
     "manual_review_summary": {"type": "object"},
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy", "snapshot_id", "pointer"],
+      "properties": {
+        "strategy": {"const": "atomic_snapshot_pointer_v1"},
+        "snapshot_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "pointer": {"const": ".current"}
+      }
+    },
     "pdf_file": {"const": "case_report.pdf"},
     "combined_pdf_file": {"const": "case_reports.pdf"},
     "pdf_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
@@ -107,6 +128,7 @@
           "export_id",
           "configuration",
           "renderer",
+          "cover_page",
           "manual_review_summary",
           "combined_pdf_file",
           "combined_pdf_sha256",

@@ -30,13 +30,39 @@ def canonical_actions(pipeline):
         raise ValueError(f"Unknown tissue backend {tissue_backend!r}.") from error
     vertebral_actions, vertebral_body_source = vertebral_backend_actions(pipeline)
     compartment_mask = "masks/tissue_compartments.nii.gz"
+    analysis_scope = pipeline.config["analysis"]["scope"]
+    if analysis_scope == "full_ct":
+        region_actions = []
+        tissue_input = "tmp/index"
+        tissue_region = None
+        restore_reference = None
+    elif analysis_scope == "l3_vertebral_level":
+        from BodyComposition.actions.region import (
+            L3_ANALYSIS_REGION,
+            L3_TISSUE_INPUT,
+            PrepareL3TissueRegion,
+        )
+
+        region_actions = [PrepareL3TissueRegion(pipeline)]
+        tissue_input = L3_TISSUE_INPUT
+        tissue_region = L3_ANALYSIS_REGION
+        restore_reference = "tmp/index"
+    else:
+        raise ValueError(f"Unknown analysis scope {analysis_scope!r}.")
     measurement_actions = measurement_support_actions(
         pipeline,
         compartment_mask=compartment_mask,
     )
     actions = [
         *vertebral_actions,
-        SegmIntBodyComposition(pipeline, image="tmp/index", model=tissue_model),
+        *region_actions,
+        SegmIntBodyComposition(
+            pipeline,
+            image=tissue_input,
+            model=tissue_model,
+            analysis_region=tissue_region,
+            restore_reference=restore_reference,
+        ),
         MasksInternalTissue(pipeline, image="tmp/index"),
         *measurement_actions,
         MeasureCanonicalBodyComposition(

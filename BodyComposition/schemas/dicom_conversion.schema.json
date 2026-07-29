@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fohofmann/BodyComposition/schemas/dicom_conversion.schema.json",
+  "title": "BodyComposition DICOM conversion metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "sidecar_type", "nifti", "source_dicom"],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size_xyz", "spacing_xyz", "origin_lps_xyz", "direction_lps"],
+      "properties": {
+        "size_xyz": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "integer", "minimum": 1},
+            {"type": "integer", "minimum": 1},
+            {"type": "integer", "minimum": 1}
+          ],
+          "items": false
+        },
+        "spacing_xyz": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "number", "exclusiveMinimum": 0},
+            {"type": "number", "exclusiveMinimum": 0},
+            {"type": "number", "exclusiveMinimum": 0}
+          ],
+          "items": false
+        },
+        "origin_lps_xyz": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "number"},
+            {"type": "number"},
+            {"type": "number"}
+          ],
+          "items": false
+        },
+        "direction_lps": {
+          "type": "array",
+          "prefixItems": [
+            {"type": "number"},
+            {"type": "number"},
+            {"type": "number"},
+            {"type": "number"},
+            {"type": "number"},
+            {"type": "number"},
+            {"type": "number"},
+            {"type": "number"},
+            {"type": "number"}
+          ],
+          "items": false
+        }
+      }
+    },
+    "dicom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "series_instance_uid_sha256",
+        "instance_count",
+        "modality",
+        "scanner_manufacturer",
+        "scanner_model",
+        "image_orientation_patient_complete",
+        "image_position_patient_complete",
+        "conversion_backend",
+        "conversion_backend_version"
+      ],
+      "properties": {
+        "series_instance_uid_sha256": {"$ref": "#/$defs/sha256"},
+        "instance_count": {"type": "integer", "minimum": 1},
+        "modality": {"const": "CT"},
+        "scanner_manufacturer": {"type": ["string", "null"], "maxLength": 80},
+        "scanner_model": {"type": ["string", "null"], "maxLength": 80},
+        "image_orientation_patient_complete": {"type": "boolean"},
+        "image_position_patient_complete": {"type": "boolean"},
+        "conversion_backend": {"type": "string", "minLength": 1},
+        "conversion_backend_version": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "sidecar_type": {"const": "bodycomposition-dicom-conversion"},
+    "nifti": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_sha256", "byte_size", "pixel_sha256", "geometry"],
+      "properties": {
+        "content_sha256": {"$ref": "#/$defs/sha256"},
+        "byte_size": {"type": "integer", "minimum": 1},
+        "pixel_sha256": {"$ref": "#/$defs/sha256"},
+        "geometry": {"$ref": "#/$defs/geometry"}
+      }
+    },
+    "source_dicom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_sha256", "byte_size", "dicom"],
+      "properties": {
+        "content_sha256": {"$ref": "#/$defs/sha256"},
+        "byte_size": {"type": "integer", "minimum": 1},
+        "dicom": {"$ref": "#/$defs/dicom"}
+      }
+    }
+  }
+}

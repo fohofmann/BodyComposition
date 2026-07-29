@@ -35,7 +35,7 @@ scientific configuration.
 | --- | --- | --- |
 | `ctdeeprot_2d_v1` | default CT orientation assessment | CTDeepRot code/conventions pinned to commit `492114b8f9f3a7f058d4e97c0dd3643fb8d39649`; BSD-3-Clause; exact upstream checkpoint sync only |
 | `spineps_veridah_ct_v1` | default vertebral-body segmentation and labeling | upstream `SPINEPS==2.0.0`; VERIDAH is its pinned `ct_labeling` model; `TPTBox==0.7.5` supplies VibeSeg Dataset100 crop inference; upstream release sync only |
-| `bodycomposition_resenc_l_v1` | default tissue compartments | original `fhofmann/BodyCompositionCT-ResEncL` revision `b355aa7254f5307b6d18005dfbabae8c439d24fb`; CC-BY-4.0 weights |
+| `bodycomposition_resenc_l_v1` | default anatomical compartments | original `fhofmann/BodyCompositionCT-ResEncL` revision `b355aa7254f5307b6d18005dfbabae8c439d24fb`; CC-BY-4.0 weights |
 | `bodycomposition_resenc_m_v1` | smaller selectable tissue model | original `fhofmann/BodyCompositionCT-ResEncM` revision `9c60c8f59a99442b9b8cc1a45abf6c4d81690c0d`; CC-BY-4.0 weights |
 | `vertebral_bodies_resenc_l` | selectable corpus-only vertebral model | immutable public Hugging Face revision; CC-BY-SA-4.0 weights |
 | `vertebral_bodies_resenc_m` | smaller selectable corpus-only vertebral model | immutable public Hugging Face revision; CC-BY-SA-4.0 weights |
@@ -130,5 +130,6 @@ territories, while the sacrum remains an explicit anatomical level.
 
 Code and weight licenses are separate. BodyComposition's Apache-2.0 license
 does not relicense model weights. Cite every model used by a run. Complete
-attribution, the TPTBox wheel-metadata discrepancy, required papers, and
-redistribution decisions are in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+attribution, TPTBox's Apache-2.0 license, required papers, and redistribution
+decisions are in
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).

@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import SimpleITK as sitk
+from pypdf import PdfReader
 
+import BodyComposition.service as service_module
 from BodyComposition.config import PipelineConfig
 from BodyComposition.execution import (
     ClaimLostError,
@@ -21,7 +27,16 @@ from BodyComposition.execution import (
 )
 from BodyComposition.model_manager import ModelStatus
 from BodyComposition.pipeline import InternalPipeline, _resolve_device_name
-from BodyComposition.results import ExecutionStatus
+from BodyComposition.reporting.contracts import ReportingSettings
+from BodyComposition.reporting.service import (
+    render_failed_case_report,
+    validate_report_manifest,
+)
+from BodyComposition.results import (
+    BatchResult,
+    BatchWorkerResult,
+    ExecutionStatus,
+)
 from BodyComposition.service import CaseInput, PipelineService
 
 SOURCE_CLEAN = {
@@ -129,6 +144,39 @@ def test_case_claim_is_atomic_and_stale_owner_is_fenced(tmp_path):
     with pytest.raises(ClaimLostError):
         original.assert_owned()
     replacement.release()
+
+
+def test_run_clock_is_initialized_once_for_every_compatible_worker(tmp_path):
+    first = SharedExecutionState(tmp_path, "run-1", policy=_policy())
+    second = SharedExecutionState(tmp_path, "run-1", policy=_policy())
+
+    started_at = first.initialize_run_clock(
+        started_at="2026-07-29T08:00:00+00:00",
+        plan_sha256="a" * 64,
+    )
+
+    assert started_at == "2026-07-29T08:00:00+00:00"
+    assert (
+        second.initialize_run_clock(
+            started_at="2026-07-29T08:01:00+00:00",
+            plan_sha256="a" * 64,
+        )
+        == started_at
+    )
+    runtime = json.loads(
+        (
+            tmp_path
+            / ".bodycomposition/execution/run-1/runtime/run.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert runtime["started_at"] == started_at
+    assert runtime["plan_sha256"] == "a" * 64
+
+    with pytest.raises(RuntimeError, match="immutable plan"):
+        second.initialize_run_clock(
+            started_at="2026-07-29T08:02:00+00:00",
+            plan_sha256="b" * 64,
+        )
 
 
 def test_repeated_stale_claims_become_terminal_instead_of_looping(tmp_path):
@@ -345,6 +393,92 @@ class TimeoutPipeline:
         raise TimeoutError("synthetic worker timeout")
 
 
+class MultiprocessReportingPipeline:
+    """Create a valid case page while forcing two OS processes to overlap."""
+
+    def __init__(self, config, timestamp):
+        self.device = "cpu"
+        self.settings = ReportingSettings.from_mapping(
+            config.normalized()["reporting"]
+        )
+
+    def __call__(self, memory):
+        lease = memory["tmp/case_lease"]
+        rendezvous = (
+            lease.state.root
+            / "runtime"
+            / "multiprocess-reporting-test"
+        )
+        rendezvous.mkdir(parents=True, exist_ok=True)
+        (rendezvous / lease.state.worker_id).write_text("ready", encoding="utf-8")
+        deadline = time.monotonic() + 20.0
+        while len(tuple(rendezvous.iterdir())) < 2:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("second reporting worker did not reach rendezvous")
+            time.sleep(0.01)
+        render_failed_case_report(
+            case_id=str(memory["id"]),
+            analysis_id=str(memory["analysis_id"]),
+            output_directory=Path(memory["workspace"]) / "reports",
+            settings=self.settings,
+            failure_stage="multiprocess_regression_fixture",
+            failure_code="synthetic_status_page",
+        )
+        (Path(memory["workspace"]) / "done.txt").write_text(
+            lease.state.worker_id,
+            encoding="utf-8",
+        )
+
+
+def _run_multiprocess_reporting_worker(
+    cases,
+    output,
+    run_id,
+    result_queue,
+):
+    os.environ["BODYCOMPOSITION_POLL_SECONDS"] = "0.01"
+    try:
+        config = PipelineConfig.model_validate(
+            {
+                "measurements": {"landmarks": {"enabled": False}},
+                "runtime": {
+                    "allow_dirty": True,
+                    "device": "cpu",
+                    "cpu_threads": 1,
+                },
+                "reporting": {
+                    "enabled": True,
+                    "combined_pdf": True,
+                    "layout": "spine_overview_v1",
+                },
+            }
+        )
+        service = PipelineService(
+            config,
+            pipeline_factory=MultiprocessReportingPipeline,
+            model_provider=lambda value: (_model_status(Path(output)),),
+            source_provider=lambda: SOURCE_CLEAN,
+        )
+        result = service.analyze_batch(cases, output, run_id=run_id)
+        run_manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+        result_queue.put(
+            {
+                "ok": True,
+                "run_manifest": str(result.manifest_path),
+                "started_at": run_manifest["started_at"],
+                "ended_at": run_manifest["ended_at"],
+                "reporting": result.reporting,
+            }
+        )
+    except BaseException as error:
+        result_queue.put(
+            {
+                "ok": False,
+                "error": f"{type(error).__name__}: {error}",
+            }
+        )
+
+
 def test_default_run_identity_requires_no_worker_specific_arguments(tmp_path):
     CountingPipeline.calls = 0
     source = _write_ct(tmp_path / "case.nii.gz")
@@ -396,6 +530,17 @@ def test_identical_workers_split_whole_cases_and_exit_when_complete(tmp_path, mo
     monkeypatch.setenv("BODYCOMPOSITION_POLL_SECONDS", "0.01")
     ParallelPipeline.barrier = threading.Barrier(2)
     ParallelPipeline.calls = {}
+    summary_calls = 0
+    summary_lock = threading.Lock()
+    original_image_summary = service_module.image_summary
+
+    def counted_image_summary(*args, **kwargs):
+        nonlocal summary_calls
+        with summary_lock:
+            summary_calls += 1
+        return original_image_summary(*args, **kwargs)
+
+    monkeypatch.setattr(service_module, "image_summary", counted_image_summary)
     cases = (
         CaseInput(_write_ct(tmp_path / "one.nii.gz", 1), "one"),
         CaseInput(_write_ct(tmp_path / "two.nii.gz", 2), "two"),
@@ -413,8 +558,183 @@ def test_identical_workers_split_whole_cases_and_exit_when_complete(tmp_path, mo
         results = list(pool.map(lambda _: run_worker(), range(2)))
 
     assert ParallelPipeline.calls == {"one": 1, "two": 1}
+    assert summary_calls == len(cases)
     assert all(len(result.cases) == 2 for result in results)
     assert all(result.execution_status == ExecutionStatus.SUCCEEDED for result in results)
+    preflight_files = tuple(
+        (output / ".bodycomposition/preflight").glob("*.json")
+    )
+    assert len(preflight_files) == 1
+    assert str(tmp_path) not in preflight_files[0].read_text(encoding="utf-8")
+
+
+def test_scheduler_worker_exits_when_only_live_claims_remain(tmp_path):
+    CountingPipeline.calls = 0
+    cases = (
+        CaseInput(_write_ct(tmp_path / "one.nii.gz", 1), "one"),
+        CaseInput(_write_ct(tmp_path / "two.nii.gz", 2), "two"),
+    )
+    output = tmp_path / "output"
+    run_id = "worker-tail-run"
+    state = SharedExecutionState(output, run_id, policy=_policy())
+    external_lease = state.try_claim("one")
+    assert external_lease is not None
+
+    with external_lease:
+        worker = _service(tmp_path, CountingPipeline).analyze_batch(
+            cases,
+            output,
+            run_id=run_id,
+            worker_mode=True,
+        )
+
+        assert isinstance(worker, BatchWorkerResult)
+        assert worker.execution_status == ExecutionStatus.RUNNING
+        assert worker.active_case_count == 1
+        assert worker.remaining_case_count == 1
+        assert [case.case_id for case in worker.cases] == ["two"]
+        assert worker.manifest_path is None
+        assert not (worker.output_path / "run_manifest.json").exists()
+
+    completed = _service(tmp_path, CountingPipeline).analyze_batch(
+        cases,
+        output,
+        run_id=run_id,
+        worker_mode=True,
+    )
+
+    assert isinstance(completed, BatchResult)
+    assert completed.execution_status == ExecutionStatus.SUCCEEDED
+    assert [case.case_id for case in completed.cases] == ["one", "two"]
+    assert completed.manifest_path.is_file()
+    assert CountingPipeline.calls == 2
+
+
+def test_shared_preflight_cache_invalidates_when_input_changes(tmp_path, monkeypatch):
+    CountingPipeline.calls = 0
+    source = _write_ct(tmp_path / "case.nii.gz", 1)
+    output = tmp_path / "output"
+    summary_calls = 0
+    original_image_summary = service_module.image_summary
+
+    def counted_image_summary(*args, **kwargs):
+        nonlocal summary_calls
+        summary_calls += 1
+        return original_image_summary(*args, **kwargs)
+
+    monkeypatch.setattr(service_module, "image_summary", counted_image_summary)
+    first = _service(tmp_path, CountingPipeline).analyze_case(
+        source,
+        output,
+        case_id="case",
+    )
+    previous_mtime = source.stat().st_mtime_ns
+    _write_ct(source, 2)
+    if source.stat().st_mtime_ns == previous_mtime:
+        os.utime(source, ns=(previous_mtime + 1, previous_mtime + 1))
+    second = _service(tmp_path, CountingPipeline).analyze_case(
+        source,
+        output,
+        case_id="case",
+    )
+
+    assert first.run_id != second.run_id
+    assert summary_calls == 2
+    assert len(tuple((output / ".bodycomposition/preflight").glob("*.json"))) == 2
+
+
+def test_process_workers_publish_one_complete_transactional_report(tmp_path):
+    cases = tuple(
+        CaseInput(
+            _write_ct(tmp_path / f"case-{index}.nii.gz", index),
+            f"case-{index}",
+        )
+        for index in range(4)
+    )
+    output = tmp_path / "output"
+    run_id = "multiprocess-report-run"
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    workers = [
+        context.Process(
+            target=_run_multiprocess_reporting_worker,
+            args=(cases, output, run_id, result_queue),
+        )
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=60)
+    for worker in workers:
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=5)
+
+    assert [worker.exitcode for worker in workers] == [0, 0]
+    messages = [result_queue.get(timeout=5) for _ in workers]
+    assert all(message["ok"] for message in messages), messages
+    assert len({message["run_manifest"] for message in messages}) == 1
+    assert len({message["started_at"] for message in messages}) == 1
+    assert len({message["ended_at"] for message in messages}) == 1
+
+    run_root = output / "runs" / run_id
+    run_manifest_path = run_root / "run_manifest.json"
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    run_clock = json.loads(
+        (
+            output
+            / f".bodycomposition/execution/{run_id}/runtime/run.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert run_manifest["started_at"] == run_clock["started_at"]
+    elapsed = (
+        datetime.fromisoformat(run_manifest["ended_at"])
+        - datetime.fromisoformat(run_manifest["started_at"])
+    ).total_seconds()
+    assert run_manifest["duration_seconds"] == pytest.approx(elapsed)
+    assert [item["case_id"] for item in run_manifest["cases"]] == [
+        item.case_id for item in cases
+    ]
+
+    worker_ids = {
+        json.loads(
+            (
+                run_root
+                / str(item["manifest"])
+            ).read_text(encoding="utf-8")
+        )["provenance"]["execution"]["worker_id"]
+        for item in run_manifest["cases"]
+    }
+    assert len(worker_ids) == 2
+
+    report_directory = run_root / f"aggregate/reports/{run_id}"
+    pdf_path = report_directory / "case_reports.pdf"
+    report_manifest_path = report_directory / "report_manifest.json"
+    current = report_directory / ".current"
+    assert current.is_symlink()
+    assert pdf_path.is_symlink()
+    assert report_manifest_path.is_symlink()
+    report_manifest = validate_report_manifest(
+        report_manifest_path,
+        pdf_path=pdf_path,
+    )
+    assert report_manifest["publication"] == {
+        "strategy": "atomic_snapshot_pointer_v1",
+        "snapshot_id": report_manifest["report_id"],
+        "pointer": ".current",
+    }
+    assert [item["case_id"] for item in report_manifest["cases"]] == [
+        item.case_id for item in cases
+    ]
+    assert len(PdfReader(pdf_path, strict=True).pages) == len(cases) + 1
+    snapshots = [
+        path
+        for path in (report_directory / ".snapshots").iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    ]
+    assert 1 <= len(snapshots) <= 2
+    assert not tuple(report_directory.rglob("*.partial*"))
 
 
 @pytest.mark.parametrize(

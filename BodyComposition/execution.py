@@ -25,6 +25,26 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+_FILE_GUARDS_LOCK = threading.Lock()
+_FILE_GUARDS: dict[str, threading.Lock] = {}
+
+
+@contextmanager
+def shared_file_guard(path: str | Path):
+    """Serialize a short operation across local threads and POSIX processes."""
+
+    lock_path = Path(path)
+    key = str(lock_path.resolve())
+    with _FILE_GUARDS_LOCK:
+        local_guard = _FILE_GUARDS.setdefault(key, threading.Lock())
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with local_guard, lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
 
 class ClaimLostError(RuntimeError):
     """Raised when a stale worker no longer owns the case it processed."""
@@ -388,6 +408,54 @@ class SharedExecutionState:
                 yield
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def coordination_guard(self, name: str):
+        """Serialize one small run-level coordination operation."""
+
+        normalized = str(name).strip()
+        if not normalized:
+            raise ValueError("Coordination guard name must not be empty.")
+        with self._claim_guard(f"coordination-{normalized}"):
+            yield
+
+    def initialize_run_clock(
+        self,
+        *,
+        started_at: str,
+        plan_sha256: str,
+    ) -> str:
+        """Return one durable start time shared by every compatible worker."""
+
+        candidate = str(started_at).strip()
+        plan_digest = str(plan_sha256).strip()
+        if not candidate:
+            raise ValueError("Run start time must not be empty.")
+        if not re.fullmatch(r"[a-f0-9]{64}", plan_digest):
+            raise ValueError("Run plan digest must be a lowercase SHA-256 value.")
+        path = self.root / "runtime" / "run.json"
+        with self.coordination_guard("run-initialize"):
+            record = _read_json(path)
+            if path.exists() and record is None:
+                raise RuntimeError("Shared run initialization state is unreadable.")
+            if record is None:
+                record = {
+                    "schema_version": 1,
+                    "queue_id": self.queue_id,
+                    "plan_sha256": plan_digest,
+                    "started_at": candidate,
+                }
+                _atomic_write_json(path, record)
+            if (
+                record.get("queue_id") != self.queue_id
+                or record.get("plan_sha256") != plan_digest
+                or not isinstance(record.get("started_at"), str)
+                or not str(record["started_at"]).strip()
+            ):
+                raise RuntimeError(
+                    "Shared run initialization state differs from the immutable plan."
+                )
+            return str(record["started_at"])
 
     def completed(self, case_id: str) -> bool:
         record = self.completed_record(case_id)

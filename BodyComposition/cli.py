@@ -17,7 +17,7 @@ from typing import Any, TextIO
 import pandas as pd
 
 from BodyComposition import __version__
-from BodyComposition.config import ConfigError, PipelineConfig
+from BodyComposition.config import ConfigError, PipelineConfig, low_resource_config
 from BodyComposition.dicom import convert_dicom
 from BodyComposition.model_manager import (
     MODEL_IDS,
@@ -35,6 +35,7 @@ from BodyComposition.service import (
     PipelineService,
     aggregate_results,
     collate_report_export,
+    export_result_csv,
     inspect_report,
     inspect_result,
     load_batch_manifest,
@@ -94,10 +95,16 @@ def _machine_readable_stdout(enabled: bool) -> Iterator[None]:
 
 def _config(args: argparse.Namespace) -> PipelineConfig:
     config = PipelineConfig.load(getattr(args, "config", None))
+    if getattr(args, "low_resource", False):
+        config = low_resource_config(config)
     device = getattr(args, "device", None)
     if device is not None:
         value = config.normalized()
         value["runtime"]["device"] = device
+        config = PipelineConfig.model_validate(value)
+    if getattr(args, "no_csv", False):
+        value = config.normalized()
+        value["output"]["save_csv_tables"] = False
         config = PipelineConfig.model_validate(value)
     logging.getLogger().setLevel(config.normalized()["output"]["log_level"])
     return config
@@ -143,7 +150,7 @@ def _cmd_convert(args: argparse.Namespace) -> int:
     _emit(
         result.as_dict(),
         json_output=args.json,
-        human=f"converted: {result.output_path}",
+        human=f"converted: {result.output_path}\nmetadata: {result.metadata_path}",
     )
     return EXIT_OK
 
@@ -154,13 +161,23 @@ def _cmd_batch(args: argparse.Namespace) -> int:
         cases,
         args.output,
         run_id=args.run_id,
+        worker_mode=args.worker,
+    )
+    human = (
+        f"worker drained; shared run continues: {result.output_path}"
+        if result.execution_status == ExecutionStatus.RUNNING
+        else f"{result.execution_status.value}: {result.manifest_path}"
     )
     _emit(
         result.as_dict(),
         json_output=args.json,
-        human=f"{result.execution_status.value}: {result.manifest_path}",
+        human=human,
     )
-    return EXIT_OK if result.execution_status == ExecutionStatus.SUCCEEDED else EXIT_EXECUTION
+    return (
+        EXIT_OK
+        if result.execution_status in {ExecutionStatus.RUNNING, ExecutionStatus.SUCCEEDED}
+        else EXIT_EXECUTION
+    )
 
 
 def _cmd_models_list(args: argparse.Namespace) -> int:
@@ -237,6 +254,25 @@ def _cmd_results_inspect(args: argparse.Namespace) -> int:
 def _cmd_results_aggregate(args: argparse.Namespace) -> int:
     paths = aggregate_results(args.run)
     _emit(paths, json_output=args.json, human="\n".join(str(path) for path in paths.values()))
+    return EXIT_OK
+
+
+def _cmd_results_export_csv(args: argparse.Namespace) -> int:
+    paths = export_result_csv(
+        args.manifest,
+        args.output,
+        overwrite=args.overwrite,
+    )
+    payload = {
+        "source_manifest": args.manifest,
+        "output": args.output,
+        "tables": paths,
+    }
+    _emit(
+        payload,
+        json_output=args.json,
+        human="\n".join(str(path) for path in paths.values()),
+    )
     return EXIT_OK
 
 
@@ -408,7 +444,13 @@ def _leaf_json(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _config_flags(parser: argparse.ArgumentParser, *, device: bool = False) -> None:
+def _config_flags(
+    parser: argparse.ArgumentParser,
+    *,
+    device: bool = False,
+    low_resource: bool = False,
+    csv_output: bool = False,
+) -> None:
     parser.add_argument(
         "-c",
         "--config",
@@ -421,6 +463,21 @@ def _config_flags(parser: argparse.ArgumentParser, *, device: bool = False) -> N
             "--device",
             choices=("auto", "cpu", "cuda"),
             help="override the configured runtime device",
+        )
+    if low_resource:
+        parser.add_argument(
+            "--low-resource",
+            action="store_true",
+            help=(
+                "use ResEncM, unload models between stages, and analyze only "
+                "the detected L3 vertebral territory"
+            ),
+        )
+    if csv_output:
+        parser.add_argument(
+            "--no-csv",
+            action="store_true",
+            help="omit convenience CSV mirrors; canonical Parquet tables are always retained",
         )
 
 
@@ -465,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="series_uid",
         help="DICOM Series Instance UID; required only when multiple CT series are present",
     )
-    _config_flags(analyze, device=True)
+    _config_flags(analyze, device=True, low_resource=True, csv_output=True)
     _leaf_json(analyze)
     analyze.set_defaults(handler=_cmd_analyze)
 
@@ -474,7 +531,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="convert one DICOM CT series to NIfTI",
         description=(
             "Convert one DICOM CT series without changing its physical orientation. "
-            "One CT series is selected automatically; ambiguous inputs require --series."
+            "An adjacent .bodycomposition.json sidecar preserves privacy-safe technical "
+            "metadata for automatic use by analyze. One CT series is selected automatically; "
+            "ambiguous inputs require --series."
         ),
     )
     convert.add_argument("input", metavar="DICOM", type=Path, help="DICOM file or directory")
@@ -487,7 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
     convert.add_argument(
         "--overwrite",
         action="store_true",
-        help="atomically replace an existing output file",
+        help="replace an existing NIfTI and metadata pair",
     )
     _leaf_json(convert)
     convert.set_defaults(handler=_cmd_convert)
@@ -502,7 +561,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"result root (default: {DEFAULT_OUTPUT_ROOT})",
     )
     batch.add_argument("--run-id", help="optional stable run identifier")
-    _config_flags(batch, device=True)
+    batch.add_argument(
+        "--worker",
+        action="store_true",
+        help=(
+            "scheduler worker mode: exit successfully when all unfinished cases "
+            "are already owned by other workers"
+        ),
+    )
+    _config_flags(batch, device=True, low_resource=True, csv_output=True)
     _leaf_json(batch)
     batch.set_defaults(handler=_cmd_batch)
 
@@ -513,7 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
     model_list.set_defaults(handler=_cmd_models_list)
     for name, handler in (("verify", _cmd_models_verify), ("sync", _cmd_models_sync)):
         child = model_commands.add_parser(name)
-        _config_flags(child)
+        _config_flags(child, low_resource=True)
         child.add_argument("-m", "--model", action="append", choices=MODEL_IDS)
         _leaf_json(child)
         child.set_defaults(handler=handler)
@@ -539,6 +606,19 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("run", metavar="RUN", type=Path)
     _leaf_json(aggregate)
     aggregate.set_defaults(handler=_cmd_results_aggregate)
+    export_csv = result_commands.add_parser(
+        "export-csv",
+        help="create CSV copies from one validated immutable case result",
+    )
+    export_csv.add_argument("manifest", metavar="CASE_MANIFEST", type=Path)
+    export_csv.add_argument("-o", "--output", required=True, type=Path)
+    export_csv.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace differing CSV files in the selected export directory",
+    )
+    _leaf_json(export_csv)
+    export_csv.set_defaults(handler=_cmd_results_export_csv)
     review = result_commands.add_parser("review-queue")
     review.add_argument("run", metavar="RUN", type=Path)
     _leaf_json(review)
@@ -573,7 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use full publication readiness, rather than analysis readiness, as the exit gate",
     )
-    _config_flags(doctor, device=True)
+    _config_flags(doctor, device=True, low_resource=True)
     _leaf_json(doctor)
     doctor.set_defaults(handler=_cmd_doctor)
 

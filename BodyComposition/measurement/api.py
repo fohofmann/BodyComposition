@@ -39,10 +39,10 @@ IDENTITY_COLUMNS = ("schema_version", "run_id", "analysis_id", "case_id")
 
 @dataclass(frozen=True)
 class SignatureComponents:
-    """The identity-linked longitudinal and global tissue-quality signature."""
+    """Identity-linked longitudinal tissue measures and native compartment HU."""
 
     longitudinal: pd.DataFrame
-    tissue_hu_distributions: pd.DataFrame
+    compartment_hu_distributions: pd.DataFrame
 
 
 def _validated_height_m(height_m: float | None) -> float | None:
@@ -108,8 +108,8 @@ def _add_range_volume_indices(
     output["height_source"] = "caller_supplied_measured_height"
     for prefix in (
         "skeletal_muscle_tissue_hu_m29_150",
-        "sat_total_hu_m190_m30",
-        "vat_total_hu_m190_m30",
+        "sat_tissue_hu_m190_m30",
+        "vat_tissue_hu_m190_m30",
     ):
         source = f"{prefix}_volume_cm3"
         if source not in output:
@@ -267,7 +267,7 @@ def load_signature(directory: str | Path) -> SignatureComponents:
     tables = load_measurement_tables(directory)
     return SignatureComponents(
         longitudinal=tables["signature"],
-        tissue_hu_distributions=tables["hu_distributions"],
+        compartment_hu_distributions=tables["hu_distributions"],
     )
 
 

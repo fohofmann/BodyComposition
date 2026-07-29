@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import unicodedata
@@ -17,7 +18,11 @@ import numpy as np
 import SimpleITK as sitk
 
 from BodyComposition.provenance import file_sha256, image_pixel_sha256
+from BodyComposition.schema_validation import validate_payload
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
+
+CONVERSION_METADATA_SCHEMA_VERSION = "1.0.0"
+CONVERSION_METADATA_TYPE = "bodycomposition-dicom-conversion"
 
 
 class DicomInputError(ValueError):
@@ -28,6 +33,12 @@ class DicomInputError(ValueError):
 
 class DicomSeriesSelectionError(DicomInputError):
     """Raised when DICOM series selection is absent, invalid, or ambiguous."""
+
+
+class DicomConversionMetadataError(ValueError):
+    """Raised when a conversion sidecar does not match its NIfTI CT."""
+
+    public_summary = "The NIfTI conversion metadata is invalid or does not match the CT."
 
 
 @dataclass(frozen=True)
@@ -53,6 +64,9 @@ class DicomConversionResult:
     output_path: Path
     output_content_sha256: str
     output_byte_size: int
+    metadata_path: Path
+    metadata_content_sha256: str
+    metadata_byte_size: int
     series_instance_uid: str
     input_summary: Mapping[str, Any]
 
@@ -62,6 +76,9 @@ class DicomConversionResult:
             "output_path": self.output_path,
             "output_content_sha256": self.output_content_sha256,
             "output_byte_size": self.output_byte_size,
+            "metadata_path": self.metadata_path,
+            "metadata_content_sha256": self.metadata_content_sha256,
+            "metadata_byte_size": self.metadata_byte_size,
             "series_instance_uid": self.series_instance_uid,
             "input_format": "dicom",
             "source_content_sha256": self.input_summary["source_content_sha256"],
@@ -454,6 +471,85 @@ def _nifti_suffix(path: Path) -> str:
     raise ValueError("The conversion output must end in .nii or .nii.gz.")
 
 
+def _conversion_metadata_path(path: Path) -> Path:
+    suffix = _nifti_suffix(path)
+    return path.with_name(f"{path.name[: -len(suffix)]}.bodycomposition.json")
+
+
+def _conversion_metadata_payload(
+    *,
+    input_summary: Mapping[str, Any],
+    output_content_sha256: str,
+    output_byte_size: int,
+    output_geometry: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": CONVERSION_METADATA_SCHEMA_VERSION,
+        "sidecar_type": CONVERSION_METADATA_TYPE,
+        "nifti": {
+            "content_sha256": output_content_sha256,
+            "byte_size": output_byte_size,
+            "pixel_sha256": input_summary["input_pixel_sha256"],
+            "geometry": dict(output_geometry),
+        },
+        "source_dicom": {
+            "content_sha256": input_summary["source_content_sha256"],
+            "byte_size": input_summary["source_byte_size"],
+            "dicom": dict(input_summary["dicom"]),
+        },
+    }
+
+
+def enrich_nifti_summary_from_conversion_metadata(
+    path: str | Path,
+    nifti_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Load a matching privacy-safe DICOM conversion sidecar when present."""
+
+    source = Path(path)
+    metadata_path = _conversion_metadata_path(source)
+    summary = dict(nifti_summary)
+    if not metadata_path.is_file():
+        return summary
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping):
+            raise TypeError("conversion metadata must contain a JSON object")
+        validate_payload(payload, "dicom_conversion.schema.json")
+    except (OSError, TypeError, ValueError) as error:
+        raise DicomConversionMetadataError(
+            "The BodyComposition conversion metadata sidecar could not be validated."
+        ) from error
+
+    nifti = payload["nifti"]
+    mismatches = []
+    if nifti["content_sha256"] != summary["source_content_sha256"]:
+        mismatches.append("file hash")
+    if nifti["byte_size"] != summary["source_byte_size"]:
+        mismatches.append("file size")
+    if nifti["pixel_sha256"] != summary["input_pixel_sha256"]:
+        mismatches.append("pixel hash")
+    if nifti["geometry"] != summary["geometry"]:
+        mismatches.append("physical geometry")
+    if mismatches:
+        raise DicomConversionMetadataError(
+            "The BodyComposition conversion metadata sidecar does not match the NIfTI CT "
+            f"({', '.join(mismatches)})."
+        )
+
+    source_dicom = payload["source_dicom"]
+    summary["dicom"] = dict(source_dicom["dicom"])
+    summary["prestage"] = {
+        "schema_version": payload["schema_version"],
+        "sidecar_type": payload["sidecar_type"],
+        "source_format": "dicom",
+        "source_content_sha256": source_dicom["content_sha256"],
+        "source_byte_size": source_dicom["byte_size"],
+        "sidecar_content_sha256": file_sha256(metadata_path),
+    }
+    return summary
+
+
 def convert_dicom(
     source: str | Path,
     output_path: str | Path,
@@ -465,14 +561,21 @@ def convert_dicom(
 
     Conversion preserves the SimpleITK/GDCM physical domain and does not
     reorient the image. DICOM patient and study metadata are not copied into
-    the NIfTI output.
+    the NIfTI output. A hash-bound JSON sidecar retains privacy-safe technical
+    provenance for automatic downstream use.
     """
 
     destination = Path(output_path)
     suffix = _nifti_suffix(destination)
+    metadata_destination = _conversion_metadata_path(destination)
     if destination.exists() and not overwrite:
         raise FileExistsError(
             f"Conversion output already exists: {destination}. Use overwrite=True to replace it."
+        )
+    if metadata_destination.exists() and not overwrite:
+        raise FileExistsError(
+            "Conversion metadata already exists: "
+            f"{metadata_destination}. Use overwrite=True to replace it."
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -483,7 +586,11 @@ def convert_dicom(
     for key in image.GetMetaDataKeys():
         image.EraseMetaData(key)
 
-    temporary = destination.parent / f".{destination.name}.{uuid4().hex}.partial{suffix}"
+    transaction_id = uuid4().hex
+    temporary = destination.parent / f".{destination.name}.{transaction_id}.partial{suffix}"
+    metadata_temporary = destination.parent / (
+        f".{metadata_destination.name}.{transaction_id}.partial"
+    )
     try:
         sitk.WriteImage(image, str(temporary), useCompression=suffix == ".nii.gz")
         verified = sitk.ReadImage(str(temporary))
@@ -497,14 +604,32 @@ def convert_dicom(
             raise DicomInputError("The converted NIfTI pixels differ from the selected DICOM CT.")
         output_digest = file_sha256(temporary)
         output_size = temporary.stat().st_size
+        metadata_payload = _conversion_metadata_payload(
+            input_summary=input_summary,
+            output_content_sha256=output_digest,
+            output_byte_size=output_size,
+            output_geometry=_geometry_summary(verified),
+        )
+        validate_payload(metadata_payload, "dicom_conversion.schema.json")
+        metadata_temporary.write_text(
+            json.dumps(metadata_payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        metadata_digest = file_sha256(metadata_temporary)
+        metadata_size = metadata_temporary.stat().st_size
         os.replace(temporary, destination)
+        os.replace(metadata_temporary, metadata_destination)
     finally:
         temporary.unlink(missing_ok=True)
+        metadata_temporary.unlink(missing_ok=True)
 
     return DicomConversionResult(
         output_path=destination,
         output_content_sha256=output_digest,
         output_byte_size=output_size,
+        metadata_path=metadata_destination,
+        metadata_content_sha256=metadata_digest,
+        metadata_byte_size=metadata_size,
         series_instance_uid=selected_uid,
         input_summary=input_summary,
     )
@@ -512,10 +637,12 @@ def convert_dicom(
 
 __all__ = [
     "DicomConversionResult",
+    "DicomConversionMetadataError",
     "DicomInputError",
     "DicomSeriesInfo",
     "DicomSeriesSelectionError",
     "convert_dicom",
     "dicom_image_summary",
     "discover_dicom_series",
+    "enrich_nifti_summary_from_conversion_metadata",
 ]

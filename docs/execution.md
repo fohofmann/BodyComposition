@@ -31,36 +31,78 @@ loaded once per process during normal execution. Completed and terminal cases
 are detected before claims, so every worker exits as soon as the batch is
 terminal; workers do not poll after all work is complete.
 
+Input geometry and content summaries are prepared once under a shared lock and
+then reused by compatible workers. The cache contains privacy-safe, path-free
+input summaries; DICOM patient-header fields are read only by the worker that
+actually owns that case. Every owner still verifies the input against the
+cached content identity immediately before inference.
+
 The output must be on a POSIX filesystem shared by all workers and must provide
 advisory file locking plus atomic same-filesystem directory creation and
-rename. Coordination state is stored below:
+rename. When combined PDF reporting is enabled, it must also support relative
+symbolic links. Coordination state is stored below:
 
 ```text
 <output>/.bodycomposition/execution/<run-id>/
 ```
 
+The first compatible worker records one canonical run start time beside the
+immutable plan digest. Every later worker reuses that time. Once all cases are
+terminal, a run-level lock admits exactly one finalizer: it writes the
+aggregates, validates the complete ordered report snapshot, derives the run end
+from the latest case terminal time, and atomically publishes
+`run_manifest.json` last. Other workers read that completed manifest instead of
+rewriting it. Thus all workers return the same run period and final output
+references even when they finish concurrently.
+
 ## Slurm array
 
-Each array element receives one GPU and its associated CPU allocation, then
-runs the same command:
+The example script contains only the worker command:
 
 ```bash
 #!/bin/bash
-#SBATCH --array=0-3
-#SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=48G
+set -euo pipefail
 
 srun bodycomposition batch \
-  /shared/input/cohort.json \
-  -o /shared/output \
+  "$1" \
+  -o "$2" \
+  --worker \
   --device auto
 ```
+
+The user supplies the array size and site-specific resources when submitting
+it. For example:
+
+```bash
+sbatch \
+  --array=0-31%8 \
+  --gpus-per-task=1 \
+  --cpus-per-task=8 \
+  --mem=48G \
+  bodycomposition-array.sh \
+  /shared/input/cohort.json \
+  /shared/output
+```
+
+`0-31` and `%8` are examples, not pipeline requirements. Choose at most one
+array element per case. The optional percent suffix limits simultaneous tasks;
+omit it when Slurm should admit as many workers as the allocation permits.
+Partition, account, time limit, container invocation, and mount directives are
+site-specific and deliberately remain outside the application.
 
 Slurm controls the CUDA device visible to each task. The pipeline uses that
 visible device as `cuda` and never maps Slurm task IDs to physical GPU IDs.
 Allocated CPU affinity is used for PyTorch and SimpleITK pre/post-processing;
 `runtime.cpu_threads` can impose a smaller explicit bound when needed.
+
+`--worker` affects only scheduler lifecycle. An array task exits successfully
+when every unfinished case is already held by another live worker, releasing
+its allocation instead of waiting for the slowest case. The worker that
+completes the last case publishes the aggregates and run manifest. If the last
+owner is terminated before it can finish, rerun the same idempotent command so
+a new worker can reclaim the stale case. The ordinary command without
+`--worker` waits for the complete `BatchResult` and remains the default for
+synchronous Python and local CLI use.
 
 The same pattern works with separate GPU jobs. For example, a shell or service
 manager may start one command with `CUDA_VISIBLE_DEVICES=0` and another with
@@ -125,6 +167,12 @@ segmentation bundles are released before the memory-intensive task-297/299
 measurement-support predictor is loaded, and that support predictor is
 released immediately after use. This prevents the standard pipeline from
 requiring all model families to fit in accelerator memory simultaneously.
+
+The explicit `--low-resource` L3 preset enables the same model-unloading
+strategy from the first attempt rather than waiting for an OOM marker. It also
+changes the scientific analysis scope and model choices as documented in
+[low-resource.md](low-resource.md); it is not an automatic fallback for a
+full-CT request.
 
 ## Device fallback
 

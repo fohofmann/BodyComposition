@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Mapping
@@ -56,10 +57,15 @@ TISSUE_COMPARTMENT_LABELS = {
     7: "LUNG",
 }
 
-# ``tissue_labels`` is a single-label consensus visualization derived from the
-# immutable model compartments. Optional overlapping definitions remain
-# downstream binary measurements and are never forced into this label map.
-TISSUE_LABELS = dict(TISSUE_COMPARTMENT_LABELS)
+# ``tissue_labels`` contains only the default HU-filtered body-composition
+# tissues. Native bone, heart, and lung predictions remain available in the
+# immutable compartment artifact.
+TISSUE_LABELS = {
+    1: "SM",
+    3: "SAT",
+    4: "aVAT",
+    5: "tVAT",
+}
 
 CONSENSUS_TISSUE_PROFILE_ID = (
     "consensus_hu_muscle_m29_150_adipose_m190_m30_v1"
@@ -71,22 +77,22 @@ CANONICAL_TISSUE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "source_labels": ["SM"],
         "hu_range": [-29, 150],
     },
-    "sat_total_hu_m190_m30": {
+    "sat_tissue_hu_m190_m30": {
         "enabled": True,
         "source_labels": ["SAT"],
         "hu_range": [-190, -30],
     },
-    "avat_hu_m190_m30": {
+    "avat_tissue_hu_m190_m30": {
         "enabled": True,
         "source_labels": ["aVAT"],
         "hu_range": [-190, -30],
     },
-    "tvat_hu_m190_m30": {
+    "tvat_tissue_hu_m190_m30": {
         "enabled": True,
         "source_labels": ["tVAT"],
         "hu_range": [-190, -30],
     },
-    "vat_total_hu_m190_m30": {
+    "vat_tissue_hu_m190_m30": {
         "enabled": True,
         "source_labels": ["aVAT", "tVAT", "VAT"],
         "hu_range": [-190, -30],
@@ -113,6 +119,12 @@ def _default_mapping() -> dict[str, Any]:
                 "BODYCOMPOSITION_MODEL_ROOT",
                 "~/.cache/bodycomposition/models",
             )
+        },
+        "analysis": {
+            "scope": "full_ct",
+            "l3": {
+                "inference_context_mm": 120.0,
+            },
         },
         "orientation": {
             "backend": "ctdeeprot_2d_v1",
@@ -185,8 +197,8 @@ def _default_mapping() -> dict[str, Any]:
             "measure_aggregation": "territory_mean",
             "measurement_columns": [
                 "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
-                "vat_total_hu_m190_m30_mean_csa_cm2",
-                "sat_total_hu_m190_m30_mean_csa_cm2",
+                "vat_tissue_hu_m190_m30_mean_csa_cm2",
+                "sat_tissue_hu_m190_m30_mean_csa_cm2",
                 "trunk_mean_circumference_cm",
             ],
             "vertebral_range": "detected",
@@ -207,6 +219,7 @@ def _default_mapping() -> dict[str, Any]:
             "timeout_seconds": 14400,
             "fail_fast": False,
             "deterministic": True,
+            "unload_models_between_stages": False,
             "allow_dirty": False,
         },
         "output": {
@@ -214,6 +227,7 @@ def _default_mapping() -> dict[str, Any]:
             "save_tissue_compartments": True,
             "save_body_surface": True,
             "save_review_images": True,
+            "save_csv_tables": True,
             "log_level": "INFO",
         },
     }
@@ -279,6 +293,22 @@ def _validate_public(data: Mapping[str, Any]) -> None:
     }:
         raise ConfigError("Unknown body_surface.backend.")
 
+    analysis = data["analysis"]
+    if analysis["scope"] not in {"full_ct", "l3_vertebral_level"}:
+        raise ConfigError(
+            "analysis.scope must be full_ct or l3_vertebral_level."
+        )
+    context_mm = analysis["l3"]["inference_context_mm"]
+    if (
+        isinstance(context_mm, bool)
+        or not isinstance(context_mm, (int, float))
+        or not math.isfinite(context_mm)
+        or context_mm < 0
+    ):
+        raise ConfigError(
+            "analysis.l3.inference_context_mm must be a non-negative number."
+        )
+
     runtime = data["runtime"]
     if runtime["device"] not in {"auto", "cpu", "cuda"}:
         raise ConfigError("runtime.device must be auto, cpu, or cuda.")
@@ -295,13 +325,19 @@ def _validate_public(data: Mapping[str, Any]) -> None:
         )
     if runtime["timeout_seconds"] <= 0:
         raise ConfigError("runtime.timeout_seconds must be positive.")
-    for key in ("fail_fast", "deterministic", "allow_dirty"):
+    for key in (
+        "fail_fast",
+        "deterministic",
+        "unload_models_between_stages",
+        "allow_dirty",
+    ):
         _require_bool(runtime, key)
     for key in (
         "save_tissue_labels",
         "save_tissue_compartments",
         "save_body_surface",
         "save_review_images",
+        "save_csv_tables",
     ):
         _require_bool(data["output"], key)
     if data["output"]["log_level"] not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
@@ -440,7 +476,13 @@ class PipelineConfig:
 
         value = self.normalized()
         value.pop("models")
-        for key in ("device", "cpu_threads", "timeout_seconds", "allow_dirty"):
+        for key in (
+            "device",
+            "cpu_threads",
+            "timeout_seconds",
+            "unload_models_between_stages",
+            "allow_dirty",
+        ):
             value["runtime"].pop(key)
         value["output"].pop("log_level")
         value["vertebrae"].pop("device")
@@ -477,7 +519,10 @@ class PipelineConfig:
                     "save_mask": value["output"]["save_body_surface"],
                 },
                 "review": {"enabled": value["output"]["save_review_images"]},
-                "export": {"parquet": True, "csv": False},
+                "export": {
+                    "parquet": True,
+                    "csv": value["output"]["save_csv_tables"],
+                },
             }
         )
         orientation = copy.deepcopy(value["orientation"])
@@ -528,12 +573,12 @@ class PipelineConfig:
                 "timeout": value["runtime"]["timeout_seconds"],
             },
             "orientation": orientation,
+            "analysis": copy.deepcopy(value["analysis"]),
             "segmentation": {"save_label": value["output"]["save_tissue_compartments"]},
             "vertebrae": vertebrae,
             "tissue": tissue,
             "measurements": measurements,
             "reporting": copy.deepcopy(value["reporting"]),
-            "crop": {},
             "LBL_TISSUE_COMPARTMENTS": copy.deepcopy(TISSUE_COMPARTMENT_LABELS),
             "LBL_TISSUE": copy.deepcopy(TISSUE_LABELS),
             "LBL_VERTEBRALBODIES": copy.deepcopy(VERTEBRAL_LABELS),
@@ -542,6 +587,25 @@ class PipelineConfig:
 
 def default_config() -> PipelineConfig:
     return PipelineConfig.model_validate({})
+
+
+def low_resource_config(
+    base: PipelineConfig | Mapping[str, Any] | None = None,
+) -> PipelineConfig:
+    """Return the supported L3-only ResEncM analysis preset.
+
+    The preset retains orientation assessment and vertebral localization on the
+    complete CT. Tissue inference is restricted to the L3 vertebral territory,
+    with surrounding slices used only as model context.
+    """
+
+    value = PipelineConfig.model_validate(base).normalized()
+    value["analysis"]["scope"] = "l3_vertebral_level"
+    value["vertebrae"]["backend"] = "vertebral_bodies_resenc_m"
+    value["tissue"]["backend"] = "bodycomposition_resenc_m_v1"
+    value["measurements"]["landmarks"]["enabled"] = False
+    value["runtime"]["unload_models_between_stages"] = True
+    return PipelineConfig.model_validate(value)
 
 
 def _schema_for_default(value: Any) -> dict[str, Any]:
@@ -580,6 +644,13 @@ def configuration_schema() -> dict[str, Any]:
     )
     properties = schema["properties"]
     properties["schema_version"] = {"const": CONFIG_SCHEMA_VERSION}
+    properties["analysis"]["properties"]["scope"]["enum"] = [
+        "full_ct",
+        "l3_vertebral_level",
+    ]
+    properties["analysis"]["properties"]["l3"]["properties"][
+        "inference_context_mm"
+    ]["minimum"] = 0
     properties["orientation"]["properties"]["backend"]["enum"] = ["ctdeeprot_2d_v1"]
     properties["orientation"]["properties"]["policy"]["enum"] = ["check_and_safe_repair"]
     properties["orientation"]["properties"]["model_device"]["enum"] = ["auto", "cpu", "cuda"]

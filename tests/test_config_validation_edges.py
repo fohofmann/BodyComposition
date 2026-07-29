@@ -52,7 +52,7 @@ def _set_path(config: dict[str, Any], path: str, value: Any) -> None:
         ("measurements.landmarks.minimum_voxels", 0),
         ("measurements.body_surface.threshold_hu", True),
         ("measurements.export.parquet", False),
-        ("measurements.export.csv", True),
+        ("measurements.export.csv", "true"),
         ("LBL_TISSUE_COMPARTMENTS", {}),
         ("LBL_TISSUE", {}),
         ("LBL_VERTEBRALBODIES", {0: "invalid"}),
@@ -90,8 +90,13 @@ def test_runtime_configuration_checks_cross_field_constraints(base_config):
 
     unexpected_filter_label = deepcopy(base_config)
     unexpected_filter_label["LBL_TISSUE"][8] = "overlapping_definition"
-    with pytest.raises(ConfigError, match="same stable labels"):
+    with pytest.raises(ConfigError, match="released HU-filtered tissue label schema"):
         validate_config(unexpected_filter_label)
+
+    renamed_compartment = deepcopy(base_config)
+    renamed_compartment["LBL_TISSUE_COMPARTMENTS"][1] = "muscle"
+    with pytest.raises(ConfigError, match="retain their compartment names"):
+        validate_config(renamed_compartment)
 
 
 @pytest.mark.parametrize(
@@ -178,30 +183,3 @@ def test_runtime_configuration_keeps_canonical_tissue_definitions_enabled(base_c
     ]["enabled"] = False
     with pytest.raises(ConfigError, match="immutable"):
         validate_config(disabled)
-
-
-@pytest.mark.parametrize(
-    ("field", "invalid"),
-    [
-        ("roi", [True]),
-        ("roi_anatomical", [""]),
-        ("axes", [True]),
-        ("margin", [0]),
-    ],
-)
-def test_runtime_configuration_rejects_malformed_crop_contracts(
-    base_config,
-    field,
-    invalid,
-):
-    config = deepcopy(base_config)
-    config["crop"]["test"] = {
-        "roi": [1],
-        "roi_anatomical": ["L3"],
-        "axes": [True, True, True, True, True, True],
-        "margin": [0, 0, 0, 0, 0, 0],
-    }
-    config["crop"]["test"][field] = invalid
-
-    with pytest.raises(ConfigError):
-        validate_config(config)

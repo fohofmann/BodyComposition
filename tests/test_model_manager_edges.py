@@ -199,6 +199,7 @@ def test_verify_model_routes_spineps_and_checks_dependency_versions(
     ready = models.verify_model("spineps_veridah_ct_v1", tmp_path)
     assert ready.ready
     assert ready.checked_files
+    assert ready.asset["tptbox_code_license"] == "Apache-2.0"
 
     def missing_or_wrong(name):
         if name == "SPINEPS":

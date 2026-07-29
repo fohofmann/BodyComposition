@@ -11,7 +11,7 @@ import numpy as np
 
 from BodyComposition.tissue import cleanup_tissue_mask, prepare_classification_image
 
-TISSUE_NAME_ALIASES = {
+COMPARTMENT_NAME_ALIASES = {
     "sm": "sm",
     "skeletalmuscle": "sm",
     "bone": "bone",
@@ -31,9 +31,9 @@ TISSUE_NAME_ALIASES = {
 
 DERIVED_RATIO_DEFINITIONS = (
     (
-        "vat_to_sat_ratio_hu_m190_m30",
-        "vat_total_hu_m190_m30",
-        ("sat_total_hu_m190_m30",),
+        "vat_to_sat_tissue_ratio_hu_m190_m30",
+        "vat_tissue_hu_m190_m30",
+        ("sat_tissue_hu_m190_m30",),
     ),
 )
 
@@ -115,9 +115,9 @@ def _cleanup_settings(cleanup: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def canonical_tissue_name(name: str) -> str:
+def canonical_compartment_name(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]", "", str(name).lower())
-    return TISSUE_NAME_ALIASES.get(normalized, normalized)
+    return COMPARTMENT_NAME_ALIASES.get(normalized, normalized)
 
 
 def iter_configured_tissue_masks(
@@ -152,7 +152,9 @@ def iter_configured_tissue_masks(
             or native_label <= 0
         ):
             raise ValueError("Compartment label identifiers must be positive integers.")
-        labels_by_name.setdefault(canonical_tissue_name(name), []).append(native_label)
+        labels_by_name.setdefault(canonical_compartment_name(name), []).append(
+            native_label
+        )
 
     unknown_labels = sorted(
         int(label)
@@ -170,7 +172,7 @@ def iter_configured_tissue_masks(
         if not bool(definition["enabled"]):
             continue
         source_names = [
-            canonical_tissue_name(name) for name in definition["source_labels"]
+            canonical_compartment_name(name) for name in definition["source_labels"]
         ]
         source_labels = [
             native_label

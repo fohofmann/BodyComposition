@@ -36,7 +36,7 @@ bodycomposition batch \
   cohort.json \
   -o /shared/output \
   --config cohort.yaml \
-  --run-id crc-2024-v1 \
+  --run-id cohort-001-v1 \
   --device auto --json
 ```
 
@@ -45,10 +45,17 @@ cases are reused only by identical `analysis_id`. A reused `run_id` with a
 different plan fails. Failed cases remain visible; after fixing their cause,
 start a new governed run rather than mutating the old result.
 
+CSV mirrors are included by default for convenient downstream use. Add
+`--no-csv` before the first run only when the governed archive will retain and
+consume the canonical Parquet representation directly. Because output
+selection is part of the shared run plan, all workers in a run must use the
+same choice.
+
 For several GPUs, let the scheduler/container runtime assign one accelerator
-per process and start the same command for every worker. The shared output must
-support POSIX advisory locks and atomic same-filesystem directory rename. See
-[execution.md](execution.md).
+per process and start the same command with `--worker` for every scheduler
+worker. The shared output must support POSIX advisory locks, atomic
+same-filesystem directory rename, and relative symbolic links when combined
+PDF reporting is enabled. See [execution.md](execution.md).
 
 ## Coverage and missingness
 
@@ -63,7 +70,7 @@ registration without their anatomical assignment and coverage context.
 Use the three-bin `vertebrae.parquet` for compact anatomical summaries and
 `summaries.parquet` for prespecified established views. The default comparison
 signature consists of the frozen 100-by-20-mm translation-only grid in
-`signature.parquet` plus whole-volume native SM/SAT/aVAT/tVAT attenuation
+`signature.parquet` plus analyzed-volume native SM/SAT/aVAT/tVAT attenuation
 distributions in `hu_distributions.parquet`. Retain alignment
 method/confidence, coverage, variants, histogram tails, and missingness in
 every cohort analysis. Alternative functional representations or added tissue

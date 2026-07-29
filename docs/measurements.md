@@ -1,11 +1,11 @@
 # Canonical physical measurements
 
 The canonical pipeline writes one outcome-blind measurement bundle per case.
-Schema `3.2.0` preserves every acquired slice, compact native vertebral
+Schema `3.4.0` preserves every acquired slice, compact native vertebral
 summaries, established case summaries, and a comparable fixed-millimetre
 longitudinal signature. Its second, identity-linked component stores fixed-bin
-whole-volume HU distributions for the four report tissues. No tissue curve is
-stretched and no unscanned anatomy is imputed.
+analyzed-volume HU distributions for four native compartments. No
+longitudinal curve is stretched and no unscanned anatomy is imputed.
 
 ## Authoritative files
 
@@ -27,6 +27,13 @@ metadata repeats the identity and table name. The reader rejects missing
 tables/columns, incompatible field types, mixed identities, invalid fixed bins,
 and unsupported schema versions.
 
+By default, every Parquet table also has a same-name `.csv` mirror with
+identical columns and rows. These files make ordinary inspection and analysis
+easier but do not replace the typed, identity-validated Parquet contract. Add
+`--no-csv` to `analyze` or `batch` when duplicate representations are not
+wanted. `bodycomposition results export-csv` can create the mirrors later from
+one validated case bundle into a separate directory.
+
 ## Geometry and units
 
 - SimpleITK metadata, sizes, and indices are `x-y-z`.
@@ -43,53 +50,66 @@ For one binary label on an acquired plane:
 
 Range and bin aggregation uses exact overlap between each acquired slice slab
 and the requested physical superior-axis interval. Mean CSA is overlap-
-weighted where a boundary cuts a slice. Mean HU is pooled by contributing
-tissue voxels and overlap fraction; it is not an unweighted average of slice
-means.
+weighted where a boundary cuts a slice. Mean HU is pooled by contributing mask
+voxels and overlap fraction; it is not an unweighted average of slice means.
 
 ## Tissue measurements
 
 The raw model compartments and default HU definitions are documented in
-[tissue_definitions.md](tissue_definitions.md). Each tissue prefix in
-`slices.parquet` has:
+[tissue_definitions.md](tissue_definitions.md). Native outputs use a
+`<name>_compartment` prefix; HU-filtered outputs use a `<name>_tissue_hu_*`
+prefix. Each prefix in `slices.parquet` has:
 
 - `<name>_voxel_count`;
 - `<name>_area_cm2`, `<name>_area_valid`, and `<name>_area_reason`; and
 - `<name>_mean_hu`, `<name>_hu_valid`, and `<name>_hu_reason`.
 
-Raw `sm_mean_hu` measures the complete muscle compartment. The filtered
+Raw `sm_compartment_mean_hu` measures the complete muscle compartment. The filtered
 `skeletal_muscle_tissue_hu_m29_150_*` fields are the conventional
 -29-to-150 HU subset. The default does not calculate IMAT, LAMA, or NAMA.
 
-A supported tissue that is absent on a valid scanned slice has CSA zero and
-mean HU null with reason `empty_tissue`. An invalid measurement is null with
-its reason. Unscanned signature bins are null with coverage zero. These states
-must not be merged during analysis.
+A native compartment that is absent on a valid scanned slice has CSA zero and
+mean HU null with reason `empty_compartment`; an absent filtered tissue uses
+`empty_tissue`. An invalid measurement is null with its reason. Unscanned
+signature bins are null with coverage zero. These states must not be merged
+during analysis.
+
+Every slice also records `analysis_scope` and
+`body_composition_analysis_available`. In the standard `full_ct` scope, every acquired
+slice is available. In the explicit `l3_vertebral_level` scope, rows outside
+the L3 target remain in the table for geometry and anatomical registration,
+but tissue measurements are invalid with reason `outside_analysis_region`;
+zero label counts on those rows are not biological zero measurements.
 
 ## `hu_distributions.parquet`
 
-This table is the authoritative source for the PDF tissue-HU distributions.
+This table is the authoritative source for the PDF native-compartment HU
+distributions.
 It contains 68 ordered bins from -190 to 150 HU for each of `SM`, `SAT`,
 `aVAT`, and `tVAT`; bins are 5 HU wide, left-closed/right-open, with the final
-bin closed at 150 HU. Tissue membership comes from the unfiltered model-native
-compartment labels, not the configured HU-restricted downstream definitions.
+bin closed at 150 HU. Compartment membership comes from the unfiltered
+model-native labels, not the configured HU-restricted tissue definitions.
 Histogram values and exact linear-method quartiles come from the unchanged
 prepared CT voxels.
 
-The scope is always recorded as `analyzed_volume`, with the acquired physical
+The scope is always recorded as `analyzed_volume`, with the analyzed physical
 inferior and superior voxel-cell bounds and the number of contributing slices.
 This remains correct for oblique images because the bounds use all eight
 physical image corners rather than only slice-centre positions. Counts
 below or above the fixed display range and non-finite values are recorded
 separately, never silently discarded. `voxel_fraction` uses all selected
-tissue voxels as its denominator, so clipped/non-finite counts remain
+compartment voxels as its denominator, so clipped/non-finite counts remain
 accountable.
+
+For the standard scope the analyzed volume is the complete prepared CT. For
+the low-resource scope it is the retained L3 target, not the larger model
+context crop.
 
 ## Body/trunk support
 
 The default `tissue_segmentation_envelope_v1` builds a deterministic
 measurement envelope from the raw model compartments. It does not rewrite the
-tissue masks. It retains all source tissue voxels, uses physical closing and
+tissue mask. It retains all source compartment voxels, uses physical closing and
 smoothing only for the envelope, and identifies the primary trunk component
 per slice.
 
@@ -130,7 +150,7 @@ The table contains exactly three ordered rows per detected supported level.
 - native label, anatomical level, variants, and sequence-gap flags;
 - vertebral-body centroid and extent;
 - territory/bin physical bounds, completeness, coverage, and QC;
-- mean CSA and pooled HU for every available tissue;
+- mean CSA and pooled HU for every available compartment and filtered tissue;
 - trunk mean CSA and circumference.
 
 Volume is not duplicated. For a fully covered valid bin:
@@ -200,9 +220,9 @@ interpretation is separately validated.
 The default comparison signature has two components linked by
 `schema_version`, `case_id`, `run_id`, and `analysis_id`:
 
-1. `signature.parquet` contains the compact longitudinal anatomy and tissue
-   profile; and
-2. `hu_distributions.parquet` contains the global native-tissue attenuation
+1. `signature.parquet` contains compact longitudinal anatomy with explicitly
+   named native-compartment and HU-filtered-tissue channels; and
+2. `hu_distributions.parquet` contains the global native-compartment attenuation
    shapes described above.
 
 This preserves both anatomical position and tissue-quality shape without
@@ -245,19 +265,21 @@ Each bin includes:
 - dominant vertebral territory and overlap fraction;
 - alignment and bin validity;
 - trunk mean CSA and circumference;
-- mean CSA and pooled mean HU for raw SM, bone, heart, and lung;
-- mean CSA and pooled mean HU for conventional skeletal-muscle tissue,
-  SAT, aVAT, and tVAT;
-- CSA divided by trunk CSA for each tissue channel.
+- mean CSA and pooled mean HU for `sm_compartment`, `bone_compartment`,
+  `heart_compartment`, and `lung_compartment`;
+- mean CSA and pooled mean HU for
+  `skeletal_muscle_tissue_hu_m29_150`, `sat_tissue_hu_m190_m30`,
+  `avat_tissue_hu_m190_m30`, and `tvat_tissue_hu_m190_m30`; and
+- CSA divided by trunk CSA for each measurement channel.
 
 Raw values and normalized fractions are stored together. This keeps patient
 size information available while providing a simple within-trunk comparison.
 One fraction is valid only when its tissue numerator and trunk denominator
 cover the same physical part of the bin; differing valid-support coverage is
 reported as an invalid measurement rather than mixed silently.
-The exact redundant total-VAT union is omitted from the default signature
-because aVAT and tVAT remain separate; it is still available in the slice,
-vertebral, range, and summary tables.
+The redundant `vat_tissue_hu_m190_m30` union is omitted from the default
+signature because filtered aVAT and tVAT remain separate; it is still
+available in the slice, vertebral, range, and summary tables.
 
 If a named tissue profile enables additional definitions, corresponding CSA,
 HU, and trunk-fraction channels are appended to the signature. The fixed grid
@@ -270,8 +292,9 @@ profile.
   null.
 - `0 < coverage_fraction < full_coverage_tolerance`: the observed portion is
   summarized and the bin is marked `partial_fov`.
-- scanned bin with no supported tissue: CSA is valid zero, mean HU is null
-  with `empty_tissue`.
+- scanned bin with no supported native compartment or filtered tissue: CSA is
+  valid zero and mean HU is null with `empty_compartment` or `empty_tissue`,
+  respectively.
 - failed tissue/trunk measurement: value is null with the specific QC reason.
 - unresolved vertebral reference: physical bounds and measurements are null
   with `missing_anchor` or `invalid_extent`.

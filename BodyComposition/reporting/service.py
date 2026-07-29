@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from io import BytesIO
@@ -31,7 +32,6 @@ from BodyComposition.reporting.contracts import (
     CASE_MANIFEST_NAME,
     CASE_REPORT_NAME,
     COMBINED_REPORT_NAME,
-    MAX_REVIEW_SUMMARY_ROWS,
     MEASUREMENT_DEFINITIONS,
     REPORT_SCHEMA_VERSION,
     CaseReportInput,
@@ -41,6 +41,7 @@ from BodyComposition.reporting.contracts import (
     validate_case_id,
 )
 from BodyComposition.reporting.metrics import (
+    ROUTINE_BOUNDARY_REVIEW_CODES,
     aggregate_vertebral_measurements,
     collect_review_entries,
     public_text,
@@ -55,11 +56,15 @@ from BodyComposition.reporting.render import (
     LAYOUT_REVISION,
     PAGE_HEIGHT,
     PAGE_WIDTH,
+    RUN_COVER_HIDDEN_MODEL_ROLES,
+    RUN_COVER_MAX_CONFIGURATION_ROWS,
+    RUN_COVER_MAX_PIPELINE_ROWS,
+    RUN_COVER_REVISION,
     font_manifest,
     page_number_overlay,
     render_case_page,
     render_failure_page,
-    render_review_summary_page,
+    render_run_cover_page,
 )
 from BodyComposition.utils.digests import array_sha256
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
@@ -224,7 +229,8 @@ def _validate_case_sources(case: CaseReportInput) -> None:
         )
     except ValueError as error:
         raise ReportValidationError(
-            "Report tissue HU distributions violate the current native-compartment "
+            "Report compartment HU distributions violate the current "
+            "native-compartment "
             "contract; regenerate measurements before reporting."
         ) from error
     vertebrae = case.measurement_bundle.vertebrae
@@ -263,9 +269,18 @@ def _validate_case_sources(case: CaseReportInput) -> None:
     )
     _validate_slice_geometry(case, prepared_geometry)
 
-    tissue_provenance = case.measurement_bundle.provenance.get("tissue")
+    body_composition_provenance = case.measurement_bundle.provenance.get(
+        "body_composition"
+    )
+    tissue_provenance = (
+        body_composition_provenance.get("tissues")
+        if isinstance(body_composition_provenance, Mapping)
+        else None
+    )
     expected_tissue_digest = (
-        tissue_provenance.get("label_sha256") if isinstance(tissue_provenance, Mapping) else None
+        tissue_provenance.get("sha256")
+        if isinstance(tissue_provenance, Mapping)
+        else None
     )
     if not isinstance(expected_tissue_digest, str) or not re.fullmatch(
         r"[a-f0-9]{64}", expected_tissue_digest
@@ -453,6 +468,7 @@ def renderer_manifest() -> dict[str, Any]:
     return {
         "bodycomposition": __version__,
         "layout_revision": LAYOUT_REVISION,
+        "run_cover_revision": RUN_COVER_REVISION,
         "reportlab": reportlab.Version,
         "pypdf": pypdf.__version__,
         "font": font_manifest(),
@@ -585,6 +601,15 @@ def validate_report_manifest(
         jsonschema.validate(payload, _manifest_schema())
     except jsonschema.ValidationError as error:
         raise ReportValidationError(f"Invalid report manifest: {error.message}") from error
+    publication = payload.get("publication")
+    if (
+        payload.get("manifest_type") == "export"
+        and isinstance(publication, Mapping)
+        and publication.get("snapshot_id") != payload.get("report_id")
+    ):
+        raise ReportValidationError(
+            "Combined-report snapshot identity differs from its report identifier."
+        )
     if pdf_path is not None:
         path = Path(pdf_path)
         expected_digest = payload.get("pdf_sha256") or payload.get("combined_pdf_sha256")
@@ -907,14 +932,744 @@ def render_failed_case_report(
     )
 
 
+def _joined_cover_values(values: Sequence[Any]) -> str | None:
+    unique = [
+        value
+        for value in dict.fromkeys(
+            str(item).strip() for item in values if item is not None and str(item).strip()
+        )
+        if value
+    ]
+    return " | ".join(unique) if unique else None
+
+
+def _cover_number(value: Any) -> str:
+    number = float(value)
+    return str(int(number)) if number.is_integer() else f"{number:g}"
+
+
+def _cover_hu_range(
+    tissue_definitions: Mapping[str, Any] | None,
+    *,
+    source_labels: set[str],
+) -> str | None:
+    if not tissue_definitions:
+        return None
+    ranges = {
+        tuple(item["hu_range"])
+        for item in tissue_definitions.values()
+        if isinstance(item, Mapping)
+        and item.get("enabled", True)
+        and isinstance(item.get("source_labels"), Sequence)
+        and source_labels.intersection(str(label) for label in item["source_labels"])
+        and isinstance(item.get("hu_range"), Sequence)
+        and len(item["hu_range"]) == 2
+    }
+    if len(ranges) != 1:
+        return None
+    lower, upper = next(iter(ranges))
+    return f"{_cover_number(lower)}..{_cover_number(upper)}"
+
+
+def run_cover_configuration_rows(
+    settings: ReportingSettings,
+    *,
+    normalized_config: Mapping[str, Any] | None = None,
+    orientation_policy: str | None = None,
+    tissue_definitions: Mapping[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    """Return settings that affect results or scientific reproducibility."""
+
+    rows: list[dict[str, str]] = []
+    config = normalized_config if isinstance(normalized_config, Mapping) else {}
+
+    def section(name: str) -> Mapping[str, Any]:
+        value = config.get(name)
+        return value if isinstance(value, Mapping) else {}
+
+    def add(label: str, value: str | None) -> None:
+        if value is not None and str(value).strip():
+            rows.append({"label": label, "value": str(value)})
+
+    def on_off(value: Any) -> str:
+        return "On" if bool(value) else "Off"
+
+    def percentage(value: Any) -> str:
+        return f"{_cover_number(float(value) * 100.0)}%"
+
+    analysis = section("analysis")
+    scope = analysis.get("scope")
+    if scope:
+        scope_text = {
+            "full_ct": "Full CT",
+            "l3_vertebral_level": "L3 vertebral level",
+        }.get(str(scope), str(scope).replace("_", " "))
+        l3 = analysis.get("l3")
+        if (
+            scope == "l3_vertebral_level"
+            and isinstance(l3, Mapping)
+            and l3.get("inference_context_mm") is not None
+        ):
+            scope_text = (
+                f"{scope_text} | context "
+                f"{_cover_number(l3['inference_context_mm'])} mm"
+            )
+        add("Analysis scope", scope_text)
+
+    orientation = section("orientation")
+    if orientation_policy is None and orientation.get("policy") is not None:
+        orientation_policy = str(orientation["policy"])
+    if orientation_policy:
+        policy = {
+            "check_and_safe_repair": "Check and safe repair",
+        }.get(str(orientation_policy), str(orientation_policy).replace("_", " "))
+        add("Orientation policy", policy)
+
+    confidence = orientation.get("confidence")
+    if isinstance(confidence, Mapping):
+        if (
+            confidence.get("min_equivariant_votes") is not None
+            and confidence.get("max_obliquity_deg") is not None
+        ):
+            add(
+                "Orientation decision",
+                (
+                    f">={_cover_number(confidence['min_equivariant_votes'])} votes | "
+                    f"obliquity <={_cover_number(confidence['max_obliquity_deg'])} deg"
+                ),
+            )
+        if (
+            confidence.get("body_threshold_hu") is not None
+            and confidence.get("min_body_extent_mm") is not None
+            and confidence.get("min_body_pixels_per_slice") is not None
+        ):
+            add(
+                "Anatomy evidence",
+                (
+                    f">{_cover_number(confidence['body_threshold_hu'])} HU | "
+                    f">={_cover_number(confidence['min_body_extent_mm'])} mm | "
+                    f">={_cover_number(confidence['min_body_pixels_per_slice'])} px/slice"
+                ),
+            )
+        if confidence.get("allow_axial_180_repair") is not None:
+            add(
+                "Axial 180 repair",
+                on_off(confidence["allow_axial_180_repair"]),
+            )
+
+    body_surface = section("body_surface")
+    if all(
+        body_surface.get(name) is not None
+        for name in ("threshold_hu", "closing_radius_mm", "smoothing_sigma_mm")
+    ):
+        add(
+            "Body surface",
+            (
+                f"{_cover_number(body_surface['threshold_hu'])} HU | "
+                f"close {_cover_number(body_surface['closing_radius_mm'])} mm | "
+                f"smooth {_cover_number(body_surface['smoothing_sigma_mm'])} mm"
+            ),
+        )
+    if all(
+        body_surface.get(name) is not None
+        for name in ("min_component_volume_mm3", "minimum_component_area_mm2")
+    ):
+        add(
+            "Surface cleanup",
+            (
+                f">={_cover_number(body_surface['min_component_volume_mm3'])} mm3 | "
+                f">={_cover_number(body_surface['minimum_component_area_mm2'])} mm2"
+            ),
+        )
+
+    measurements = section("measurements")
+    if tissue_definitions is None:
+        value = measurements.get("tissue_definitions")
+        if isinstance(value, Mapping):
+            tissue_definitions = value
+    if (
+        measurements.get("full_coverage_tolerance") is not None
+        and measurements.get("l3_slab_length_mm") is not None
+    ):
+        add(
+            "Measurement coverage",
+            (
+                f"{percentage(measurements['full_coverage_tolerance'])} | "
+                f"L3 slab {_cover_number(measurements['l3_slab_length_mm'])} mm"
+            ),
+        )
+    vertebral_extent = measurements.get("vertebral_extent")
+    if (
+        isinstance(vertebral_extent, Mapping)
+        and vertebral_extent.get("minimum_component_voxels") is not None
+        and vertebral_extent.get("maximum_removed_fraction") is not None
+    ):
+        add(
+            "Vertebral cleanup",
+            (
+                f">={_cover_number(vertebral_extent['minimum_component_voxels'])} voxels | "
+                f"removed <={percentage(vertebral_extent['maximum_removed_fraction'])}"
+            ),
+        )
+    sm_range = _cover_hu_range(
+        tissue_definitions,
+        source_labels={"SM"},
+    )
+    at_range = _cover_hu_range(
+        tissue_definitions,
+        source_labels={"SAT", "aVAT", "tVAT", "VAT"},
+    )
+    if sm_range is None and any(
+        "hu_m29_150" in column for column in settings.measurement_columns
+    ):
+        sm_range = "-29..150"
+    if at_range is None and any(
+        "hu_m190_m30" in column for column in settings.measurement_columns
+    ):
+        at_range = "-190..-30"
+    if sm_range is not None:
+        add("SM HU filter", f"{sm_range} HU")
+    if at_range is not None:
+        add("AT HU filter", f"{at_range} HU")
+    if sm_range is None and at_range is None:
+        add("HU filter", "Inactive")
+
+    runtime = section("runtime")
+    if runtime.get("deterministic") is not None:
+        add(
+            "Deterministic execution",
+            on_off(runtime["deterministic"]),
+        )
+
+    return rows
+
+
+def _run_cover_quality_issues(
+    case_reports: Sequence[CaseReportResult],
+) -> list[dict[str, Any]]:
+    """Aggregate non-technical review findings once per affected case."""
+
+    counts: Counter[tuple[str, str]] = Counter()
+    for report in case_reports:
+        case_findings = {
+            (entry.domain, entry.code)
+            for entry in report.review_entries
+            if entry.domain not in {"pipeline", "reporting"}
+            and entry.code not in ROUTINE_BOUNDARY_REVIEW_CODES
+        }
+        counts.update(case_findings)
+    return [
+        {
+            "domain": domain,
+            "code": code,
+            "count": count,
+        }
+        for (domain, code), count in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0][0], item[0][1]),
+        )
+    ]
+
+
+def _default_run_cover_summary(
+    case_reports: Sequence[CaseReportResult],
+    case_manifests: Sequence[Mapping[str, Any]],
+    *,
+    export_id: str,
+    output: Path,
+    settings: ReportingSettings,
+) -> dict[str, Any]:
+    case_counts = {
+        "succeeded": sum(item.status != "failed_page_generated" for item in case_reports),
+        "failed": sum(item.status == "failed_page_generated" for item in case_reports),
+        "skipped_identical": 0,
+        "cancelled": 0,
+    }
+    qc_counts = {
+        "pass": sum(not item.manual_review_required for item in case_reports),
+        "review": sum(
+            item.manual_review_required and item.status != "failed_page_generated"
+            for item in case_reports
+        ),
+        "fail": sum(item.status == "failed_page_generated" for item in case_reports),
+        "not_assessed": 0,
+    }
+    technical_metadata = [
+        manifest.get("technical_metadata", {})
+        if isinstance(manifest.get("technical_metadata"), Mapping)
+        else {}
+        for manifest in case_manifests
+    ]
+    started_values = [
+        metadata.get("analysis_started_at")
+        for metadata in technical_metadata
+        if metadata.get("analysis_started_at")
+    ]
+    error_counts = Counter(
+        (entry.domain, entry.code)
+        for item in case_reports
+        for entry in item.review_entries
+        if entry.domain in {"pipeline", "reporting"}
+    )
+    renderer = case_manifests[0].get("renderer", {})
+    renderer = renderer if isinstance(renderer, Mapping) else {}
+    return {
+        "run_id": export_id,
+        "document_state": "complete",
+        "planned_case_count": len(case_reports),
+        "included_case_count": len(case_reports),
+        "remaining_case_count": 0,
+        "included_case_ids": [item.case_id for item in case_reports],
+        "case_counts": case_counts,
+        "qc_counts": qc_counts,
+        "manual_review_case_count": sum(
+            item.manual_review_required for item in case_reports
+        ),
+        "mean_runtime_seconds": None,
+        "runtime_case_count": 0,
+        "started_at": min(started_values) if started_values else None,
+        "ended_at": None,
+        "run_duration_seconds": None,
+        "updated_at": max(started_values) if started_values else None,
+        "layout": settings.layout,
+        "pipeline": {
+            "name": "BodyComposition",
+            "version": str(renderer.get("bodycomposition") or "Not recorded"),
+            "configuration_sha256": _digest_payload(settings.normalized()),
+            "source_revision": None,
+        },
+        "configuration_rows": run_cover_configuration_rows(settings),
+        "models": [],
+        "runtime": {
+            "device": _joined_cover_values(
+                [metadata.get("runtime_backend") for metadata in technical_metadata]
+            ),
+            "hardware": _joined_cover_values(
+                [metadata.get("runtime_hardware") for metadata in technical_metadata]
+            ),
+            "cuda": None,
+            "torch": None,
+            "python": None,
+            "strategy": None,
+        },
+        "technical_errors": [
+            {"stage": domain, "code": code, "count": count}
+            for (domain, code), count in sorted(error_counts.items())
+        ],
+        "quality_issues": _run_cover_quality_issues(case_reports),
+        "paths": {
+            "output_root": output.parent.name or ".",
+            "run_folder": output.name,
+            "input_directories": ["Not recorded"],
+            "output_directory": output.name,
+            "case_folder_pattern": "individual case report folders",
+            "failed_folder_pattern": "individual failure report folders",
+            "combined_pdf": COMBINED_REPORT_NAME,
+        },
+    }
+
+
+def _normalize_run_cover_summary(
+    value: Mapping[str, Any] | None,
+    *,
+    default: Mapping[str, Any],
+    case_reports: Sequence[CaseReportResult],
+) -> dict[str, Any]:
+    summary = json.loads(json.dumps(dict(default), allow_nan=False))
+    if value is not None:
+        if not isinstance(value, Mapping):
+            raise TypeError("run_summary must be a mapping.")
+        unknown = sorted(set(value) - set(summary))
+        if unknown:
+            raise ValueError(f"Unknown run-summary fields: {unknown}.")
+        for key, item in value.items():
+            summary[key] = item
+    case_ids = [item.case_id for item in case_reports]
+    if summary["included_case_ids"] != case_ids:
+        raise ValueError("Run summary case order differs from the collated report order.")
+    if int(summary["included_case_count"]) != len(case_reports):
+        raise ValueError("Run summary included-case count differs from the report pages.")
+    planned = int(summary["planned_case_count"])
+    if planned < len(case_reports):
+        raise ValueError("Run summary planned-case count cannot be smaller than its snapshot.")
+    summary["planned_case_count"] = planned
+    summary["included_case_count"] = len(case_reports)
+    summary["remaining_case_count"] = planned - len(case_reports)
+    if summary["document_state"] not in {
+        "in_progress",
+        "complete",
+        "completed_with_errors",
+        "cancelled",
+    }:
+        raise ValueError("Run summary has an unsupported document state.")
+    if summary["document_state"] == "in_progress" and not summary["remaining_case_count"]:
+        raise ValueError("A complete run snapshot cannot remain marked in progress.")
+    if summary["document_state"] == "in_progress" and (
+        summary["ended_at"] is not None
+        or summary["run_duration_seconds"] is not None
+    ):
+        raise ValueError("An in-progress run cannot have a final end time or duration.")
+    if summary["ended_at"] is not None and not str(summary["ended_at"]).strip():
+        raise ValueError("Run summary ended_at must be a non-empty timestamp or null.")
+    run_duration = summary["run_duration_seconds"]
+    if run_duration is not None and (
+        isinstance(run_duration, bool)
+        or not isinstance(run_duration, (int, float))
+        or not np.isfinite(float(run_duration))
+        or float(run_duration) < 0
+    ):
+        raise ValueError("Run summary duration must be finite and non-negative.")
+    case_counts = dict(summary["case_counts"])
+    if sum(int(case_counts.get(name, 0)) for name in (
+        "succeeded",
+        "failed",
+        "skipped_identical",
+        "cancelled",
+    )) != len(case_reports):
+        raise ValueError("Run summary execution counts do not equal the included case count.")
+    qc_counts = dict(summary["qc_counts"])
+    if sum(int(qc_counts.get(name, 0)) for name in (
+        "pass",
+        "review",
+        "fail",
+        "not_assessed",
+    )) != len(case_reports):
+        raise ValueError("Run summary QC counts do not equal the included case count.")
+    if str(summary["run_id"]) != str(default["run_id"]):
+        raise ValueError("Run summary run_id differs from the export ID.")
+    if summary["layout"] != default["layout"]:
+        raise ValueError("Run summary layout differs from the collated report layout.")
+    configuration_rows = summary["configuration_rows"]
+    if (
+        not isinstance(configuration_rows, list)
+        or len(configuration_rows) > RUN_COVER_MAX_CONFIGURATION_ROWS
+    ):
+        raise ValueError(
+            "Run summary configuration exceeds the reader-facing cover capacity."
+        )
+    for item in configuration_rows:
+        if (
+            not isinstance(item, Mapping)
+            or not str(item.get("label") or "").strip()
+            or not str(item.get("value") or "").strip()
+        ):
+            raise ValueError("Run summary configuration rows require label and value.")
+    for item in summary["models"]:
+        if not isinstance(item, Mapping) or not item.get("role") or not item.get("identifier"):
+            raise ValueError("Run summary models require role and identifier.")
+    displayed_model_count = sum(
+        str(item["role"]).strip().lower() not in RUN_COVER_HIDDEN_MODEL_ROLES
+        for item in summary["models"]
+    )
+    if (
+        len(configuration_rows) + displayed_model_count + 1
+        > RUN_COVER_MAX_PIPELINE_ROWS
+    ):
+        raise ValueError("Run summary configuration and model rows exceed cover capacity.")
+    for item in summary["technical_errors"]:
+        if (
+            not isinstance(item, Mapping)
+            or not item.get("stage")
+            or not item.get("code")
+            or int(item.get("count", 0)) <= 0
+        ):
+            raise ValueError("Run summary technical errors require stage, code, and count.")
+    quality_issues = summary["quality_issues"]
+    if quality_issues != default["quality_issues"]:
+        raise ValueError(
+            "Run summary quality issues differ from the collated case-report findings."
+        )
+    seen_quality_issues: set[tuple[str, str]] = set()
+    for item in quality_issues:
+        if (
+            not isinstance(item, Mapping)
+            or item.get("domain") not in {"orientation", "vertebral", "measurement"}
+            or not str(item.get("code") or "").strip()
+            or int(item.get("count", 0)) <= 0
+            or int(item["count"]) > len(case_reports)
+        ):
+            raise ValueError(
+                "Run summary quality issues require domain, code, and a valid case count."
+            )
+        identity = (str(item["domain"]), str(item["code"]))
+        if identity in seen_quality_issues:
+            raise ValueError("Run summary quality issues must be unique by domain and code.")
+        seen_quality_issues.add(identity)
+    _assert_manifest_privacy(summary, "run_summary")
+    return summary
+
+
+def _publish_combined_snapshot(
+    *,
+    temporary_pdf: Path,
+    pdf_path: Path,
+    manifest: Mapping[str, Any],
+    manifest_path: Path,
+) -> None:
+    """Publish one immutable PDF/manifest pair through an atomic pointer."""
+
+    if pdf_path.parent != manifest_path.parent:
+        raise ValueError("Combined PDF and manifest must share one output directory.")
+    output = pdf_path.parent
+    snapshots = output / ".snapshots"
+    current = output / ".current"
+    report_id = str(manifest.get("report_id") or "")
+    if not re.fullmatch(r"[a-f0-9]{64}", report_id):
+        raise ValueError("Combined snapshot publication requires a report SHA-256.")
+    snapshots.mkdir(parents=True, exist_ok=True)
+    staging = snapshots / f".{report_id}.{uuid4().hex}.partial"
+    final_snapshot = snapshots / report_id
+    try:
+        staging.mkdir()
+        staged_pdf = staging / pdf_path.name
+        staged_manifest = staging / manifest_path.name
+        os.replace(temporary_pdf, staged_pdf)
+        _atomic_json(manifest, staged_manifest)
+        validate_report_manifest(staged_manifest, pdf_path=staged_pdf)
+
+        if final_snapshot.exists():
+            existing_manifest = final_snapshot / manifest_path.name
+            existing_pdf = final_snapshot / pdf_path.name
+            existing = validate_report_manifest(existing_manifest, pdf_path=existing_pdf)
+            if dict(existing) != dict(manifest):
+                raise ReportValidationError(
+                    "An immutable combined-report snapshot has conflicting content."
+                )
+            shutil.rmtree(staging)
+        else:
+            os.replace(staging, final_snapshot)
+
+        if not os.path.lexists(current):
+            _migrate_legacy_combined_pair(
+                pdf_path=pdf_path,
+                manifest_path=manifest_path,
+                snapshots=snapshots,
+                current=current,
+            )
+        if os.path.lexists(current):
+            current_snapshot = _combined_snapshot_directory(
+                current=current,
+                snapshots=snapshots,
+            )
+            _validate_combined_snapshot(
+                current_snapshot,
+                pdf_name=pdf_path.name,
+                manifest_name=manifest_path.name,
+            )
+            _ensure_combined_public_aliases(
+                pdf_path=pdf_path,
+                manifest_path=manifest_path,
+                current_snapshot=current_snapshot,
+            )
+
+        _replace_relative_symlink(
+            current,
+            Path(".snapshots") / final_snapshot.name,
+        )
+        _ensure_combined_public_aliases(
+            pdf_path=pdf_path,
+            manifest_path=manifest_path,
+            current_snapshot=final_snapshot,
+            refresh=True,
+        )
+        validate_report_manifest(manifest_path, pdf_path=pdf_path)
+        _prune_combined_snapshots(
+            snapshots=snapshots,
+            current=current,
+            keep=2,
+        )
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def _replace_relative_symlink(path: Path, target: Path) -> None:
+    """Atomically install one bounded relative symlink."""
+
+    if target.is_absolute() or ".." in target.parts:
+        raise ValueError("Combined-report symlink targets must be bounded and relative.")
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.partial-link")
+    try:
+        temporary.symlink_to(target)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _combined_snapshot_directory(*, current: Path, snapshots: Path) -> Path:
+    """Resolve and bound the current snapshot pointer."""
+
+    if not current.is_symlink():
+        raise ReportValidationError(
+            "The combined-report snapshot pointer is not a symbolic link."
+        )
+    target = Path(os.readlink(current))
+    if (
+        target.is_absolute()
+        or len(target.parts) != 2
+        or target.parts[0] != snapshots.name
+        or target.parts[1] in {"", ".", ".."}
+    ):
+        raise ReportValidationError(
+            "The combined-report snapshot pointer has an invalid target."
+        )
+    directory = current.parent / target
+    if not directory.is_dir():
+        raise ReportValidationError(
+            "The combined-report snapshot pointer target is unavailable."
+        )
+    return directory
+
+
+def _validate_combined_snapshot(
+    snapshot: Path,
+    *,
+    pdf_name: str,
+    manifest_name: str,
+) -> Mapping[str, Any]:
+    """Validate both members of one immutable combined-report snapshot."""
+
+    return validate_report_manifest(
+        snapshot / manifest_name,
+        pdf_path=snapshot / pdf_name,
+    )
+
+
+def _migrate_legacy_combined_pair(
+    *,
+    pdf_path: Path,
+    manifest_path: Path,
+    snapshots: Path,
+    current: Path,
+) -> None:
+    """Place a pre-snapshot direct pair behind the pointer without changing it."""
+
+    pdf_exists = os.path.lexists(pdf_path)
+    manifest_exists = os.path.lexists(manifest_path)
+    if not pdf_exists and not manifest_exists:
+        return
+    if pdf_exists != manifest_exists:
+        raise ReportValidationError(
+            "A legacy combined report is incomplete and cannot be migrated."
+        )
+    if pdf_path.is_symlink() or manifest_path.is_symlink():
+        raise ReportValidationError(
+            "Combined-report aliases exist without their snapshot pointer."
+        )
+    legacy_manifest = validate_report_manifest(manifest_path, pdf_path=pdf_path)
+    legacy_report_id = str(legacy_manifest.get("report_id") or "")
+    if not re.fullmatch(r"[a-f0-9]{64}", legacy_report_id):
+        raise ReportValidationError(
+            "The legacy combined report has no valid report identifier."
+        )
+    legacy_snapshot = snapshots / f"legacy-{legacy_report_id}"
+    staging = snapshots / f".legacy-{legacy_report_id}.{uuid4().hex}.partial"
+    try:
+        if not legacy_snapshot.exists():
+            staging.mkdir()
+            shutil.copy2(pdf_path, staging / pdf_path.name)
+            shutil.copy2(manifest_path, staging / manifest_path.name)
+            _validate_combined_snapshot(
+                staging,
+                pdf_name=pdf_path.name,
+                manifest_name=manifest_path.name,
+            )
+            os.replace(staging, legacy_snapshot)
+        else:
+            existing = _validate_combined_snapshot(
+                legacy_snapshot,
+                pdf_name=pdf_path.name,
+                manifest_name=manifest_path.name,
+            )
+            if dict(existing) != dict(legacy_manifest):
+                raise ReportValidationError(
+                    "The legacy combined-report snapshot has conflicting content."
+                )
+        _replace_relative_symlink(
+            current,
+            Path(".snapshots") / legacy_snapshot.name,
+        )
+        _ensure_combined_public_aliases(
+            pdf_path=pdf_path,
+            manifest_path=manifest_path,
+            current_snapshot=legacy_snapshot,
+        )
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def _ensure_combined_public_aliases(
+    *,
+    pdf_path: Path,
+    manifest_path: Path,
+    current_snapshot: Path,
+    refresh: bool = False,
+) -> None:
+    """Expose stable public names and optionally refresh them for file watchers."""
+
+    for public_path in (pdf_path, manifest_path):
+        expected_target = Path(".current") / public_path.name
+        snapshot_file = current_snapshot / public_path.name
+        if not snapshot_file.is_file():
+            raise ReportValidationError(
+                "The current combined-report snapshot is incomplete."
+            )
+        if os.path.lexists(public_path):
+            if (
+                public_path.is_symlink()
+                and Path(os.readlink(public_path)) == expected_target
+                and not refresh
+            ):
+                continue
+            if not public_path.is_file() or _sha256(public_path) != _sha256(
+                snapshot_file
+            ):
+                raise ReportValidationError(
+                    f"Cannot replace conflicting combined-report path {public_path.name}."
+                )
+        _replace_relative_symlink(public_path, expected_target)
+
+
+def _prune_combined_snapshots(
+    *,
+    snapshots: Path,
+    current: Path,
+    keep: int,
+) -> None:
+    """Retain the active snapshot and one rollback generation."""
+
+    if keep < 1:
+        raise ValueError("At least one combined-report snapshot must be retained.")
+    active = _combined_snapshot_directory(current=current, snapshots=snapshots)
+    candidates = sorted(
+        (
+            path
+            for path in snapshots.iterdir()
+            if path.is_dir() and not path.name.startswith(".")
+        ),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    retained = {active}
+    for candidate in candidates:
+        if len(retained) >= keep:
+            break
+        retained.add(candidate)
+    for candidate in candidates:
+        if candidate not in retained:
+            shutil.rmtree(candidate)
+
+
 def collate_reports(
     case_reports: Sequence[CaseReportResult],
     *,
     export_id: str,
     output_directory: str | Path,
     settings: ReportingSettings | Mapping[str, Any],
+    run_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Collate explicit manifest order with a conditional first summary page."""
+    """Collate explicit manifest order behind one always-present run cover."""
 
     validate_case_id(export_id)
     settings = (
@@ -932,13 +1687,24 @@ def collate_reports(
     layouts = {item.layout for item in case_reports}
     if layouts != {settings.layout}:
         raise ValueError("Combined exports cannot mix layouts or settings.")
+    case_manifests = [
+        _validate_case_result_for_collation(item, settings) for item in case_reports
+    ]
     flagged = [item for item in case_reports if item.manual_review_required]
-    if len(flagged) > MAX_REVIEW_SUMMARY_ROWS:
-        raise ValueError(
-            "Manual-review summary exceeds 24 cases; split the explicit export manifest."
-        )
-    for item in case_reports:
-        _validate_case_result_for_collation(item, settings)
+    output = Path(output_directory)
+    output.mkdir(parents=True, exist_ok=True)
+    default_summary = _default_run_cover_summary(
+        case_reports,
+        case_manifests,
+        export_id=export_id,
+        output=output,
+        settings=settings,
+    )
+    cover_summary = _normalize_run_cover_summary(
+        run_summary,
+        default=default_summary,
+        case_reports=case_reports,
+    )
     export_report_id = _digest_payload(
         {
             "schema_version": REPORT_SCHEMA_VERSION,
@@ -946,44 +1712,42 @@ def collate_reports(
             "layout": settings.layout,
             "configuration": settings.normalized(),
             "ordered_case_reports": [item.report_id for item in case_reports],
+            "run_summary": cover_summary,
             "renderer": renderer_manifest(),
         }
     )
-    summary_offset = 1 if flagged else 0
-    expected_pages = len(case_reports) + summary_offset
+    expected_pages = len(case_reports) + 1
     summary_rows = [
         {
             "case_id": item.case_id,
             "report_id": item.report_id,
-            "combined_page_number": index + 1 + summary_offset,
+            "combined_page_number": index + 2,
             "review_entries": [entry.as_dict() for entry in item.review_entries],
             "render_status": item.status,
         }
         for index, item in enumerate(case_reports)
         if item.manual_review_required
     ]
-    output = Path(output_directory)
-    output.mkdir(parents=True, exist_ok=True)
     pdf_path = output / COMBINED_REPORT_NAME
     manifest_path = output / CASE_MANIFEST_NAME
     temporary_pdf = output / f".{COMBINED_REPORT_NAME}.{uuid4().hex}.partial"
-    temporary_summary = output / f".manual-review-summary.{uuid4().hex}.partial.pdf"
+    temporary_cover = output / f".run-cover.{uuid4().hex}.partial.pdf"
     try:
+        cover_audit = render_run_cover_page(
+            temporary_cover,
+            summary=cover_summary,
+            page_count=expected_pages,
+        )
+        _validate_pdf(temporary_cover, expected_pages=1)
         writer = PdfWriter()
-        if flagged:
-            render_review_summary_page(
-                temporary_summary,
-                total_cases=len(case_reports),
-                page_count=expected_pages,
-                rows=summary_rows,
-            )
-            _validate_pdf(temporary_summary, expected_pages=1)
-            writer.append(
-                str(temporary_summary), pages=(0, 1), outline_item="Manual review summary"
-            )
+        writer.append(
+            str(temporary_cover),
+            pages=(0, 1),
+            outline_item="Run summary",
+        )
         for item in case_reports:
             writer.append(str(item.pdf_path), pages=(0, 1), outline_item=item.case_id)
-        for page_index in range(summary_offset, expected_pages):
+        for page_index in range(1, expected_pages):
             overlay = PdfReader(
                 BytesIO(page_number_overlay(page_index + 1, expected_pages)),
                 strict=True,
@@ -991,9 +1755,9 @@ def collate_reports(
             writer.pages[page_index].merge_page(overlay.pages[0], over=True)
         writer.add_metadata(
             {
-                "/Title": f"BodyComposition export {export_id}",
+                "/Title": f"BodyComposition run report {export_id}",
                 "/Author": "BodyComposition",
-                "/Subject": "Automated research and QC reports",
+                "/Subject": "Run summary and automated research/QC case reports",
                 "/Creator": "BodyComposition reporting",
                 "/Producer": "BodyComposition reporting",
             }
@@ -1008,7 +1772,7 @@ def collate_reports(
                 "report_id": item.report_id,
                 "render_status": item.status,
                 "manual_review_required": item.manual_review_required,
-                "combined_page_number": index + 1 + summary_offset,
+                "combined_page_number": index + 2,
                 "individual_pdf_sha256": item.pdf_sha256,
             }
             for index, item in enumerate(case_reports)
@@ -1016,6 +1780,7 @@ def collate_reports(
         counts = Counter(
             (entry.domain, entry.code) for item in flagged for entry in item.review_entries
         )
+        has_technical_errors = bool(cover_summary["technical_errors"])
         manifest = {
             "schema_version": REPORT_SCHEMA_VERSION,
             "manifest_type": "export",
@@ -1026,13 +1791,23 @@ def collate_reports(
             "renderer": renderer_manifest(),
             "page_size": "A4_landscape",
             "page_count": expected_pages,
-            "render_status": "succeeded_with_warnings" if flagged else "succeeded",
+            "render_status": (
+                "succeeded_with_warnings"
+                if flagged or has_technical_errors
+                else "succeeded"
+            ),
             "manual_review_required": bool(flagged),
+            "cover_page": {
+                "included": True,
+                "page_number": 1,
+                "summary": cover_summary,
+                "audit": cover_audit,
+            },
             "manual_review_summary": {
                 "included": bool(flagged),
                 "page_number": 1 if flagged else None,
+                "placement": "cover_page",
                 "case_count": len(flagged),
-                "capacity": MAX_REVIEW_SUMMARY_ROWS,
                 "counts": [
                     {"domain": domain, "code": code, "count": count}
                     for (domain, code), count in sorted(counts.items())
@@ -1042,9 +1817,14 @@ def collate_reports(
             "cases": cases,
             "combined_pdf_file": COMBINED_REPORT_NAME,
             "combined_pdf_sha256": combined_sha256,
+            "publication": {
+                "strategy": "atomic_snapshot_pointer_v1",
+                "snapshot_id": export_report_id,
+                "pointer": ".current",
+            },
         }
         validate_report_manifest(manifest)
-        _publish_pdf_and_manifest(
+        _publish_combined_snapshot(
             temporary_pdf=temporary_pdf,
             pdf_path=pdf_path,
             manifest=manifest,
@@ -1052,5 +1832,5 @@ def collate_reports(
         )
     finally:
         temporary_pdf.unlink(missing_ok=True)
-        temporary_summary.unlink(missing_ok=True)
+        temporary_cover.unlink(missing_ok=True)
     return {"pdf_path": pdf_path, "manifest_path": manifest_path, "manifest": manifest}

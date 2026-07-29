@@ -1,4 +1,4 @@
-"""Whole-volume HU distributions from model-native tissue compartments."""
+"""Whole-volume HU distributions from model-native compartments."""
 
 from __future__ import annotations
 
@@ -9,28 +9,48 @@ import numpy as np
 import pandas as pd
 
 from BodyComposition.measurement.contracts import (
+    COMPARTMENT_HU_DISTRIBUTION_SCHEMA_VERSION,
     HU_DISTRIBUTION_BIN_WIDTH_HU,
+    HU_DISTRIBUTION_COMPARTMENTS,
     HU_DISTRIBUTION_MAX_HU,
     HU_DISTRIBUTION_MIN_HU,
     HU_DISTRIBUTION_SCOPE,
-    HU_DISTRIBUTION_TISSUES,
-    TISSUE_HU_DISTRIBUTION_SCHEMA_VERSION,
     MeasurementIdentity,
 )
 from BodyComposition.measurement.physical import validate_array_zyx
-from BodyComposition.measurement.tissues import canonical_tissue_name
+from BodyComposition.measurement.tissues import canonical_compartment_name
 from BodyComposition.utils.geometry import ImageGeometry
 
 
-def _scope_bounds(geometry: ImageGeometry) -> tuple[float, float]:
+def _scope_bounds(
+    geometry: ImageGeometry,
+    analyzed_slices_z: np.ndarray | None = None,
+) -> tuple[float, float]:
     """Return the complete voxel-cell extent on the patient superior axis."""
 
+    if analyzed_slices_z is None:
+        inferior_z = -0.5
+        superior_z = geometry.size_xyz[2] - 0.5
+    else:
+        available = np.asarray(analyzed_slices_z)
+        if (
+            available.ndim != 1
+            or available.shape != (geometry.size_xyz[2],)
+            or available.dtype != np.bool_
+            or not bool(available.any())
+        ):
+            raise ValueError(
+                "analyzed_slices_z must contain at least one boolean target slice."
+            )
+        indices = np.flatnonzero(available)
+        inferior_z = float(indices.min()) - 0.5
+        superior_z = float(indices.max()) + 0.5
     corner_indices_xyz = np.asarray(
         [
             (x, y, z)
             for x in (-0.5, geometry.size_xyz[0] - 0.5)
             for y in (-0.5, geometry.size_xyz[1] - 0.5)
-            for z in (-0.5, geometry.size_xyz[2] - 0.5)
+            for z in (inferior_z, superior_z)
         ],
         dtype=float,
     )
@@ -42,31 +62,35 @@ def _scope_bounds(geometry: ImageGeometry) -> tuple[float, float]:
     return scope_inferior, scope_superior
 
 
-def _native_labels_by_tissue(
+def _native_labels_by_compartment(
     label_schema: Mapping[int, str],
 ) -> dict[str, tuple[int, ...]]:
-    labels_by_tissue: dict[str, list[int]] = {}
+    labels_by_compartment: dict[str, list[int]] = {}
     for native_label, name in label_schema.items():
         if isinstance(native_label, bool) or not isinstance(native_label, int) or native_label <= 0:
             raise ValueError("Compartment label identifiers must be positive integers.")
-        labels_by_tissue.setdefault(canonical_tissue_name(name), []).append(native_label)
+        labels_by_compartment.setdefault(canonical_compartment_name(name), []).append(
+            native_label
+        )
     return {
-        tissue: tuple(sorted(native_labels)) for tissue, native_labels in labels_by_tissue.items()
+        compartment: tuple(sorted(native_labels))
+        for compartment, native_labels in labels_by_compartment.items()
     }
 
 
-def build_tissue_hu_distributions(
+def build_compartment_hu_distributions(
     *,
     image_zyx: np.ndarray,
     compartment_labels_zyx: np.ndarray,
     compartment_label_schema: Mapping[int, str],
     geometry: ImageGeometry,
     identity: MeasurementIdentity,
+    analyzed_slices_z: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Return fixed-bin HU distributions for native SM, SAT, aVAT, and tVAT.
 
-    The scope is the complete analyzed CT volume. Tissue membership comes only
-    from the unfiltered model-native compartment mask. Histogram values and
+    The scope is the complete analyzed CT volume. Compartment membership comes
+    only from the unfiltered model-native mask. Histogram values and
     exact summary statistics use the unchanged orientation-prepared CT voxels.
     """
 
@@ -83,7 +107,7 @@ def build_tissue_hu_distributions(
     if not np.issubdtype(compartment_labels.dtype, np.integer):
         raise ValueError("HU distributions require aligned integer compartment_labels_zyx.")
     voxel_volume_mm3 = geometry.voxel_volume_mm3
-    labels_by_tissue = _native_labels_by_tissue(compartment_label_schema)
+    labels_by_compartment = _native_labels_by_compartment(compartment_label_schema)
     unknown_labels = sorted(
         int(label)
         for label in np.unique(compartment_labels)
@@ -99,12 +123,15 @@ def build_tissue_hu_distributions(
         HU_DISTRIBUTION_BIN_WIDTH_HU,
         dtype=float,
     )
-    scope_inferior, scope_superior = _scope_bounds(geometry)
+    scope_inferior, scope_superior = _scope_bounds(
+        geometry,
+        analyzed_slices_z,
+    )
     rows: list[dict[str, Any]] = []
     identity_columns = identity.as_columns()
 
-    for tissue_key, display_label, source_compartment in HU_DISTRIBUTION_TISSUES:
-        source_label_ids = labels_by_tissue.get(source_compartment, ())
+    for compartment_key, display_label, source_compartment in HU_DISTRIBUTION_COMPARTMENTS:
+        source_label_ids = labels_by_compartment.get(source_compartment, ())
         mask = (
             np.isin(compartment_labels, source_label_ids)
             if source_label_ids
@@ -130,7 +157,7 @@ def build_tissue_hu_distributions(
             reason = "missing_compartment"
         elif total_voxel_count == 0:
             valid = False
-            reason = "empty_tissue"
+            reason = "empty_compartment"
         elif nonfinite_voxel_count:
             valid = False
             reason = "invalid_measurement"
@@ -152,9 +179,9 @@ def build_tissue_hu_distributions(
 
         common = {
             **identity_columns,
-            "distribution_schema_version": TISSUE_HU_DISTRIBUTION_SCHEMA_VERSION,
+            "distribution_schema_version": COMPARTMENT_HU_DISTRIBUTION_SCHEMA_VERSION,
             "distribution_scope": HU_DISTRIBUTION_SCOPE,
-            "tissue_key": tissue_key,
+            "compartment_key": compartment_key,
             "display_label": display_label,
             "source_compartment": source_compartment,
             "source_label_ids": ",".join(str(value) for value in source_label_ids),

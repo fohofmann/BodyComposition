@@ -79,6 +79,7 @@ def _run_consensus_materialization(
     labels[0, 1, 1:5] = 1
     labels[0, 2, 1:5] = 3
     labels[0, 3, 1:5] = 4
+    labels[0, 4, 1:4] = (2, 6, 7)
     image_array = np.zeros_like(labels, dtype=np.int16)
     image_array[0, 1, 1:5] = (-30, -29, 150, 151)
     image_array[0, 2, 1:5] = (-191, -190, -30, -29)
@@ -122,9 +123,18 @@ def test_consensus_materialization_uses_inclusive_consensus_windows(
     assert np.array_equal(output[0, 1, 1:5], [0, 1, 1, 0])
     assert np.array_equal(output[0, 2, 1:5], [0, 3, 3, 0])
     assert np.array_equal(output[0, 3, 1:5], [0, 4, 4, 0])
+    assert np.array_equal(output[0, 4, 1:4], [0, 0, 0])
     assert np.array_equal(
-        raw[0, 1:4, 1:5],
-        np.array([[1] * 4, [3] * 4, [4] * 4], dtype=np.uint8),
+        raw[0, 1:5, 1:5],
+        np.array(
+            [
+                [1, 1, 1, 1],
+                [3, 3, 3, 3],
+                [4, 4, 4, 4],
+                [2, 6, 7, 0],
+            ],
+            dtype=np.uint8,
+        ),
     )
 
 

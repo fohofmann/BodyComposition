@@ -94,11 +94,11 @@ def make_slice_table(lower_edges, upper_edges, *, area=None, hu=None):
             "trunk_circumference_cm": np.full(len(lower), 100.0),
             "trunk_area_cm2": np.full(len(lower), 80.0),
             "trunk_area_valid": np.ones(len(lower), dtype=bool),
-            "sm_area_cm2": area,
-            "sm_area_valid": np.ones(len(lower), dtype=bool),
-            "sm_voxel_count": np.full(len(lower), 10),
-            "sm_mean_hu": hu,
-            "sm_hu_valid": np.ones(len(lower), dtype=bool),
+            "sm_compartment_area_cm2": area,
+            "sm_compartment_area_valid": np.ones(len(lower), dtype=bool),
+            "sm_compartment_voxel_count": np.full(len(lower), 10),
+            "sm_compartment_mean_hu": hu,
+            "sm_compartment_hu_valid": np.ones(len(lower), dtype=bool),
         }
     )
 
@@ -153,8 +153,8 @@ def test_cranial_fov_touching_t11_retains_observed_bins():
     )
     displayed_tissues = (
         "skeletal_muscle_tissue_hu_m29_150",
-        "sat_total_hu_m190_m30",
-        "vat_total_hu_m190_m30",
+        "sat_tissue_hu_m190_m30",
+        "vat_tissue_hu_m190_m30",
     )
     for index, tissue in enumerate(displayed_tissues, start=1):
         slices[f"{tissue}_area_cm2"] = np.linspace(
@@ -175,8 +175,8 @@ def test_cranial_fov_touching_t11_retains_observed_bins():
     assert not t11["territory_complete"].any()
     assert set(t11["territory_reason"]) == {"truncated_vertebra"}
     assert t11["bin_valid"].all()
-    assert t11["sm_mean_csa_cm2_valid"].all()
-    assert t11["sm_mean_csa_cm2"].notna().all()
+    assert t11["sm_compartment_mean_csa_cm2_valid"].all()
+    assert t11["sm_compartment_mean_csa_cm2"].notna().all()
     assert t11["trunk_mean_circumference_cm_valid"].all()
     assert t11["trunk_mean_circumference_cm"].notna().all()
     for tissue in displayed_tissues:
@@ -292,8 +292,8 @@ def test_three_bins_split_thick_slices_exactly_and_reconstruct_volume():
     assert l3["bin_integration_length_mm"].tolist() == pytest.approx([20 / 3] * 3)
 
     whole = aggregate_physical_range(slices, 15.0, 35.0)
-    reconstructed = float(np.sum(l3["sm_mean_csa_cm2"] * l3["bin_height_mm"] / 10.0))
-    assert reconstructed == pytest.approx(whole["sm_volume_cm3"])
+    reconstructed = float(np.sum(l3["sm_compartment_mean_csa_cm2"] * l3["bin_height_mm"] / 10.0))
+    assert reconstructed == pytest.approx(whole["sm_compartment_volume_cm3"])
 
 
 def test_oblique_bin_volume_reconstruction_uses_integration_length():
@@ -314,10 +314,10 @@ def test_oblique_bin_volume_reconstruction_uses_integration_length():
     table = build_vertebra_table(slices, extents, territories, IDENTITY)
     l3 = table.loc[table["vertebral_level"].eq("L3")]
     whole = aggregate_physical_range(slices, 15.0, 35.0)
-    reconstructed = float(np.sum(l3["sm_mean_csa_cm2"] * l3["bin_integration_length_mm"] / 10.0))
+    reconstructed = float(np.sum(l3["sm_compartment_mean_csa_cm2"] * l3["bin_integration_length_mm"] / 10.0))
 
     assert l3["bin_integration_length_mm"].tolist() == pytest.approx([25 / 3] * 3)
-    assert reconstructed == pytest.approx(whole["sm_volume_cm3"])
+    assert reconstructed == pytest.approx(whole["sm_compartment_volume_cm3"])
 
 
 def test_partial_bin_volume_reconstruction_uses_metric_coverage():
@@ -345,15 +345,15 @@ def test_partial_bin_volume_reconstruction_uses_metric_coverage():
     whole = aggregate_physical_range(slices, 15.0, 35.0, allow_partial=True)
     reconstructed = float(
         np.nansum(
-            l3["sm_mean_csa_cm2"]
+            l3["sm_compartment_mean_csa_cm2"]
             * l3["bin_integration_length_mm"]
-            * l3["sm_mean_csa_cm2_coverage_fraction"]
+            * l3["sm_compartment_mean_csa_cm2_coverage_fraction"]
             / 10.0
         )
     )
 
-    assert l3["sm_mean_csa_cm2_coverage_fraction"].tolist() == pytest.approx([1.0, 0.5, 0.0])
-    assert reconstructed == pytest.approx(whole["sm_volume_cm3"])
+    assert l3["sm_compartment_mean_csa_cm2_coverage_fraction"].tolist() == pytest.approx([1.0, 0.5, 0.0])
+    assert reconstructed == pytest.approx(whole["sm_compartment_volume_cm3"])
 
 
 def test_equal_height_slices_reduce_to_arithmetic_mean_and_variable_height_is_weighted():
@@ -363,8 +363,8 @@ def test_equal_height_slices_reduce_to_arithmetic_mean_and_variable_height_is_we
     equal_result = aggregate_physical_range(equal, 0.0, 6.0)
     variable_result = aggregate_physical_range(variable, 0.0, 6.0)
 
-    assert equal_result["sm_mean_csa_cm2"] == pytest.approx(np.mean([10, 20, 40]))
-    assert variable_result["sm_mean_csa_cm2"] == pytest.approx((10 + 60 + 80) / 6)
+    assert equal_result["sm_compartment_mean_csa_cm2"] == pytest.approx(np.mean([10, 20, 40]))
+    assert variable_result["sm_compartment_mean_csa_cm2"] == pytest.approx((10 + 60 + 80) / 6)
 
 
 def test_incomplete_edge_territories_retain_observed_means_and_completeness_qc():
@@ -381,8 +381,8 @@ def test_incomplete_edge_territories_retain_observed_means_and_completeness_qc()
     edge = table.loc[table["vertebral_level"].isin(["L2", "L4"])]
     assert edge["bin_valid"].all()
     assert edge["bin_missing_reason"].isna().all()
-    assert edge["sm_mean_csa_cm2"].eq(10.0).all()
-    assert edge["sm_mean_csa_cm2_valid"].all()
+    assert edge["sm_compartment_mean_csa_cm2"].eq(10.0).all()
+    assert edge["sm_compartment_mean_csa_cm2_valid"].all()
     assert not edge["territory_complete"].any()
     assert set(edge["territory_reason"]) == {"missing_neighbor"}
     assert set(edge["territory_qc_status"]) == {"review"}
@@ -414,16 +414,16 @@ def test_truncated_internal_vertebra_retains_observed_bin_means():
     assert not l3["territory_complete"].any()
     assert set(l3["territory_reason"]) == {"truncated_vertebra"}
     assert l3["bin_valid"].all()
-    assert l3["sm_mean_csa_cm2_valid"].all()
-    assert l3["sm_mean_csa_cm2"].notna().all()
+    assert l3["sm_compartment_mean_csa_cm2_valid"].all()
+    assert l3["sm_compartment_mean_csa_cm2"].notna().all()
     assert l3["coverage_fraction"].eq(1.0).all()
 
     l3_view = select_l3_view(slices, table, aggregation="territory_mean").iloc[0]
     assert l3_view["valid"]
     assert not l3_view["territory_complete"]
     assert l3_view["reason"] == "truncated_vertebra"
-    assert l3_view["sm_mean_csa_cm2_valid"]
-    assert pd.notna(l3_view["sm_mean_csa_cm2"])
+    assert l3_view["sm_compartment_mean_csa_cm2_valid"]
+    assert pd.notna(l3_view["sm_compartment_mean_csa_cm2"])
 
 
 def test_partial_anatomical_extrema_are_observed_but_not_unqualified():

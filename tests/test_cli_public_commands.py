@@ -39,8 +39,13 @@ def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_pat
         def __init__(self, config):
             calls["config"] = config
 
-        def analyze_batch(self, cases, output, *, run_id):
-            calls.update(cases=cases, output=output, run_id=run_id)
+        def analyze_batch(self, cases, output, *, run_id, worker_mode):
+            calls.update(
+                cases=cases,
+                output=output,
+                run_id=run_id,
+                worker_mode=worker_mode,
+            )
             return result
 
     monkeypatch.setattr(cli, "load_batch_manifest", lambda path: ("a", "b"))
@@ -64,8 +69,18 @@ def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_pat
     assert calls["cases"] == ("a", "b")
     assert calls["output"] == tmp_path / "output"
     assert calls["run_id"] == "run-1"
+    assert calls["worker_mode"] is False
     assert isinstance(calls["config"], PipelineConfig)
     assert calls["config"].device == "cpu"
+    assert calls["config"].normalized()["output"]["save_csv_tables"]
+
+    assert cli.main(["batch", "cases.json", "--no-csv", "--json"]) == cli.EXIT_OK
+    capsys.readouterr()
+    assert not calls["config"].normalized()["output"]["save_csv_tables"]
+
+    assert cli.main(["batch", "cases.json", "--worker", "--json"]) == cli.EXIT_OK
+    capsys.readouterr()
+    assert calls["worker_mode"] is True
 
     result.execution_status = ExecutionStatus.FAILED
     assert cli.main(["batch", "cases.json", "--json"]) == cli.EXIT_EXECUTION
@@ -163,7 +178,10 @@ def test_result_cli_inspects_aggregates_and_builds_review_queue(
     monkeypatch.setattr(
         cli,
         "aggregate_results",
-        lambda path: {"cases": cases, "review_queue": review},
+        lambda path: {
+            "cases": cases,
+            "review_queue": review,
+        },
     )
 
     assert cli.main(["results", "aggregate", str(run), "--json"]) == cli.EXIT_OK
@@ -186,6 +204,40 @@ def test_result_cli_inspects_aggregates_and_builds_review_queue(
     assert cli.main(["results", "review-queue", str(run), "--json"]) == cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["records"][0]["case_id"] == "case-2"
     assert aggregate_calls == [run]
+
+    csv_paths = {"slices": tmp_path / "csv" / "slices.csv"}
+    export_calls = {}
+
+    def export_csv(manifest_path, output_path, *, overwrite=False):
+        export_calls.update(
+            manifest=Path(manifest_path),
+            output=Path(output_path),
+            overwrite=overwrite,
+        )
+        return csv_paths
+
+    monkeypatch.setattr(cli, "export_result_csv", export_csv)
+    assert (
+        cli.main(
+            [
+                "results",
+                "export-csv",
+                str(manifest),
+                "--output",
+                str(tmp_path / "csv"),
+                "--overwrite",
+                "--json",
+            ]
+        )
+        == cli.EXIT_OK
+    )
+    exported = json.loads(capsys.readouterr().out)
+    assert exported["tables"]["slices"] == str(csv_paths["slices"])
+    assert export_calls == {
+        "manifest": manifest,
+        "output": tmp_path / "csv",
+        "overwrite": True,
+    }
 
 
 def test_report_cli_covers_render_collate_and_inspection(monkeypatch, capsys, tmp_path):

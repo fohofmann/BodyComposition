@@ -88,11 +88,32 @@
             "conversion_backend": {"type": "string", "minLength": 1},
             "conversion_backend_version": {"type": "string", "minLength": 1}
           }
+        },
+        "prestage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema_version", "sidecar_type", "source_format",
+            "source_content_sha256", "source_byte_size",
+            "sidecar_content_sha256"
+          ],
+          "properties": {
+            "schema_version": {"const": "1.0.0"},
+            "sidecar_type": {"const": "bodycomposition-dicom-conversion"},
+            "source_format": {"const": "dicom"},
+            "source_content_sha256": {"$ref": "#/$defs/sha256"},
+            "source_byte_size": {"type": "integer", "minimum": 1},
+            "sidecar_content_sha256": {"$ref": "#/$defs/sha256"}
+          }
         }
       },
       "allOf": [
         {
           "if": {"properties": {"input_format": {"const": "dicom"}}},
+          "then": {"required": ["dicom"]}
+        },
+        {
+          "if": {"required": ["prestage"]},
           "then": {"required": ["dicom"]}
         }
       ]

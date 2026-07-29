@@ -1,7 +1,7 @@
 measurements:
   tissue_profile_id: lee_2018_fat_m274_m49_diffusion_sensitivity_v1
   tissue_definitions:
-    sat_total_hu_m274_m49_diffusion_lee_2018:
+    sat_tissue_hu_m274_m49_diffusion_lee_2018:
       enabled: true
       source_labels: [SAT]
       hu_range: [-274, -49]
@@ -12,7 +12,7 @@ measurements:
           iterations: 5
           time_step: 0.0625
           conductance: 3.0
-    vat_total_hu_m274_m49_diffusion_lee_2018:
+    vat_tissue_hu_m274_m49_diffusion_lee_2018:
       enabled: true
       source_labels: [aVAT, tVAT, VAT]
       hu_range: [-274, -49]

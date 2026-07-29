@@ -25,6 +25,8 @@ class _SegmInternal(PipelineAction):
         *,
         model_directory: str | Path | None = None,
         model_folds: str | list[int] | None = None,
+        analysis_region: str | None = None,
+        restore_reference: str | None = None,
     ):
         super().__init__(pipeline)
         self.input_image_name = image
@@ -36,6 +38,14 @@ class _SegmInternal(PipelineAction):
         self.device = pipeline.device
         self.predictor = None
         self.model_preset = model
+        self.analysis_region_name = analysis_region
+        self.restore_reference_name = restore_reference
+        if (analysis_region is None) != (restore_reference is None):
+            raise ValueError(
+                "analysis_region and restore_reference must be configured together."
+            )
+        if analysis_region is not None:
+            self.io_inputs.extend((analysis_region, restore_reference))
 
         model_settings = {
             "ResEncM": (
@@ -142,20 +152,36 @@ class _SegmInternal(PipelineAction):
 
         input_image = memory[self.input_image_name]
         input_image.validate()
-        output_label.meta = input_image.meta
         predictor = self._get_predictor()
         spacing_zyx = tuple(reversed(input_image.spacing))
 
         logging.info(" running segmentation using nnUNetv2|%s", self.model_title)
         stream = LoggingWriter(logging.DEBUG)
         with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-            output_label.data = self._predict(predictor, input_image, spacing_zyx)
+            prediction = self._predict(predictor, input_image, spacing_zyx)
             log_gpu_usage(self.device)
+        if self.analysis_region_name is None:
+            output_label.meta = input_image.meta
+            output_label.data = prediction
+            output_reference = input_image
+        else:
+            analysis_region = memory[self.analysis_region_name]
+            restore_reference = memory[self.restore_reference_name]
+            restore_reference.validate()
+            assert_same_physical_domain(
+                analysis_region.inference_region.geometry,
+                input_image.geometry,
+                reference_name="configured tissue inference region",
+                candidate_name="nnUNet tissue input",
+            )
+            output_label.meta = restore_reference.meta
+            output_label.data = analysis_region.restore_target_labels(prediction)
+            output_reference = restore_reference
         output_label.validate()
         assert_same_physical_domain(
-            input_image.geometry,
+            output_reference.geometry,
             output_label.geometry,
-            reference_name="input image",
+            reference_name="segmentation output reference",
             candidate_name=f"{self.model_title} label",
         )
 
@@ -209,7 +235,7 @@ class SegmIntVertebrae(_SegmInternal):
 
 
 class SegmIntBodyComposition(_SegmInternal):
-    """Segment tissue compartments with an internal nnU-Net model."""
+    """Segment anatomical compartments with an internal nnU-Net model."""
 
     output_label_name = "masks/tissue_compartments.nii.gz"
     weight_key = "int-bodycomposition"

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from BodyComposition.config import CANONICAL_TISSUE_DEFINITIONS, ConfigError
+from BodyComposition.config import (
+    CANONICAL_TISSUE_DEFINITIONS,
+    TISSUE_LABELS,
+    ConfigError,
+)
 
 
 def _require_mapping(config: Mapping[str, Any], path: str) -> Mapping[str, Any]:
@@ -36,7 +41,12 @@ def _require_bool(config: Mapping[str, Any], path: str) -> None:
 
 def _require_nonnegative_number(config: Mapping[str, Any], path: str) -> None:
     value = _value(config, path)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
         raise ConfigError(f"Configuration value {path} must be a non-negative number.")
 
 
@@ -89,6 +99,16 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         "measurements.export.csv",
     ):
         _require_bool(config, path)
+
+    analysis = _require_mapping(config, "analysis")
+    if analysis.get("scope") not in {"full_ct", "l3_vertebral_level"}:
+        raise ConfigError(
+            "analysis.scope must be full_ct or l3_vertebral_level."
+        )
+    _require_nonnegative_number(
+        config,
+        "analysis.l3.inference_context_mm",
+    )
 
     timeout = _value(config, "run.timeout")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
@@ -505,8 +525,6 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         raise ConfigError("measurements.body_surface.threshold_hu must be numeric.")
     if measurement["enabled"] and not measurement["export"]["parquet"]:
         raise ConfigError("Canonical measurements require Parquet export.")
-    if measurement["enabled"] and measurement["export"]["csv"]:
-        raise ConfigError("Canonical measurements do not permit duplicate CSV export.")
 
     try:
         from BodyComposition.reporting.contracts import ReportingSettings
@@ -521,33 +539,6 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             "reporting.enabled requires tissue.save_mask=true so the axial "
             "segmentation view can be regenerated post hoc."
         )
-
-    for crop_name, crop in _require_mapping(config, "crop").items():
-        if not isinstance(crop, Mapping):
-            raise ConfigError(f"crop.{crop_name} must be a mapping.")
-        if not isinstance(crop.get("roi"), list) or any(
-            isinstance(label, bool) or not isinstance(label, int) for label in crop.get("roi", [])
-        ):
-            raise ConfigError(f"crop.{crop_name}.roi must be a list of integer labels.")
-        anatomical = crop.get("roi_anatomical", [])
-        if not isinstance(anatomical, list) or any(
-            not isinstance(name, str) or not name.strip() for name in anatomical
-        ):
-            raise ConfigError(f"crop.{crop_name}.roi_anatomical must be a list of names.")
-        axes = crop.get("axes")
-        if (
-            not isinstance(axes, list)
-            or len(axes) != 6
-            or any(not isinstance(axis, bool) for axis in axes)
-        ):
-            raise ConfigError(f"crop.{crop_name}.axes must contain six booleans.")
-        margin = crop.get("margin")
-        if (
-            not isinstance(margin, list)
-            or len(margin) != 6
-            or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in margin)
-        ):
-            raise ConfigError(f"crop.{crop_name}.margin must contain six numbers.")
 
     for mapping_name in (
         "LBL_TISSUE_COMPARTMENTS",
@@ -567,11 +558,11 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
 
     compartment_labels = _require_mapping(config, "LBL_TISSUE_COMPARTMENTS")
     tissue_labels = _require_mapping(config, "LBL_TISSUE")
-    if tissue_labels != compartment_labels:
+    if tissue_labels != TISSUE_LABELS:
         raise ConfigError(
-            "LBL_TISSUE must use the same stable labels as "
-            "LBL_TISSUE_COMPARTMENTS; overlapping downstream definitions are "
-            "not encoded in the single-label visualization mask."
+            "LBL_TISSUE must match the released HU-filtered tissue label schema."
         )
+    if any(compartment_labels.get(label) != name for label, name in tissue_labels.items()):
+        raise ConfigError("LBL_TISSUE labels must retain their compartment names.")
 
     return config

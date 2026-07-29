@@ -96,6 +96,23 @@ def test_installed_build_lock_digest_rejects_invalid_embedded_value(monkeypatch)
     assert package_lock_digest() is None
 
 
+def test_elapsed_run_period_uses_latest_terminal_timestamp():
+    ended_at, duration_seconds = service_module._elapsed_run_period(
+        "2026-07-29T08:00:00+00:00",
+        [
+            "2026-07-29T08:01:30+00:00",
+            "2026-07-29T10:04:00+02:00",
+        ],
+    )
+
+    assert ended_at == "2026-07-29T08:04:00+00:00"
+    assert duration_seconds == pytest.approx(240.0)
+    assert service_module._elapsed_run_period(
+        "2026-07-29T08:00:00+00:00",
+        ["2026-07-29T07:59:00+00:00"],
+    ) == (None, None)
+
+
 class SuccessfulPipeline:
     instances = 0
 
@@ -181,6 +198,11 @@ def test_public_config_is_strict_roundtrippable_and_cwd_independent(tmp_path, mo
     assert config.tissue_backend == "bodycomposition_resenc_l_v1"
     assert config.model_root == Path.home() / ".cache/bodycomposition/models"
     assert config.normalized()["runtime"]["timeout_seconds"] == 14400
+    assert config.normalized()["output"]["save_csv_tables"] is True
+    assert config.to_runtime_dict()["measurements"]["export"] == {
+        "parquet": True,
+        "csv": True,
+    }
     assert PipelineConfig.model_validate(config.normalized()).digest() == config.digest()
     with pytest.raises(ConfigError, match="Unknown configuration value"):
         PipelineConfig.model_validate({"method": "BodyCompositionFast"})
@@ -231,6 +253,16 @@ def test_queue_identity_allows_worker_resources_but_not_output_changes():
 
     value["output"]["save_body_surface"] = False
     assert first.queue_digest() != PipelineConfig.model_validate(value).queue_digest()
+
+    csv_variant = first.normalized()
+    csv_variant["output"]["save_csv_tables"] = False
+    csv_config = PipelineConfig.model_validate(csv_variant)
+    assert first.queue_digest() != csv_config.queue_digest()
+    assert first.scientific_digest() == csv_config.scientific_digest()
+    assert csv_config.to_runtime_dict()["measurements"]["export"] == {
+        "parquet": True,
+        "csv": False,
+    }
 
 
 def test_model_inventory_and_required_defaults_are_explicit():
@@ -359,8 +391,20 @@ def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     assert "<mounted-model-cache>" in manifest_text
     run = inspect_result(tmp_path / "outputs/runs/cohort-1")
     assert run.aggregate_paths["cases"].is_file()
+    assert {
+        "cases",
+        "failures",
+        "review_queue",
+        "cases_csv",
+        "failures_csv",
+        "review_queue_csv",
+    } == set(run.aggregate_paths)
+    assert all(path.is_file() for path in run.aggregate_paths.values())
     review_queue = pd.read_parquet(run.aggregate_paths["review_queue"])
+    review_queue_csv = pd.read_csv(run.aggregate_paths["review_queue_csv"])
     assert len(review_queue) == 1
+    assert review_queue_csv.columns.tolist() == review_queue.columns.tolist()
+    assert len(review_queue_csv) == len(review_queue)
     assert json.loads(review_queue.iloc[0]["observed_json"]) == {
         "native_label": 24,
         "orientation_changed": True,
@@ -374,6 +418,14 @@ def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     assert manifest["qc_flags"][0]["thresholds"]["minimum_votes"] == 23
     json.dumps(first.as_dict(), allow_nan=False)
     reloaded_paths = service_module.aggregate_results(run.output_path)
+    assert {
+        "cases",
+        "failures",
+        "review_queue",
+        "cases_csv",
+        "failures_csv",
+        "review_queue_csv",
+    } == set(reloaded_paths)
     reloaded_queue = pd.read_parquet(reloaded_paths["review_queue"])
     assert json.loads(reloaded_queue.iloc[0]["observed_json"]) == {
         "native_label": 24,
@@ -389,6 +441,29 @@ def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     )
     assert second.execution_status == ExecutionStatus.SKIPPED_IDENTICAL
     assert SuccessfulPipeline.instances == 1
+
+
+def test_batch_can_omit_csv_mirrors_without_omitting_parquet(tmp_path):
+    source = _write_ct(tmp_path / "case.nii.gz")
+    value = _config().normalized()
+    value["output"]["save_csv_tables"] = False
+    result = _service(
+        tmp_path,
+        config=PipelineConfig.model_validate(value),
+    ).analyze_case(
+        source,
+        tmp_path / "outputs",
+        case_id="case-1",
+        run_id="without-csv",
+    )
+
+    run = inspect_result(result.output_path.parents[2])
+    assert set(run.aggregate_paths) == {"cases", "failures", "review_queue"}
+    assert all(path.suffix == ".parquet" for path in run.aggregate_paths.values())
+    assert not list((run.output_path / "aggregate").glob("*.csv"))
+    regenerated = service_module.aggregate_results(run.output_path)
+    assert set(regenerated) == {"cases", "failures", "review_queue"}
+    assert not list((run.output_path / "aggregate").glob("*.csv"))
 
 
 def test_qc_evidence_json_normalization_is_strict_and_private(tmp_path):
@@ -655,8 +730,23 @@ def test_cli_analyze_is_a_thin_json_adapter(monkeypatch, capsys, tmp_path):
     assert code == 0
     assert payload == json.loads(json.dumps(expected.as_dict(), default=str))
     assert isinstance(calls["config"], PipelineConfig)
+    assert calls["config"].normalized()["output"]["save_csv_tables"]
     assert calls["case_id"] == "case-1"
     assert calls["series_uid"] is None
+
+    assert (
+        cli.main(
+            [
+                "analyze",
+                str(tmp_path / "input.nii.gz"),
+                "--no-csv",
+                "--json",
+            ]
+        )
+        == cli.EXIT_OK
+    )
+    capsys.readouterr()
+    assert not calls["config"].normalized()["output"]["save_csv_tables"]
 
 
 def test_cli_common_paths_use_positional_inputs_and_safe_defaults():
@@ -670,8 +760,11 @@ def test_cli_common_paths_use_positional_inputs_and_safe_defaults():
     assert case.device is None
     assert case.case_id is None
     assert case.series_uid is None
+    assert not case.no_csv
     assert batch.manifest == Path("cohort.json")
     assert batch.output == service_module.DEFAULT_OUTPUT_ROOT
+    assert not batch.worker
+    assert not batch.no_csv
     assert convert.input == Path("dicom")
     assert convert.output == Path("scan.nii.gz")
     assert convert.series_uid is None
@@ -681,15 +774,21 @@ def test_cli_common_paths_use_positional_inputs_and_safe_defaults():
 def test_cli_convert_is_a_thin_adapter(monkeypatch, capsys, tmp_path):
     calls = {}
     output = tmp_path / "ct.nii.gz"
+    metadata = tmp_path / "ct.bodycomposition.json"
     expected = {
         "output_path": output,
+        "metadata_path": metadata,
         "series_instance_uid": "1.2.3",
         "input_format": "dicom",
     }
 
     def fake_convert(input_path, output_path, **kwargs):
         calls.update({"input": input_path, "output": output_path, **kwargs})
-        return SimpleNamespace(output_path=output, as_dict=lambda: expected)
+        return SimpleNamespace(
+            output_path=output,
+            metadata_path=metadata,
+            as_dict=lambda: expected,
+        )
 
     monkeypatch.setattr(cli, "convert_dicom", fake_convert)
     code = cli.main(
@@ -793,6 +892,8 @@ def test_reporting_enabled_batch_collates_current_run_order(
     config_data["reporting"]["enabled"] = True
     config = PipelineConfig.model_validate(config_data)
     calls = []
+    snapshots = []
+    cover_summaries = []
 
     def load_report(path):
         path = Path(path)
@@ -809,11 +910,12 @@ def test_reporting_enabled_batch_collates_current_run_order(
             manual_review_required=False,
         )
 
-    def collate(reports, *, export_id, output_directory, settings):
-        assert [report.case_id for report in reports] == ["first", "second"]
+    def collate(reports, *, export_id, output_directory, settings, run_summary):
+        snapshots.append([report.case_id for report in reports])
+        cover_summaries.append(dict(run_summary))
         assert export_id == "report-run"
         output = Path(output_directory)
-        output.mkdir(parents=True)
+        output.mkdir(parents=True, exist_ok=True)
         pdf = output / "case_reports.pdf"
         manifest = output / "report_manifest.json"
         pdf.write_bytes(b"pdf")
@@ -833,4 +935,23 @@ def test_reporting_enabled_batch_collates_current_run_order(
     assert run.execution_status == ExecutionStatus.SUCCEEDED
     assert run.reporting["status"] == "succeeded"
     assert run.reporting["combined_pdf"].endswith("case_reports.pdf")
-    assert len(calls) == 2
+    assert snapshots == [
+        ["first"],
+        ["first", "second"],
+        ["first", "second"],
+    ]
+    assert [summary["document_state"] for summary in cover_summaries] == [
+        "in_progress",
+        "complete",
+        "complete",
+    ]
+    assert [summary["included_case_count"] for summary in cover_summaries] == [1, 2, 2]
+    assert all(
+        summary["paths"]["input_directories"] == [tmp_path.name]
+        for summary in cover_summaries
+    )
+    assert all(
+        summary["paths"]["output_directory"] == "report-run"
+        for summary in cover_summaries
+    )
+    assert len(calls) == 5

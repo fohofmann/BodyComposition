@@ -12,6 +12,7 @@ import BodyComposition.service as service_module
 from BodyComposition import cli, convert_dicom, discover_dicom_series
 from BodyComposition.config import PipelineConfig
 from BodyComposition.dicom import (
+    DicomConversionMetadataError,
     DicomSeriesSelectionError,
     dicom_report_patient_metadata,
 )
@@ -116,7 +117,16 @@ def test_dicom_conversion_preserves_pixels_geometry_and_excludes_identifiers(tmp
     )
     assert result.series_instance_uid == uid
     assert result.input_summary == summary
+    assert result.metadata_path == tmp_path / "converted.bodycomposition.json"
+    assert result.metadata_path.is_file()
     assert nifti_summary["input_pixel_sha256"] == summary["input_pixel_sha256"]
+    assert nifti_summary["input_format"] == "nifti"
+    assert nifti_summary["dicom"] == summary["dicom"]
+    assert nifti_summary["prestage"]["source_format"] == "dicom"
+    assert (
+        nifti_summary["prestage"]["source_content_sha256"]
+        == summary["source_content_sha256"]
+    )
     assert summary["input_format"] == "dicom"
     assert summary["dicom"]["image_orientation_patient_complete"]
     assert summary["dicom"]["image_position_patient_complete"]
@@ -129,10 +139,37 @@ def test_dicom_conversion_preserves_pixels_geometry_and_excludes_identifiers(tmp
         "sex": "F",
     }
     serialized = json.dumps(summary)
+    serialized_metadata = result.metadata_path.read_text(encoding="utf-8")
     assert uid not in serialized
+    assert uid not in serialized_metadata
     assert "MRN-123456" not in serialized
+    assert "MRN-123456" not in serialized_metadata
     assert str(tmp_path) not in serialized
+    assert str(tmp_path) not in serialized_metadata
     assert not any(key.startswith("0010|") for key in nifti_image.GetMetaDataKeys())
+
+
+def test_conversion_metadata_is_optional_but_must_match_when_present(tmp_path):
+    source = tmp_path / "dicom"
+    _write_dicom_series(
+        source,
+        np.zeros((2, 3, 4), dtype=np.int16),
+        series_uid="1.2.826.0.1.3680043.10.999.2",
+    )
+    output = tmp_path / "ct.nii.gz"
+    result = convert_dicom(source, output)
+    payload = json.loads(result.metadata_path.read_text(encoding="utf-8"))
+    payload["nifti"]["content_sha256"] = "0" * 64
+    result.metadata_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DicomConversionMetadataError, match="file hash"):
+        image_summary(output)
+
+    result.metadata_path.unlink()
+    _, summary = image_summary(output)
+    assert summary["input_format"] == "nifti"
+    assert "dicom" not in summary
+    assert "prestage" not in summary
 
 
 def test_multiple_ct_series_require_explicit_selection_but_a_file_is_unambiguous(tmp_path):
@@ -192,6 +229,7 @@ def test_standalone_cli_converts_one_dicom_series(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert code == 0
     assert payload["output_path"] == str(output)
+    assert payload["metadata_path"] == str(tmp_path / "ct.bodycomposition.json")
     assert payload["series_instance_uid"] == uid
     assert payload["input_format"] == "dicom"
     assert output.is_file()
@@ -275,6 +313,26 @@ def test_pipeline_accepts_dicom_without_persisting_the_temporary_conversion(
     assert not any(
         item["relative_path"].endswith("converted_input.nii.gz") for item in manifest["artifacts"]
     )
+
+    staged_input = tmp_path / "transfer" / "case-1.nii.gz"
+    staged_conversion = convert_dicom(source, staged_input)
+    staged = service.analyze_case(
+        staged_input,
+        tmp_path / "staged-output",
+        case_id="case-1",
+        run_id="staged-nifti",
+    )
+    staged_manifest = json.loads(staged.manifest_path.read_text(encoding="utf-8"))
+    assert staged.execution_status == ExecutionStatus.SUCCEEDED
+    assert captured["path"] == staged_input
+    assert staged_manifest["input"]["input_format"] == "nifti"
+    assert staged_manifest["input"]["dicom"]["scanner_model"] == "Synthetic CT 1.0"
+    assert staged_manifest["input"]["prestage"]["source_format"] == "dicom"
+    assert (
+        staged_manifest["input"]["prestage"]["sidecar_content_sha256"]
+        == staged_conversion.metadata_content_sha256
+    )
+    assert captured["patient_metadata"] == {}
 
     convert = service_module.convert_dicom
 

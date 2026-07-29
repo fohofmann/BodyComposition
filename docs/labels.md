@@ -22,7 +22,7 @@ The result JSON records the native-to-anatomical mapping. T13 and L6 are not
 compressed into a fixed template. Sacrum participates in the same territory
 and three-bin summary contract as other supported levels.
 
-## Tissue compartments
+## Native compartments
 
 `masks/tissue_compartments.nii.gz` is the untouched model-predicted anatomical
 compartment map. It contains native labels 1–7 only:
@@ -40,14 +40,16 @@ compartment map. It contains native labels 1–7 only:
 There is no learned label 8. Native label 1 is the complete muscle
 compartment and may include macroscopic fat-attenuation regions.
 
-Native aVAT and tVAT remain separate. `total_vat` is a derived union in the
+Native aVAT and tVAT remain separate. `vat_compartment_union` is a derived union in the
 tables and does not overwrite either source label.
 
-`masks/tissue_labels.nii.gz` is the default consensus visualization mask. It
-uses the same labels 1–7, retaining only the conventional -29-to-150 HU part
-of SM and -190-to--30 HU parts of SAT/aVAT/tVAT. It never introduces label 8.
+`masks/tissue_labels.nii.gz` is the default HU-filtered tissue mask. It uses
+labels 1, 3, 4, and 5 only: the conventional -29-to-150 HU part of the SM
+compartment and the -190-to--30 HU parts of the SAT, aVAT, and tVAT
+compartments. Native bone, heart, and lung remain available only in
+`tissue_compartments.nii.gz`. The tissue mask never introduces label 8.
 Optional tissue definitions add named table/signature measurements but do not
-change this stable single-label artifact.
+change this stable default artifact.
 
 Canonical derived tissue classes are nevertheless calculated from the raw
 compartment map and untouched prepared CT so excluded voxels remain auditable.

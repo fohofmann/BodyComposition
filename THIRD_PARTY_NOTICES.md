@@ -1,5 +1,12 @@
 # Third-party notices
 
+BodyComposition source is licensed under Apache-2.0. This file records the
+separate terms, attribution, and redistribution boundaries for external
+software, model assets, fonts, and public data used by or displayed in the
+project. Nothing here relicenses an upstream work. Model weights are external
+runtime assets unless explicitly stated otherwise. Installed Python
+distributions retain their complete upstream license and notice files.
+
 ## SimpleITK and GDCM DICOM reader
 
 BodyComposition uses the upstream SimpleITK dependency and its GDCM ImageIO
@@ -149,12 +156,18 @@ against SPINEPS tag commit
 `ad622b87d9e4b81fb6a88df2a8050bd40f7046d5` and the pinned TPTBox tag,
 including reuse of the precomputed upstream crop output without a download.
 
-SPINEPS, TPTBox, and the VIBESegmentator source repositories declare the
-Apache License 2.0. The TPTBox 0.7.5 wheel metadata contains an inconsistent
-AGPL classifier even though its included LICENSE and upstream repository state
-Apache-2.0. The project decision uses the repeatedly declared Apache-2.0
-project license for this pin. The wheel-metadata discrepancy is retained as a
-non-blocking provenance note.
+SPINEPS, TPTBox, and VIBESegmentator are used under the Apache License 2.0
+stated by their upstream repositories. BodyComposition does not vendor or
+modify their source.
+
+Exact sources:
+
+- TPTBox 0.7.5 commit
+  [`acaaf16f74fb0fe8fc555b23cf4e0230efc49753`](https://github.com/Hendrik-code/TPTBox/tree/acaaf16f74fb0fe8fc555b23cf4e0230efc49753);
+- SPINEPS 2.0.0 commit
+  [`ad622b87d9e4b81fb6a88df2a8050bd40f7046d5`](https://github.com/Hendrik-code/spineps/tree/ad622b87d9e4b81fb6a88df2a8050bd40f7046d5);
+  and
+- [VIBESegmentator](https://github.com/robert-graf/VIBESegmentator).
 
 BodyComposition does not redistribute the pinned SPINEPS
 semantic/instance/VERIDAH archives or VibeSeg Dataset100 archives. They are not
@@ -236,6 +249,34 @@ authorization from the GNOME Foundation or Bitstream Inc., respectively.
 BodyComposition embeds the original, unmodified fonts and records their
 SHA-256 digests in each report identity/manifest.
 
+## CT-ORG README images and public test data
+
+The README images in `docs/assets/` are derivatives of CT-ORG volume 0:
+
+> Rister B, Shivakumar K, Nobashi T, Rubin DL. CT-ORG: A Dataset of CT
+> Volumes With Multiple Organ Segmentations (Version 1). The Cancer Imaging
+> Archive. 2019. https://doi.org/10.7937/TCIA.2019.TT7F4V7O
+
+CT-ORG is distributed under
+[Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/).
+The full image is the BodyComposition-generated patient-page report
+screenshot. The README overview is a deterministic recomposition: the aligned
+spine and tissue-area panels and HU plots come from the current report, while
+the axial overlay was regenerated from the same retained CT and segmentation
+masks on a finer display grid. The table, technical metadata, and notes were
+omitted for legibility. Both images contain automated pipeline outputs, not
+CT-ORG ground truth. The source, license, and changes are also stated beside
+the README figure and in `docs/assets/README.md`. The image assets remain
+subject to CC BY 3.0 and are not relicensed under BodyComposition's
+Apache-2.0 license. Attribution does not imply endorsement by the dataset
+authors or The Cancer Imaging Archive.
+
+The checksum-pinned public integration test may download the unchanged source
+CT into an external cache. The CT is not stored in this repository, wheel,
+source archive, or container and is not covered by BodyComposition's
+Apache-2.0 license. Complete fixture provenance and the additional CADS mirror
+citation are in `tests/fixtures/public_ct/`.
+
 ## TotalSegmentator
 
 BodyComposition uses two official TotalSegmentator model archives for optional
@@ -283,3 +324,35 @@ cite:
 > Wasserthal J, Breit H-C, Meyer MT, et al. TotalSegmentator: Robust
 > Segmentation of 104 Anatomic Structures in CT Images. Radiology: Artificial
 > Intelligence. 2023. https://doi.org/10.1148/ryai.230024
+
+## Other direct Python runtime dependencies
+
+BodyComposition imports the following unmodified upstream distributions. The
+table gives each project's primary license family for navigation; it does not
+replace the complete license and third-party notice files installed with each
+distribution. Packages such as NumPy, OpenCV, pandas, PyArrow, scikit-image,
+and PyTorch include additional components under compatible terms documented
+in those installed files.
+
+| Direct dependency | Primary upstream terms |
+| --- | --- |
+| `huggingface_hub` | Apache-2.0 |
+| `jsonschema` | MIT |
+| `nibabel` | MIT-style |
+| `numpy` | BSD-3-Clause, with bundled component notices |
+| `opencv-python-headless` | MIT wheel wrapper; Apache-2.0 OpenCV core; bundled third-party notices |
+| `pandas` | BSD-3-Clause, with bundled component notices |
+| `pyarrow` | Apache-2.0, with bundled third-party notices |
+| `psutil` | BSD-3-Clause |
+| `PyYAML` | MIT |
+| `requests` | Apache-2.0 |
+| `urllib3` | MIT |
+| `scipy` | BSD-3-Clause, with bundled component notices |
+| `scikit-image` | BSD-3-Clause, with bundled component notices |
+| `torch` and `torchvision` | BSD-3-Clause-style terms, with bundled third-party notices |
+
+SimpleITK/GDCM, nnU-Net, SPINEPS, TPTBox, ReportLab, and pypdf are described in
+the dedicated sections above. The exact locked dependency inventory is emitted
+as a CycloneDX SBOM by the release checks. Container and environment
+distributions retain the upstream license files installed by their package
+managers.

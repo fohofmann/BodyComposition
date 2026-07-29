@@ -1,6 +1,7 @@
 import hashlib
 import json
 import zipfile
+from pathlib import PurePosixPath
 
 import pytest
 
@@ -24,6 +25,49 @@ def _archive(tmp_path, members):
     return path
 
 
+def _inventory_sha256(members):
+    records = []
+    for name, content in sorted(members.items()):
+        payload = content.encode("utf-8") if isinstance(content, str) else content
+        records.append(
+            {
+                "path": name,
+                "bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    encoded = json.dumps(
+        records,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _archive_inventory_sha256(path):
+    with zipfile.ZipFile(path) as archive:
+        configs = [
+            PurePosixPath(member.filename)
+            for member in archive.infolist()
+            if PurePosixPath(member.filename).name == "inference_config.json"
+        ]
+        if len(configs) != 1:
+            return "0" * 64
+        root = configs[0].parent
+        members = {}
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            member_path = PurePosixPath(member.filename)
+            try:
+                relative = member_path.relative_to(root)
+            except ValueError:
+                continue
+            members[relative.as_posix()] = archive.read(member)
+    return _inventory_sha256(members)
+
+
 def _spec(path, *, digest=None, size=None):
     return ModelAssetSpec(
         model_id="test_model",
@@ -33,6 +77,7 @@ def _spec(path, *, digest=None, size=None):
         url="https://github.com/Hendrik-code/spineps/releases/download/v0/model.zip",
         bytes=path.stat().st_size if size is None else size,
         sha256=digest or hashlib.sha256(path.read_bytes()).hexdigest(),
+        installed_inventory_sha256=_archive_inventory_sha256(path),
         install_dir="test_model",
     )
 
@@ -83,6 +128,19 @@ def test_archive_install_rejects_path_traversal(tmp_path):
         install_archive(archive, tmp_path / "models", _spec(archive))
 
 
+def test_archive_install_rejects_backslash_path_traversal(tmp_path):
+    archive = _archive(
+        tmp_path,
+        {
+            "..\\outside": "unsafe",
+            "model/inference_config.json": "{}",
+        },
+    )
+
+    with pytest.raises(UnsafeArchiveError, match="Backslash-separated"):
+        install_archive(archive, tmp_path / "models", _spec(archive))
+
+
 def test_archive_requires_exactly_one_inference_config(tmp_path):
     archive = _archive(
         tmp_path,
@@ -96,17 +154,16 @@ def test_archive_requires_exactly_one_inference_config(tmp_path):
         install_archive(archive, tmp_path / "models", _spec(archive))
 
 
-def test_full_verification_rejects_unsafe_manifest_path(tmp_path):
+def test_full_verification_treats_manifest_inventory_as_metadata(tmp_path):
     archive = _archive(tmp_path, {"inference_config.json": "{}"})
     spec = _spec(archive)
     installed = install_archive(archive, tmp_path / "models", spec)
     manifest_path = installed / ".bodycomposition-asset.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["files"][0]["path"] = "../outside"
+    payload["files"] = [{"path": "../outside", "bytes": 0, "sha256": "0" * 64}]
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(AssetVerificationError, match="unsafe file path"):
-        verify_installed_asset(tmp_path / "models", spec, full=True)
+    assert verify_installed_asset(tmp_path / "models", spec, full=True) == installed
 
 
 def test_full_verification_rejects_unlisted_file(tmp_path):
@@ -114,6 +171,58 @@ def test_full_verification_rejects_unlisted_file(tmp_path):
     spec = _spec(archive)
     installed = install_archive(archive, tmp_path / "models", spec)
     (installed / "unexpected.bin").write_bytes(b"not in the signed inventory")
+
+    with pytest.raises(AssetVerificationError, match="complete file inventory"):
+        verify_installed_asset(tmp_path / "models", spec, full=True)
+
+
+def test_full_verification_rejects_symbolic_link(tmp_path):
+    archive = _archive(
+        tmp_path,
+        {
+            "inference_config.json": "{}",
+            "fold_0/checkpoint_final.pth": b"weights",
+        },
+    )
+    spec = _spec(archive)
+    installed = install_archive(archive, tmp_path / "models", spec)
+    checkpoint = installed / "fold_0/checkpoint_final.pth"
+    target = tmp_path / "external-weights"
+    target.write_bytes(checkpoint.read_bytes())
+    checkpoint.unlink()
+    checkpoint.symlink_to(target)
+
+    with pytest.raises(AssetVerificationError, match="symbolic link"):
+        verify_installed_asset(tmp_path / "models", spec, full=True)
+
+
+def test_full_verification_rejects_model_and_manifest_rewrite(tmp_path):
+    archive = _archive(
+        tmp_path,
+        {
+            "inference_config.json": "{}",
+            "fold_0/checkpoint_final.pth": b"original weights",
+        },
+    )
+    spec = _spec(archive)
+    installed = install_archive(archive, tmp_path / "models", spec)
+    checkpoint = installed / "fold_0/checkpoint_final.pth"
+    checkpoint.write_bytes(b"tampered weights")
+    manifest_path = installed / ".bodycomposition-asset.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["files"] = [
+        {
+            "path": "fold_0/checkpoint_final.pth",
+            "bytes": checkpoint.stat().st_size,
+            "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        },
+        {
+            "path": "inference_config.json",
+            "bytes": 2,
+            "sha256": hashlib.sha256(b"{}").hexdigest(),
+        },
+    ]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(AssetVerificationError, match="complete file inventory"):
         verify_installed_asset(tmp_path / "models", spec, full=True)
@@ -151,13 +260,79 @@ def test_multipart_vibeseg_install_merges_verified_archives(tmp_path):
     second = second.rename(second.with_name("100_1.zip"))
     assets = (_release_pin(first), _release_pin(second))
     archives = {first.name: first, second.name: second}
+    expected_inventory_sha256 = _inventory_sha256(
+        {
+            "Trainer__nnUNetPlans/dataset.json": "{}",
+            "Trainer__nnUNetPlans/plans.json": "{}",
+            "Trainer__nnUNetPlans/fold_0/checkpoint_final.pth": "fold zero",
+            "Trainer__nnUNetPlans/fold_1/checkpoint_final.pth": "fold one",
+        }
+    )
 
-    trained_model = install_vibeseg_archives(archives, tmp_path / "models", assets)
+    trained_model = install_vibeseg_archives(
+        archives,
+        tmp_path / "models",
+        assets,
+        expected_inventory_sha256=expected_inventory_sha256,
+    )
 
     assert trained_model.name == "Trainer__nnUNetPlans"
     assert (trained_model / "fold_0/checkpoint_final.pth").is_file()
     assert (trained_model / "fold_1/checkpoint_final.pth").is_file()
-    assert verify_installed_vibeseg(tmp_path / "models", assets, full=True) == trained_model
+    assert (
+        verify_installed_vibeseg(
+            tmp_path / "models",
+            assets,
+            full=True,
+            expected_inventory_sha256=expected_inventory_sha256,
+        )
+        == trained_model
+    )
+
+
+def test_full_vibeseg_verification_rejects_model_and_manifest_rewrite(tmp_path):
+    first = _archive(
+        tmp_path / "one",
+        {
+            "Dataset100/Trainer__nnUNetPlans/dataset.json": "{}",
+            "Dataset100/Trainer__nnUNetPlans/plans.json": "{}",
+            "Dataset100/Trainer__nnUNetPlans/fold_0/checkpoint_final.pth": "original weights",
+        },
+    ).rename(tmp_path / "one" / "100.zip")
+    assets = (_release_pin(first),)
+    expected_inventory_sha256 = _inventory_sha256(
+        {
+            "Trainer__nnUNetPlans/dataset.json": "{}",
+            "Trainer__nnUNetPlans/plans.json": "{}",
+            "Trainer__nnUNetPlans/fold_0/checkpoint_final.pth": "original weights",
+        }
+    )
+    trained_model = install_vibeseg_archives(
+        {first.name: first},
+        tmp_path / "models",
+        assets,
+        expected_inventory_sha256=expected_inventory_sha256,
+    )
+    checkpoint = trained_model / "fold_0/checkpoint_final.pth"
+    checkpoint.write_bytes(b"tampered weights")
+    manifest_path = trained_model.parent / ".bodycomposition-asset.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["files"] = [
+        {
+            "path": "Trainer__nnUNetPlans/fold_0/checkpoint_final.pth",
+            "bytes": checkpoint.stat().st_size,
+            "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        }
+    ]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AssetVerificationError, match="complete file inventory"):
+        verify_installed_vibeseg(
+            tmp_path / "models",
+            assets,
+            full=True,
+            expected_inventory_sha256=expected_inventory_sha256,
+        )
 
 
 def test_multipart_vibeseg_install_rejects_conflicting_overlap(tmp_path):

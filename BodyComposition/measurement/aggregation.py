@@ -404,7 +404,13 @@ def aggregate_physical_range(
         inferior_mm,
         superior_mm,
     )
-    contributing = overlap_superior_mm > 0
+    acquired = overlap_superior_mm > 0
+    analysis_available = (
+        slices["body_composition_analysis_available"].fillna(False).to_numpy(dtype=bool)
+        if "body_composition_analysis_available" in slices
+        else np.ones(len(slices), dtype=bool)
+    )
+    contributing = acquired & analysis_available
     normal_overlap_mm = overlap_superior_mm * slices["normal_mm_per_superior_mm"].to_numpy(
         dtype=float
     )
@@ -414,30 +420,46 @@ def aggregate_physical_range(
         raise ValueError(
             "All slices in one prepared CT must use the same normal-to-superior scale."
         )
+    acquired_length_mm = covered_interval_length_mm(
+        slices.loc[acquired, "slice_slab_inferior_mm"].to_numpy(dtype=float),
+        slices.loc[acquired, "slice_slab_superior_mm"].to_numpy(dtype=float),
+        inferior_mm,
+        superior_mm,
+    )
     observed_length_mm = covered_interval_length_mm(
         slices.loc[contributing, "slice_slab_inferior_mm"].to_numpy(dtype=float),
         slices.loc[contributing, "slice_slab_superior_mm"].to_numpy(dtype=float),
         inferior_mm,
         superior_mm,
     )
+    acquisition_coverage = min(acquired_length_mm / target_length_mm, 1.0)
     coverage = min(observed_length_mm / target_length_mm, 1.0)
     physically_complete = coverage >= full_coverage_tolerance
+    if physically_complete:
+        range_reason = None
+    elif acquisition_coverage <= 0:
+        range_reason = "outside_fov"
+    elif observed_length_mm <= 0:
+        range_reason = "outside_analysis_region"
+    elif coverage < acquisition_coverage:
+        range_reason = "partial_analysis_region"
+    else:
+        range_reason = "partial_fov"
     output: dict[str, Any] = {
         "range_inferior_mm": float(inferior_mm),
         "range_superior_mm": float(superior_mm),
         "target_length_mm": float(target_length_mm),
         "observed_length_mm": float(observed_length_mm),
+        "acquired_length_mm": float(acquired_length_mm),
         "target_integration_length_mm": float(target_length_mm * normal_scale[0]),
         "observed_integration_length_mm": float(observed_length_mm * normal_scale[0]),
         "coverage_fraction": float(coverage),
+        "acquisition_coverage_fraction": float(acquisition_coverage),
         "full_coverage_tolerance": float(full_coverage_tolerance),
         "allow_partial": bool(allow_partial),
         "range_valid": bool(physically_complete or (allow_partial and observed_length_mm > 0)),
-        "range_missing_reason": (
-            None
-            if physically_complete
-            else ("partial_fov" if observed_length_mm > 0 else "outside_fov")
-        ),
+        "range_missing_reason": range_reason,
+        "acquired_slice_count": int(np.count_nonzero(acquired)),
         "contributing_slice_count": int(np.count_nonzero(contributing)),
         "contributing_slice_ids": [
             int(value) for value in slices.loc[contributing, "slice_id"].to_numpy(dtype=int)
@@ -445,11 +467,15 @@ def aggregate_physical_range(
     }
     strict_range_valid = physically_complete or allow_partial
 
-    def metric_reason(*, empty: bool = False) -> str:
+    def metric_reason(
+        *,
+        empty: bool = False,
+        empty_reason: str = "empty_tissue",
+    ) -> str:
         if not physically_complete and not allow_partial:
             return str(output["range_missing_reason"] or "invalid_measurement")
         if empty:
-            return "empty_tissue"
+            return empty_reason
         return "invalid_measurement"
 
     area_columns = [column for column in slices if column.endswith(AREA_SUFFIX)]
@@ -610,7 +636,15 @@ def aggregate_physical_range(
             column,
             value,
             metric_valid,
-            metric_reason(empty=denominator == 0),
+            metric_reason(
+                empty=denominator == 0,
+                empty_reason=(
+                    "empty_compartment"
+                    if prefix.endswith("_compartment")
+                    or "_compartment_" in prefix
+                    else "empty_tissue"
+                ),
+            ),
             metric_coverage,
         )
     _add_aggregate_composition_ratios(output)
@@ -623,11 +657,14 @@ def _null_aggregate_values(output: dict[str, Any], reason: str) -> dict[str, Any
         "range_superior_mm",
         "target_length_mm",
         "observed_length_mm",
+        "acquired_length_mm",
         "target_integration_length_mm",
         "observed_integration_length_mm",
         "coverage_fraction",
+        "acquisition_coverage_fraction",
         "full_coverage_tolerance",
         "allow_partial",
+        "acquired_slice_count",
         "contributing_slice_count",
         "contributing_slice_ids",
     }

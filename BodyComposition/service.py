@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import shutil
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, dataclass, is_dataclass
@@ -21,7 +22,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from BodyComposition.config import PipelineConfig
+from BodyComposition.config import PipelineConfig, low_resource_config
 from BodyComposition.dicom import convert_dicom, dicom_report_patient_metadata
 from BodyComposition.execution import (
     CaseLease,
@@ -34,6 +35,12 @@ from BodyComposition.execution import (
     hardware_profile_id,
     is_out_of_memory_error,
     release_accelerator_cache,
+    shared_file_guard,
+)
+from BodyComposition.measurement.api import load_measurement_tables
+from BodyComposition.measurement.csv_export import (
+    write_csv_mirrors,
+    write_csv_table,
 )
 from BodyComposition.model_manager import ModelStatus, require_models
 from BodyComposition.pipeline import InternalPipeline
@@ -47,6 +54,7 @@ from BodyComposition.provenance import (
 )
 from BodyComposition.results import (
     BatchResult,
+    BatchWorkerResult,
     CaseResult,
     ExecutionStatus,
     QCStatus,
@@ -131,12 +139,278 @@ class _PreparedCase:
     case_id: str
     analysis_id: str
     provenance: Mapping[str, Any]
-    patient_metadata: Mapping[str, str]
     preflight_failure: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _InputPreflight:
+    input_summary: Mapping[str, Any]
+    failure: Mapping[str, Any] | None = None
+
+
+def _input_snapshot_digest(path: Path) -> str:
+    """Build a cheap cache key without reading image payloads."""
+
+    source = path.resolve(strict=False)
+    lowered = source.name.lower()
+    is_nifti = source.is_file() and (
+        lowered.endswith(".nii") or lowered.endswith(".nii.gz")
+    )
+    entries: list[dict[str, Any]] = []
+
+    def append(candidate: Path, relative: str) -> None:
+        try:
+            stat = candidate.stat()
+        except OSError as error:
+            entries.append(
+                {
+                    "relative": relative,
+                    "available": False,
+                    "error": type(error).__name__,
+                }
+            )
+            return
+        entries.append(
+            {
+                "relative": relative,
+                "available": True,
+                "byte_size": stat.st_size,
+                "modified_ns": stat.st_mtime_ns,
+            }
+        )
+
+    if is_nifti:
+        append(source, source.name)
+        suffix_length = len(".nii.gz") if lowered.endswith(".nii.gz") else len(".nii")
+        sidecar = source.with_name(
+            f"{source.name[:-suffix_length]}.bodycomposition.json"
+        )
+        append(sidecar, sidecar.name)
+    else:
+        directory = source.parent if source.is_file() else source
+        append(directory, ".")
+        if directory.is_dir():
+            for root, directories, files in os.walk(directory):
+                directories.sort()
+                files.sort()
+                base = Path(root)
+                for name in files:
+                    candidate = base / name
+                    append(candidate, candidate.relative_to(directory).as_posix())
+
+    return canonical_digest(
+        {
+            "source": str(source),
+            "entries": entries,
+        }
+    )
+
+
+def _preflight_request_digest(cases: Sequence[CaseInput]) -> str:
+    return canonical_digest(
+        {
+            "schema_version": 1,
+            "cases": [
+                {
+                    "ordinal": ordinal,
+                    "case_id": case.case_id,
+                    "series_uid": case.series_uid,
+                    "input_snapshot_sha256": _input_snapshot_digest(case.input_path),
+                }
+                for ordinal, case in enumerate(cases)
+            ],
+        }
+    )
+
+
+def _build_input_preflight(cases: Sequence[CaseInput]) -> tuple[_InputPreflight, ...]:
+    values: list[_InputPreflight] = []
+    for ordinal, case in enumerate(cases):
+        failure = None
+        try:
+            _, input_summary = image_summary(
+                case.input_path,
+                series_uid=case.series_uid,
+            )
+        except Exception as error:
+            content_digest = (
+                file_sha256(case.input_path) if case.input_path.is_file() else None
+            )
+            pseudo_pixel_digest = canonical_digest(
+                {
+                    "invalid_input": content_digest,
+                    "ordinal": ordinal,
+                    "error_code": type(error).__name__,
+                }
+            )
+            input_summary = {
+                "source_reference": "content-addressed-local-input",
+                "source_content_sha256": content_digest,
+                "source_byte_size": (
+                    case.input_path.stat().st_size
+                    if case.input_path.is_file()
+                    else None
+                ),
+                "input_pixel_sha256": pseudo_pixel_digest,
+                "input_format": "unreadable_or_missing",
+                "geometry": {},
+            }
+            public_summary = getattr(
+                error,
+                "public_summary",
+                "The input could not be read as a valid three-dimensional NIfTI or DICOM CT.",
+            )
+            failure = {
+                "stage": "input_validation",
+                "code": type(error).__name__,
+                "summary": str(public_summary),
+            }
+        values.append(_InputPreflight(input_summary=input_summary, failure=failure))
+    return tuple(values)
+
+
+def _load_input_preflight(
+    path: Path,
+    *,
+    request_digest: str,
+    case_count: int,
+) -> tuple[_InputPreflight, ...] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("schema_version") != 1
+            or payload.get("request_sha256") != request_digest
+            or payload.get("case_count") != case_count
+            or not isinstance(payload.get("cases"), list)
+            or len(payload["cases"]) != case_count
+        ):
+            return None
+        values = []
+        for ordinal, item in enumerate(payload["cases"]):
+            if (
+                not isinstance(item, Mapping)
+                or item.get("ordinal") != ordinal
+                or not isinstance(item.get("input_summary"), Mapping)
+                or (
+                    item.get("failure") is not None
+                    and not isinstance(item.get("failure"), Mapping)
+                )
+            ):
+                return None
+            values.append(
+                _InputPreflight(
+                    input_summary=dict(item["input_summary"]),
+                    failure=(
+                        dict(item["failure"])
+                        if isinstance(item.get("failure"), Mapping)
+                        else None
+                    ),
+                )
+            )
+        return tuple(values)
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _cached_input_preflight(
+    cases: Sequence[CaseInput],
+    output: Path,
+) -> tuple[_InputPreflight, ...]:
+    """Read each batch input once across compatible concurrent workers."""
+
+    request_digest = _preflight_request_digest(cases)
+    path = (
+        output
+        / ".bodycomposition"
+        / "preflight"
+        / f"{request_digest}.json"
+    )
+    lock_path = path.with_suffix(".lock")
+    with shared_file_guard(lock_path):
+        cached = _load_input_preflight(
+            path,
+            request_digest=request_digest,
+            case_count=len(cases),
+        )
+        if cached is not None:
+            return cached
+        prepared = _build_input_preflight(cases)
+        _atomic_json(
+            {
+                "schema_version": 1,
+                "request_sha256": request_digest,
+                "case_count": len(cases),
+                "cases": [
+                    {
+                        "ordinal": ordinal,
+                        "input_summary": dict(item.input_summary),
+                        "failure": dict(item.failure) if item.failure else None,
+                    }
+                    for ordinal, item in enumerate(prepared)
+                ],
+            },
+            path,
+        )
+        return prepared
+
+
+def _run_input_directory_names(prepared: Sequence[_PreparedCase]) -> tuple[str, ...]:
+    """Return bounded directory labels without exposing absolute input paths."""
+
+    directories = []
+    for item in prepared:
+        path = item.case.input_path
+        directory = path if path.is_dir() else path.parent
+        directories.append(directory.resolve(strict=False))
+    unique_directories = list(dict.fromkeys(directories))
+    if not unique_directories:
+        return ("Not recorded",)
+    if len(unique_directories) == 1:
+        return (unique_directories[0].name or "root",)
+    common = Path(os.path.commonpath([str(path) for path in unique_directories]))
+    if all(path.parent == common for path in unique_directories):
+        return (common.name or "root",)
+    return tuple(path.name or "root" for path in unique_directories)
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _elapsed_run_period(
+    started_at: str,
+    ended_values: Sequence[Any],
+) -> tuple[str | None, float | None]:
+    """Return the latest terminal timestamp and elapsed run wall time."""
+
+    try:
+        started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+    except ValueError:
+        return None, None
+    if started.utcoffset() is None:
+        return None, None
+    started = started.astimezone(UTC)
+    ended_candidates: list[datetime] = []
+    for value in ended_values:
+        if value is None:
+            continue
+        try:
+            ended = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if ended.utcoffset() is None:
+            continue
+        ended_candidates.append(ended.astimezone(UTC))
+    if not ended_candidates:
+        return None, None
+    ended = max(ended_candidates)
+    duration = (ended - started).total_seconds()
+    if duration < 0:
+        return None, None
+    return ended.isoformat(), duration
 
 
 def _new_id(prefix: str) -> str:
@@ -540,65 +814,25 @@ class PipelineService:
         output_root: str | Path = DEFAULT_OUTPUT_ROOT,
         *,
         run_id: str | None = None,
-    ) -> BatchResult:
+        worker_mode: bool = False,
+    ) -> BatchResult | BatchWorkerResult:
         cases = tuple(CaseInput.model_validate(value) for value in inputs)
         if not cases:
             raise ValueError("analyze_batch requires at least one explicit input.")
         output = Path(output_root)
         _check_writable(output)
 
-        # Resolve identities before creating the executor so duplicate IDs and
-        # incompatible resume plans fail without loading any GPU model.
+        input_preflight = _cached_input_preflight(cases, output)
+
+        # Resolve identities locally because worker devices and model mounts may
+        # differ even though the expensive input summaries are shared.
         prepared: list[_PreparedCase] = []
-        for ordinal, case in enumerate(cases):
-            preflight_failure = None
-            patient_metadata: Mapping[str, str] = {}
-            try:
-                _, input_info = image_summary(
-                    case.input_path,
-                    series_uid=case.series_uid,
-                )
-                if input_info.get("input_format") == "dicom":
-                    try:
-                        patient_metadata = dicom_report_patient_metadata(
-                            case.input_path,
-                            series_uid=case.series_uid,
-                        )
-                    except Exception as error:
-                        logging.warning(
-                            "DICOM demographics are unavailable for the local report header (%s).",
-                            type(error).__name__,
-                        )
-            except Exception as error:
-                content_digest = file_sha256(case.input_path) if case.input_path.is_file() else None
-                pseudo_pixel_digest = canonical_digest(
-                    {
-                        "invalid_input": content_digest,
-                        "ordinal": ordinal,
-                        "error_code": type(error).__name__,
-                    }
-                )
-                input_info = {
-                    "source_reference": "content-addressed-local-input",
-                    "source_content_sha256": content_digest,
-                    "source_byte_size": (
-                        case.input_path.stat().st_size if case.input_path.is_file() else None
-                    ),
-                    "input_pixel_sha256": pseudo_pixel_digest,
-                    "input_format": "unreadable_or_missing",
-                    "geometry": {},
-                }
-                public_summary = getattr(
-                    error,
-                    "public_summary",
-                    "The input could not be read as a valid three-dimensional NIfTI or DICOM CT.",
-                )
-                preflight_failure = {
-                    "stage": "input_validation",
-                    "code": type(error).__name__,
-                    "summary": str(public_summary),
-                }
-            resolved_case_id = _safe_case_id(case.case_id, input_info["input_pixel_sha256"])
+        for case, input_result in zip(cases, input_preflight, strict=True):
+            input_info = input_result.input_summary
+            resolved_case_id = _safe_case_id(
+                case.case_id,
+                str(input_info["input_pixel_sha256"]),
+            )
             analysis_id, provenance = analysis_identity(
                 input_summary=input_info,
                 config=self.config,
@@ -612,8 +846,7 @@ class PipelineService:
                     case_id=resolved_case_id,
                     analysis_id=analysis_id,
                     provenance=provenance,
-                    patient_metadata=patient_metadata,
-                    preflight_failure=preflight_failure,
+                    preflight_failure=input_result.failure,
                 )
             )
         resolved_ids = [value.case_id for value in prepared]
@@ -689,8 +922,7 @@ class PipelineService:
                 reporting=previous.get("reporting"),
             )
 
-        started_at = _utc_now()
-        timer = monotonic()
+        worker_started_at = _utc_now()
         state = SharedExecutionState(
             output,
             selected_run_id,
@@ -700,69 +932,174 @@ class PipelineService:
                 )
             ),
         )
-        results = self._drain_shared_queue(
+        started_at = state.initialize_run_clock(
+            started_at=worker_started_at,
+            plan_sha256=canonical_digest(plan),
+        )
+        results, _, queue_terminal, active_case_count = self._drain_shared_queue(
             prepared=prepared,
             run_id=selected_run_id,
             run_root=run_root,
             state=state,
+            started_at=started_at,
+            worker_mode=worker_mode,
         )
+        if not queue_terminal:
+            self._release_executor()
+            return BatchWorkerResult(
+                run_id=selected_run_id,
+                output_path=run_root,
+                cases=tuple(results),
+                planned_case_count=len(prepared),
+                active_case_count=active_case_count,
+            )
 
-        aggregate_paths = aggregate_results(run_root, results)
-        reporting = self._collate_run_reports(
-            run_id=selected_run_id,
-            run_root=run_root,
-            results=results,
-        )
-        run_manifest = {
-            "schema_version": "1.0.0",
-            "manifest_type": "run",
-            **plan,
-            "started_at": started_at,
-            "ended_at": _utc_now(),
-            "duration_seconds": monotonic() - timer,
-            "execution_status": (
-                "cancelled"
-                if any(item.execution_status == ExecutionStatus.CANCELLED for item in results)
-                else "failed"
-                if (
-                    any(item.execution_status == ExecutionStatus.FAILED for item in results)
-                    or reporting is not None
-                    and reporting.get("status") == "failed"
-                )
-                else "succeeded"
-            ),
-            "case_counts": {
-                status.value: sum(item.execution_status == status for item in results)
-                for status in ExecutionStatus
-                if status not in {ExecutionStatus.PENDING, ExecutionStatus.RUNNING}
-            },
-            "cases": [
-                {
-                    "case_id": result.case_id,
-                    "analysis_id": result.analysis_id,
-                    "attempt_id": result.attempt_id,
-                    "execution_status": result.execution_status.value,
-                    "qc_status": result.qc_status.value,
-                    "manifest": result.manifest_path.relative_to(run_root).as_posix(),
+        with state.coordination_guard("run-finalize"):
+            # Another compatible worker may have completed finalization while
+            # this process was waiting for the guard. The published manifest is
+            # the completion marker and must never be rewritten.
+            if existing_manifest.is_file():
+                previous = json.loads(existing_manifest.read_text(encoding="utf-8"))
+                validate_payload(previous, "run_manifest.schema.json")
+                previous_plan = {
+                    "run_id": previous.get("run_id"),
+                    "ordered_cases": previous.get("ordered_cases"),
+                    "configuration_sha256": previous.get("configuration_sha256"),
                 }
+                if previous_plan != plan:
+                    raise ExistingRunError(
+                        "The requested run_id already belongs to a different immutable "
+                        "input/configuration plan."
+                    )
+                previous_results = tuple(
+                    CaseResult.from_manifest(
+                        resolve_bundle_path(
+                            run_root,
+                            str(value["manifest"]),
+                            field="cases.manifest",
+                        )
+                    )
+                    for value in previous.get("cases", ())
+                )
+                if len(previous_results) != len(prepared):
+                    raise ExistingRunError(
+                        "The existing run manifest has an incomplete case list."
+                    )
+                previous_aggregate_paths = {
+                    name: resolve_bundle_path(
+                        run_root,
+                        str(relative),
+                        field=f"aggregate.{name}",
+                    )
+                    for name, relative in previous.get("aggregate", {}).items()
+                }
+                return BatchResult(
+                    run_id=selected_run_id,
+                    output_path=run_root,
+                    manifest_path=existing_manifest,
+                    cases=previous_results,
+                    aggregate_paths=previous_aggregate_paths,
+                    reporting=previous.get("reporting"),
+                )
+
+            aggregate_paths = aggregate_results(
+                run_root,
+                results,
+                include_csv=self.config.normalized()["output"]["save_csv_tables"],
+            )
+            # Always rebuild the terminal snapshot under the finalization guard.
+            # Incremental snapshots are useful during processing, but only this
+            # refresh is allowed to back the completed run manifest.
+            reporting = self._refresh_incremental_run_reports(
+                run_id=selected_run_id,
+                run_root=run_root,
+                prepared=prepared,
+                state=state,
+                local_results={result.case_id: result for result in results},
+                started_at=started_at,
+            )
+            if reporting is None:
+                reporting = self._collate_run_reports(
+                    run_id=selected_run_id,
+                    run_root=run_root,
+                    results=results,
+                    planned_case_ids=[item.case_id for item in prepared],
+                    input_directory_names=_run_input_directory_names(prepared),
+                    started_at=started_at,
+                )
+            case_payloads = [
+                json.loads(result.manifest_path.read_text(encoding="utf-8"))
                 for result in results
-            ],
-            "aggregate": {
-                name: path.relative_to(run_root).as_posix()
-                for name, path in aggregate_paths.items()
-            },
-            "reporting": reporting,
-        }
-        validate_payload(run_manifest, "run_manifest.schema.json")
-        _atomic_json(run_manifest, existing_manifest)
-        return BatchResult(
-            run_id=selected_run_id,
-            output_path=run_root,
-            manifest_path=existing_manifest,
-            cases=tuple(results),
-            aggregate_paths=aggregate_paths,
-            reporting=reporting,
-        )
+            ]
+            ended_at, duration_seconds = _elapsed_run_period(
+                started_at,
+                [payload.get("ended_at") for payload in case_payloads],
+            )
+            if ended_at is None or duration_seconds is None:
+                ended_at = _utc_now()
+                _, duration_seconds = _elapsed_run_period(started_at, [ended_at])
+            if duration_seconds is None:
+                raise RuntimeError("The canonical run period could not be determined.")
+            run_manifest = {
+                "schema_version": "1.0.0",
+                "manifest_type": "run",
+                **plan,
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "duration_seconds": duration_seconds,
+                "execution_status": (
+                    "cancelled"
+                    if any(
+                        item.execution_status == ExecutionStatus.CANCELLED
+                        for item in results
+                    )
+                    else "failed"
+                    if (
+                        any(
+                            item.execution_status == ExecutionStatus.FAILED
+                            for item in results
+                        )
+                        or reporting is not None
+                        and reporting.get("status") == "failed"
+                    )
+                    else "succeeded"
+                ),
+                "case_counts": {
+                    status.value: sum(
+                        item.execution_status == status for item in results
+                    )
+                    for status in ExecutionStatus
+                    if status not in {ExecutionStatus.PENDING, ExecutionStatus.RUNNING}
+                },
+                "cases": [
+                    {
+                        "case_id": result.case_id,
+                        "analysis_id": result.analysis_id,
+                        "attempt_id": result.attempt_id,
+                        "execution_status": result.execution_status.value,
+                        "qc_status": result.qc_status.value,
+                        "manifest": result.manifest_path.relative_to(
+                            run_root
+                        ).as_posix(),
+                    }
+                    for result in results
+                ],
+                "aggregate": {
+                    name: path.relative_to(run_root).as_posix()
+                    for name, path in aggregate_paths.items()
+                },
+                "reporting": reporting,
+            }
+            validate_payload(run_manifest, "run_manifest.schema.json")
+            _atomic_json(run_manifest, existing_manifest)
+            return BatchResult(
+                run_id=selected_run_id,
+                output_path=run_root,
+                manifest_path=existing_manifest,
+                cases=tuple(results),
+                aggregate_paths=aggregate_paths,
+                reporting=reporting,
+            )
 
     def _collate_run_reports(
         self,
@@ -770,13 +1107,16 @@ class PipelineService:
         run_id: str,
         run_root: Path,
         results: Sequence[CaseResult],
+        planned_case_ids: Sequence[str],
+        input_directory_names: Sequence[str],
+        started_at: str,
     ) -> dict[str, Any] | None:
-        """Collate the current immutable run order when reporting is enabled."""
+        """Collate one complete or in-progress immutable run snapshot."""
 
         if not self.config.reporting_enabled:
             return None
         settings_data = self.config.normalized()["reporting"]
-        if not settings_data["combined_pdf"] or len(results) == 1:
+        if not settings_data["combined_pdf"] or len(planned_case_ids) == 1:
             return {
                 "enabled": True,
                 "status": "individual_only",
@@ -786,24 +1126,55 @@ class PipelineService:
                 "failure_code": None,
                 "failure_summary": None,
             }
+        output = run_root / "aggregate" / "reports" / run_id
+        combined_pdf_path = output / "case_reports.pdf"
+        combined_manifest_path = output / "report_manifest.json"
         try:
             from BodyComposition.reporting.contracts import ReportingSettings
             from BodyComposition.reporting.service import (
+                ReportValidationError,
                 collate_reports,
                 load_case_report_result,
+                render_failed_case_report,
             )
 
             settings = ReportingSettings.from_mapping(settings_data)
-            reports = tuple(
-                load_case_report_result(result.output_path / "reports/report_manifest.json")
-                for result in results
+            reports = []
+            for result in results:
+                report_manifest = result.output_path / "reports/report_manifest.json"
+                try:
+                    report = load_case_report_result(report_manifest)
+                except (FileNotFoundError, ReportValidationError):
+                    failure = result.failure or {}
+                    if not failure:
+                        raise
+                    render_failed_case_report(
+                        case_id=result.case_id,
+                        analysis_id=result.analysis_id,
+                        output_directory=result.output_path / "reports",
+                        settings=settings,
+                        failure_stage=str(failure.get("stage") or "reporting"),
+                        failure_code=str(
+                            failure.get("code") or "case_report_unavailable"
+                        ),
+                    )
+                    report = load_case_report_result(report_manifest)
+                reports.append(report)
+            cover_summary = self._run_report_cover_summary(
+                run_id=run_id,
+                run_root=run_root,
+                results=results,
+                planned_case_ids=planned_case_ids,
+                input_directory_names=input_directory_names,
+                started_at=started_at,
+                settings=settings,
             )
-            output = run_root / "aggregate" / "reports" / run_id
             collated = collate_reports(
-                reports,
+                tuple(reports),
                 export_id=run_id,
                 output_directory=output,
                 settings=settings,
+                run_summary=cover_summary,
             )
             return {
                 "enabled": True,
@@ -821,18 +1192,283 @@ class PipelineService:
                 "Run report collation failed (%s).",
                 type(error).__name__,
             )
+            retained_pdf = (
+                combined_pdf_path.relative_to(run_root).as_posix()
+                if combined_pdf_path.is_file()
+                else None
+            )
+            retained_manifest = (
+                combined_manifest_path.relative_to(run_root).as_posix()
+                if combined_manifest_path.is_file()
+                else None
+            )
             return {
                 "enabled": True,
                 "status": "failed",
                 "layout": settings_data["layout"],
-                "combined_pdf": None,
-                "combined_manifest": None,
+                "combined_pdf": retained_pdf,
+                "combined_manifest": retained_manifest,
                 "failure_code": type(error).__name__,
                 "failure_summary": (
-                    "The ordered run report could not be completed; individual scientific "
+                    "The latest ordered snapshot could not be published; any previously "
+                    "validated combined PDF remains available, and individual scientific "
                     "results remain authoritative."
                 ),
             }
+
+    def _run_report_cover_summary(
+        self,
+        *,
+        run_id: str,
+        run_root: Path,
+        results: Sequence[CaseResult],
+        planned_case_ids: Sequence[str],
+        input_directory_names: Sequence[str],
+        started_at: str,
+        settings: Any,
+    ) -> dict[str, Any]:
+        """Build the privacy-safe technical snapshot printed on the run cover."""
+
+        from BodyComposition import __version__
+        from BodyComposition.reporting.service import run_cover_configuration_rows
+
+        payloads = [
+            json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            for result in results
+        ]
+
+        def joined(values: Sequence[Any]) -> str | None:
+            unique = [
+                value
+                for value in dict.fromkeys(
+                    str(item).strip()
+                    for item in values
+                    if item is not None and str(item).strip()
+                )
+                if value
+            ]
+            return " | ".join(unique) if unique else None
+
+        def nested(payload: Mapping[str, Any], *keys: str) -> Any:
+            value: Any = payload
+            for key in keys:
+                if not isinstance(value, Mapping):
+                    return None
+                value = value.get(key)
+            return value
+
+        case_counts = {
+            status.value: sum(
+                result.execution_status == status for result in results
+            )
+            for status in (
+                ExecutionStatus.SUCCEEDED,
+                ExecutionStatus.FAILED,
+                ExecutionStatus.SKIPPED_IDENTICAL,
+                ExecutionStatus.CANCELLED,
+            )
+        }
+        qc_counts = {
+            status.value: sum(result.qc_status == status for result in results)
+            for status in (
+                QCStatus.PASS,
+                QCStatus.REVIEW,
+                QCStatus.FAIL,
+                QCStatus.NOT_ASSESSED,
+            )
+        }
+        durations = [
+            float(payload["duration_seconds"])
+            for result, payload in zip(results, payloads, strict=True)
+            if result.execution_status != ExecutionStatus.SKIPPED_IDENTICAL
+            and isinstance(payload.get("duration_seconds"), (int, float))
+            and math.isfinite(float(payload["duration_seconds"]))
+            and float(payload["duration_seconds"]) >= 0
+        ]
+        errors = Counter(
+            (
+                str((result.failure or {}).get("stage") or "pipeline"),
+                str((result.failure or {}).get("code") or "pipeline_failed"),
+            )
+            for result in results
+            if result.failure is not None
+        )
+        included = len(results)
+        planned = len(planned_case_ids)
+        if included < planned:
+            document_state = "in_progress"
+        elif case_counts["cancelled"]:
+            document_state = "cancelled"
+        elif case_counts["failed"]:
+            document_state = "completed_with_errors"
+        else:
+            document_state = "complete"
+        analysis_ended_at: str | None = None
+        run_duration_seconds: float | None = None
+        if document_state != "in_progress":
+            analysis_ended_at, run_duration_seconds = _elapsed_run_period(
+                started_at,
+                [
+                    payload.get("ended_at")
+                    for result, payload in zip(results, payloads, strict=True)
+                    if result.execution_status != ExecutionStatus.SKIPPED_IDENTICAL
+                ],
+            )
+        config = self.config.normalized()
+        landmark_config = config["measurements"]["landmarks"]
+        models = [
+            {"role": "Orientation", "identifier": config["orientation"]["backend"]},
+            {"role": "Vertebral bodies", "identifier": config["vertebrae"]["backend"]},
+            {"role": "Native compartments", "identifier": config["tissue"]["backend"]},
+            {"role": "Body surface", "identifier": config["body_surface"]["backend"]},
+        ]
+        if landmark_config["enabled"]:
+            models.append(
+                {"role": "Landmarks", "identifier": landmark_config["backend"]}
+            )
+        package_versions = [
+            nested(payload, "provenance", "code", "package_version")
+            for payload in payloads
+        ]
+        source_revisions = [
+            nested(payload, "provenance", "code", "git_commit")
+            for payload in payloads
+        ]
+        output_root = run_root.parents[1]
+        return {
+            "run_id": run_id,
+            "document_state": document_state,
+            "planned_case_count": planned,
+            "included_case_count": included,
+            "remaining_case_count": planned - included,
+            "included_case_ids": [result.case_id for result in results],
+            "case_counts": case_counts,
+            "qc_counts": qc_counts,
+            "manual_review_case_count": sum(
+                result.qc_status in {QCStatus.REVIEW, QCStatus.FAIL}
+                for result in results
+            ),
+            "mean_runtime_seconds": (
+                sum(durations) / len(durations) if durations else None
+            ),
+            "runtime_case_count": len(durations),
+            "started_at": started_at,
+            "ended_at": analysis_ended_at,
+            "run_duration_seconds": run_duration_seconds,
+            "updated_at": _utc_now(),
+            "layout": settings.layout,
+            "pipeline": {
+                "name": "BodyComposition",
+                "version": joined(package_versions) or __version__,
+                "configuration_sha256": self.config.queue_digest(),
+                "source_revision": joined(source_revisions),
+            },
+            "configuration_rows": run_cover_configuration_rows(
+                settings,
+                normalized_config=config,
+                orientation_policy=str(config["orientation"]["policy"]),
+                tissue_definitions=config["measurements"]["tissue_definitions"],
+            ),
+            "models": models,
+            "runtime": {
+                "device": joined(
+                    [
+                        nested(payload, "provenance", "runtime", "device_type")
+                        or nested(payload, "provenance", "execution", "device")
+                        for payload in payloads
+                    ]
+                )
+                or str(config["runtime"]["device"]),
+                "hardware": joined(
+                    [
+                        nested(payload, "provenance", "runtime", "gpu_name")
+                        for payload in payloads
+                    ]
+                ),
+                "cuda": joined(
+                    [
+                        nested(payload, "provenance", "runtime", "cuda_version")
+                        for payload in payloads
+                    ]
+                ),
+                "torch": joined(
+                    [
+                        nested(payload, "provenance", "runtime", "torch_version")
+                        for payload in payloads
+                    ]
+                ),
+                "python": joined(
+                    [
+                        nested(payload, "provenance", "runtime", "python_version")
+                        for payload in payloads
+                    ]
+                ),
+                "strategy": joined(
+                    [
+                        nested(payload, "provenance", "execution", "strategy")
+                        for payload in payloads
+                    ]
+                ),
+            },
+            "technical_errors": [
+                {"stage": stage, "code": code, "count": count}
+                for (stage, code), count in sorted(errors.items())
+            ],
+            "paths": {
+                "output_root": output_root.name or ".",
+                "run_folder": f"runs/{run_id}",
+                "input_directories": list(input_directory_names),
+                "output_directory": run_id,
+                "case_folder_pattern": "cases/<case-id>/<analysis-id>",
+                "failed_folder_pattern": "failed/<case-id>/<attempt-id>",
+                "combined_pdf": (
+                    f"aggregate/reports/{run_id}/case_reports.pdf"
+                ),
+            },
+        }
+
+    def _refresh_incremental_run_reports(
+        self,
+        *,
+        run_id: str,
+        run_root: Path,
+        prepared: Sequence[_PreparedCase],
+        state: SharedExecutionState,
+        local_results: Mapping[str, CaseResult],
+        started_at: str,
+    ) -> dict[str, Any] | None:
+        """Atomically refresh the ordered combined PDF after each terminal case."""
+
+        settings_data = self.config.normalized()["reporting"]
+        if (
+            not self.config.reporting_enabled
+            or not settings_data["combined_pdf"]
+            or len(prepared) <= 1
+        ):
+            return None
+        with state.coordination_guard("combined-report"):
+            current: dict[str, CaseResult] = dict(local_results)
+            for item in prepared:
+                if item.case_id in current:
+                    continue
+                manifest = state.result_manifest(item.case_id)
+                if manifest is not None and manifest.is_file():
+                    current[item.case_id] = CaseResult.from_manifest(manifest)
+            ordered = [
+                current[item.case_id]
+                for item in prepared
+                if item.case_id in current
+            ]
+            if not ordered:
+                return None
+            return self._collate_run_reports(
+                run_id=run_id,
+                run_root=run_root,
+                results=ordered,
+                planned_case_ids=[item.case_id for item in prepared],
+                input_directory_names=_run_input_directory_names(prepared),
+                started_at=started_at,
+            )
 
     def _render_terminal_report(
         self,
@@ -885,7 +1521,10 @@ class PipelineService:
         hardware_profile = dict(
             self._hardware_provider(getattr(executor, "device", self.config.device))
         )
-        if not state.low_memory_enabled(hardware_profile):
+        requested = bool(
+            self.config.normalized()["runtime"]["unload_models_between_stages"]
+        )
+        if not requested and not state.low_memory_enabled(hardware_profile):
             return False, hardware_profile
         enable = getattr(executor, "enable_low_memory_mode", None)
         if callable(enable):
@@ -1050,10 +1689,28 @@ class PipelineService:
         run_id: str,
         run_root: Path,
         state: SharedExecutionState,
-    ) -> list[CaseResult]:
-        """Claim complete cases until every item has one shared terminal result."""
+        started_at: str,
+        worker_mode: bool,
+    ) -> tuple[list[CaseResult], dict[str, Any] | None, bool, int]:
+        """Claim complete cases, optionally leaving when only live claims remain."""
 
         results: dict[str, CaseResult] = {}
+        latest_reporting: dict[str, Any] | None = None
+
+        def remember(result: CaseResult) -> None:
+            nonlocal latest_reporting
+            results[result.case_id] = result
+            refreshed = self._refresh_incremental_run_reports(
+                run_id=run_id,
+                run_root=run_root,
+                prepared=prepared,
+                state=state,
+                local_results=results,
+                started_at=started_at,
+            )
+            if refreshed is not None:
+                latest_reporting = refreshed
+
         while len(results) < len(prepared):
             made_progress = False
             for item in prepared:
@@ -1061,7 +1718,7 @@ class PipelineService:
                     continue
                 shared = self._shared_result(item=item, run_root=run_root, state=state)
                 if shared is not None:
-                    results[item.case_id] = shared
+                    remember(shared)
                     made_progress = True
                     continue
 
@@ -1077,7 +1734,7 @@ class PipelineService:
                             state=state,
                         )
                         if shared is not None:
-                            results[item.case_id] = shared
+                            remember(shared)
                             continue
                         result = self._record_unstarted_cancellation(
                             run_root=run_root,
@@ -1092,7 +1749,7 @@ class PipelineService:
                             stage="batch_scheduler",
                             exception_type="BatchStopRequested",
                         )
-                        results[item.case_id] = result
+                        remember(result)
                     continue
 
                 lease = state.try_claim(item.case_id)
@@ -1109,7 +1766,7 @@ class PipelineService:
                                 manifest_path=shared.manifest_path,
                                 reused_outputs=True,
                             )
-                        results[item.case_id] = shared
+                        remember(shared)
                         continue
 
                     lease.set_stage("input_validation")
@@ -1128,7 +1785,7 @@ class PipelineService:
                             stage="input_validation",
                             exception_type=str(item.preflight_failure["code"]),
                         )
-                        results[item.case_id] = result
+                        remember(result)
                         if self.config.fail_fast:
                             state.request_stop(reason="fail_fast_input_failure")
                         continue
@@ -1141,7 +1798,6 @@ class PipelineService:
                             case_id=item.case_id,
                             analysis_id=item.analysis_id,
                             provenance=item.provenance,
-                            patient_metadata=item.patient_metadata,
                             run_id=run_id,
                             run_root=run_root,
                             lease=lease,
@@ -1194,7 +1850,7 @@ class PipelineService:
 
                     if result.succeeded:
                         state.mark_completed(lease, manifest_path=result.manifest_path)
-                        results[item.case_id] = result
+                        remember(result)
                     elif result.execution_status == ExecutionStatus.CANCELLED:
                         state.mark_terminal_failure(
                             lease,
@@ -1202,7 +1858,7 @@ class PipelineService:
                             stage=str((result.failure or {}).get("stage") or lease.stage),
                             exception_type="KeyboardInterrupt",
                         )
-                        results[item.case_id] = result
+                        remember(result)
                         state.request_stop(reason="cancelled_by_user")
                     else:
                         failure = result.failure or {}
@@ -1216,16 +1872,38 @@ class PipelineService:
                             stage=str(failure.get("stage") or lease.stage),
                             exception_type=str(failure.get("code") or "pipeline_failed"),
                         )
-                        results[item.case_id] = result
+                        remember(result)
                         if self.config.fail_fast:
                             state.request_stop(reason="fail_fast_case_failure")
 
             if len(results) == len(prepared):
                 break
             if not made_progress:
+                active_case_count = sum(
+                    state.active_claim_record(item.case_id) is not None
+                    and not state.active_claim_is_stale(item.case_id)
+                    for item in prepared
+                    if item.case_id not in results
+                )
+                if worker_mode and active_case_count:
+                    return (
+                        [
+                            results[item.case_id]
+                            for item in prepared
+                            if item.case_id in results
+                        ],
+                        latest_reporting,
+                        False,
+                        active_case_count,
+                    )
                 sleep(state.policy.poll_seconds)
 
-        return [results[item.case_id] for item in prepared]
+        return (
+            [results[item.case_id] for item in prepared],
+            latest_reporting,
+            True,
+            0,
+        )
 
     @staticmethod
     def _as_skipped_identical(result: CaseResult) -> CaseResult:
@@ -1252,7 +1930,6 @@ class PipelineService:
         case_id: str,
         analysis_id: str,
         provenance: Mapping[str, Any],
-        patient_metadata: Mapping[str, str],
         run_id: str,
         run_root: Path,
         lease: CaseLease,
@@ -1299,6 +1976,18 @@ class PipelineService:
         bundle.mkdir(parents=True)
         started_at = _utc_now()
         timer = monotonic()
+        patient_metadata: Mapping[str, str] = {}
+        if input_summary.get("input_format") == "dicom":
+            try:
+                patient_metadata = dicom_report_patient_metadata(
+                    case.input_path,
+                    series_uid=case.series_uid,
+                )
+            except Exception as error:
+                logging.warning(
+                    "DICOM demographics are unavailable for the local report header (%s).",
+                    type(error).__name__,
+                )
         memory: dict[str, Any] = {
             "id": case_id,
             "run_id": run_id,
@@ -1685,10 +2374,23 @@ class PipelineService:
 def aggregate_results(
     run_path: str | Path,
     results: Sequence[CaseResult] | None = None,
+    *,
+    include_csv: bool | None = None,
 ) -> dict[str, Path]:
     """Build deterministic run tables without silently dropping failures."""
 
     root = Path(run_path)
+    if include_csv is None:
+        config_path = root / "normalized_config.yaml"
+        if config_path.is_file():
+            stored_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            include_csv = bool(
+                isinstance(stored_config, Mapping)
+                and isinstance(stored_config.get("output"), Mapping)
+                and stored_config["output"].get("save_csv_tables", True)
+            )
+        else:
+            include_csv = True
     if results is None:
         run_manifest = root / "run_manifest.json"
         if run_manifest.is_file():
@@ -1819,14 +2521,21 @@ def aggregate_results(
     }
     paths: dict[str, Path] = {}
     for name, (rows, columns) in definitions.items():
+        table = pd.DataFrame(rows, columns=columns)
         path = aggregate / f"{name}.parquet"
         temporary = aggregate / f".{name}.{uuid4().hex}.partial.parquet"
         try:
-            pd.DataFrame(rows, columns=columns).to_parquet(temporary, index=False)
+            table.to_parquet(temporary, index=False)
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
         paths[name] = path
+        if include_csv:
+            paths[f"{name}_csv"] = write_csv_table(
+                table,
+                aggregate / f"{name}.csv",
+                overwrite=True,
+            )
     return paths
 
 
@@ -1867,6 +2576,33 @@ def inspect_result(path: str | Path) -> CaseResult | BatchResult:
     )
 
 
+def export_result_csv(
+    path: str | Path,
+    destination: str | Path,
+    *,
+    overwrite: bool = False,
+) -> dict[str, Path]:
+    """Export validated case Parquet tables without modifying the case bundle."""
+
+    result = inspect_result(path)
+    if not isinstance(result, CaseResult):
+        raise ValueError("CSV export requires one case manifest, not a run manifest.")
+    if not result.succeeded:
+        raise ValueError("CSV export requires a successful case result.")
+    source_root = result.output_path.resolve()
+    output_root = Path(destination).resolve()
+    if output_root == source_root or output_root.is_relative_to(source_root):
+        raise ValueError(
+            "CSV export destination must be outside the immutable case bundle."
+        )
+    tables = load_measurement_tables(result.output_path / "tables")
+    return write_csv_mirrors(
+        tables,
+        output_root,
+        overwrite=overwrite,
+    )
+
+
 def analyze_case(
     input_path: str | Path,
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
@@ -1875,6 +2611,7 @@ def analyze_case(
     case_id: str | None = None,
     run_id: str | None = None,
     series_uid: str | None = None,
+    low_resource: bool = False,
 ) -> CaseResult:
     """Analyze one NIfTI or DICOM CT using release defaults.
 
@@ -1883,7 +2620,16 @@ def analyze_case(
     directory containing multiple CT series also requires ``series_uid``.
     """
 
-    return PipelineService(config).analyze_case(
+    selected_config = (
+        low_resource_config(
+            PipelineConfig.load(config)
+            if isinstance(config, (str, Path))
+            else config
+        )
+        if low_resource
+        else config
+    )
+    return PipelineService(selected_config).analyze_case(
         input_path,
         output_root,
         case_id=case_id,
@@ -1898,10 +2644,27 @@ def analyze_batch(
     *,
     config: PipelineConfig | Mapping[str, Any] | str | Path | None = None,
     run_id: str | None = None,
+    low_resource: bool = False,
 ) -> BatchResult:
     """Analyze an ordered collection using the same defaults as :func:`analyze_case`."""
 
-    return PipelineService(config).analyze_batch(inputs, output_root, run_id=run_id)
+    selected_config = (
+        low_resource_config(
+            PipelineConfig.load(config)
+            if isinstance(config, (str, Path))
+            else config
+        )
+        if low_resource
+        else config
+    )
+    return cast(
+        BatchResult,
+        PipelineService(selected_config).analyze_batch(
+            inputs,
+            output_root,
+            run_id=run_id,
+        ),
+    )
 
 
 def _reporting_settings(

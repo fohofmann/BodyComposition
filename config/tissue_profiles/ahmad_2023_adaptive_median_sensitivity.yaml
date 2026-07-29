@@ -9,7 +9,7 @@ measurements:
         method: adaptive_median
         minimum_kernel_zyx: [1, 3, 3]
         maximum_kernel_zyx: [1, 7, 7]
-    sat_total_hu_m190_m30_adaptive_median_1x3x3_1x7x7:
+    sat_tissue_hu_m190_m30_adaptive_median_1x3x3_1x7x7:
       enabled: true
       source_labels: [SAT]
       hu_range: [-190, -30]
@@ -17,7 +17,7 @@ measurements:
         method: adaptive_median
         minimum_kernel_zyx: [1, 3, 3]
         maximum_kernel_zyx: [1, 7, 7]
-    vat_total_hu_m190_m30_adaptive_median_1x3x3_1x7x7:
+    vat_tissue_hu_m190_m30_adaptive_median_1x3x3_1x7x7:
       enabled: true
       source_labels: [aVAT, tVAT, VAT]
       hu_range: [-190, -30]

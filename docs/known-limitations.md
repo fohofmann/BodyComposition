@@ -42,7 +42,7 @@ not use or expose that metric.
 
 ## Body surface and circumference
 
-The default body/trunk envelope is derived from predicted tissue compartments,
+The default body/trunk envelope is derived from predicted compartments,
 not a validated skin model. Connected arms, sparse predictions, devices,
 table/padding, and field-of-view truncation can affect contour and
 circumference. The sacral maximum is called a pelvic circumference, not a

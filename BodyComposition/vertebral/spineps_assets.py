@@ -19,6 +19,7 @@ from BodyComposition.vertebral.spineps_manifest import (
     MODEL_BUNDLE_VERSION,
     SPINEPS_MODEL_ASSETS,
     VIBESEG_CROP_ASSETS,
+    VIBESEG_CROP_INSTALLED_INVENTORY_SHA256,
     ModelAssetSpec,
     ReleaseAssetPin,
 )
@@ -75,6 +76,10 @@ def verify_archive(path: Path, spec: ModelAssetSpec) -> None:
 
 
 def _validated_member_path(root: Path, member: zipfile.ZipInfo) -> Path:
+    if "\\" in member.filename:
+        raise UnsafeArchiveError(
+            f"Backslash-separated model archive path is not allowed: {member.filename!r}."
+        )
     member_path = PurePosixPath(member.filename)
     if member_path.is_absolute() or ".." in member_path.parts:
         raise UnsafeArchiveError(f"Unsafe path in model archive: {member.filename!r}.")
@@ -139,8 +144,15 @@ def _model_source_directory(extracted: Path) -> Path:
 
 def _file_records(model_directory: Path) -> list[dict[str, object]]:
     records = []
-    for path in sorted(candidate for candidate in model_directory.rglob("*") if candidate.is_file()):
+    for path in sorted(model_directory.rglob("*")):
         if path.name == ASSET_MANIFEST_NAME:
+            continue
+        if path.is_symlink():
+            raise AssetVerificationError(
+                f"Installed model bundle contains a symbolic link: "
+                f"{path.relative_to(model_directory).as_posix()}."
+            )
+        if not path.is_file():
             continue
         records.append(
             {
@@ -150,6 +162,16 @@ def _file_records(model_directory: Path) -> list[dict[str, object]]:
             }
         )
     return records
+
+
+def _inventory_sha256(records: Sequence[Mapping[str, object]]) -> str:
+    encoded = json.dumps(
+        list(records),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _manifest_payload(spec: ModelAssetSpec, model_directory: Path) -> dict[str, object]:
@@ -166,25 +188,18 @@ def _manifest_payload(spec: ModelAssetSpec, model_directory: Path) -> dict[str, 
     }
 
 
-def _verify_file_inventory(destination: Path, records: object, label: str) -> None:
-    if not isinstance(records, list):
-        raise AssetVerificationError(f"Installed {label} manifest has no valid file inventory.")
-    for record in records:
-        if not isinstance(record, dict):
-            raise AssetVerificationError(f"Installed {label} manifest has an invalid file record.")
-        relative = record.get("path")
-        expected_bytes = record.get("bytes")
-        expected_sha256 = record.get("sha256")
-        if (
-            not isinstance(relative, str)
-            or not isinstance(expected_bytes, int)
-            or not isinstance(expected_sha256, str)
-        ):
-            raise AssetVerificationError(f"Installed {label} manifest has an invalid file record.")
-        relative_path = PurePosixPath(relative)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            raise AssetVerificationError(f"Installed {label} manifest contains an unsafe file path.")
-    if records != _file_records(destination):
+def _verify_file_inventory(
+    destination: Path,
+    expected_sha256: str,
+    label: str,
+) -> None:
+    if len(expected_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in expected_sha256
+    ):
+        raise AssetVerificationError(
+            f"Installed {label} bundle has no valid immutable inventory pin."
+        )
+    if _inventory_sha256(_file_records(destination)) != expected_sha256:
         raise AssetVerificationError(f"Installed {label} bundle does not match its complete file inventory.")
 
 
@@ -219,7 +234,11 @@ def verify_installed_asset(
                 f"Installed {spec.model_id} manifest has unexpected {key}: {payload.get(key)!r}."
             )
     if full:
-        _verify_file_inventory(destination, payload.get("files"), spec.model_id)
+        _verify_file_inventory(
+            destination,
+            spec.installed_inventory_sha256,
+            spec.model_id,
+        )
     return destination
 
 
@@ -292,6 +311,7 @@ def verify_installed_vibeseg(
     assets: Sequence[ReleaseAssetPin],
     *,
     full: bool = False,
+    expected_inventory_sha256: str | None = None,
 ) -> Path:
     destination = model_root / VIBESEG_INSTALL_DIR
     manifest_path = destination / ASSET_MANIFEST_NAME
@@ -322,7 +342,15 @@ def verify_installed_vibeseg(
     if not any(trained_model.glob("fold_*/checkpoint_final.pth")):
         raise AssetVerificationError("Installed VibeSeg trained model has no fold checkpoint.")
     if full:
-        _verify_file_inventory(destination, payload.get("files"), "VibeSeg")
+        _verify_file_inventory(
+            destination,
+            (
+                VIBESEG_CROP_INSTALLED_INVENTORY_SHA256
+                if expected_inventory_sha256 is None
+                else expected_inventory_sha256
+            ),
+            "VibeSeg",
+        )
     return trained_model
 
 
@@ -330,6 +358,8 @@ def install_vibeseg_archives(
     archive_paths: Mapping[str, Path],
     model_root: Path,
     assets: Sequence[ReleaseAssetPin],
+    *,
+    expected_inventory_sha256: str | None = None,
 ) -> Path:
     """Verify and atomically merge the pinned multipart VibeSeg Dataset100 bundle."""
 
@@ -341,7 +371,12 @@ def install_vibeseg_archives(
     model_root.mkdir(parents=True, exist_ok=True)
     destination = model_root / VIBESEG_INSTALL_DIR
     if destination.exists():
-        return verify_installed_vibeseg(model_root, assets, full=True)
+        return verify_installed_vibeseg(
+            model_root,
+            assets,
+            full=True,
+            expected_inventory_sha256=expected_inventory_sha256,
+        )
 
     for asset in assets:
         _verify_release_archive(Path(archive_paths[asset.asset_name]), asset)
@@ -372,7 +407,12 @@ def install_vibeseg_archives(
             encoding="utf-8",
         )
         os.replace(staged, destination)
-    return verify_installed_vibeseg(model_root, assets, full=True)
+    return verify_installed_vibeseg(
+        model_root,
+        assets,
+        full=True,
+        expected_inventory_sha256=expected_inventory_sha256,
+    )
 
 
 def _copy_download(

@@ -21,6 +21,13 @@ from BodyComposition.reporting.contracts import (
 )
 from BodyComposition.vertebral.contracts import QCFlag, VertebralResult
 
+ROUTINE_BOUNDARY_REVIEW_CODES = frozenset(
+    {
+        "vertebra_touches_cranial_fov",
+        "vertebra_touches_caudal_fov",
+    }
+)
+
 _PATH_FRAGMENT = re.compile(
     r"(?:^|[\s:=])(?:/[^\s;]+|~[/\\][^\s;]+|[A-Za-z]:\\[^\s;]+|file://[^\s;]+|\\\\[^\s;]+)",
     flags=re.IGNORECASE,
@@ -153,7 +160,12 @@ def _metric_value(
         nonempty = area_support_valid & (areas > 0)
         hu_support_valid = nonempty & source_valid & np.isfinite(values)
         volume_weights = areas * area_lengths
-        audit["aggregation"] = "tissue_volume_weighted_mean"
+        is_compartment = "_compartment_" in source
+        audit["aggregation"] = (
+            "compartment_volume_weighted_mean"
+            if is_compartment
+            else "tissue_volume_weighted_mean"
+        )
         audit["weight_source_column"] = area_source
         audit["weight_source_bin_values"] = [
             float(value) if math.isfinite(value) else None for value in areas
@@ -171,7 +183,12 @@ def _metric_value(
         ):
             return None, False, _first_reason(group, source, "invalid_measurement"), audit
         if not np.any(nonempty):
-            return None, False, "empty_tissue", audit
+            return (
+                None,
+                False,
+                "empty_compartment" if is_compartment else "empty_tissue",
+                audit,
+            )
         if not np.any(hu_support_valid):
             return None, False, _first_reason(group, source, "invalid_measurement"), audit
         value = float(

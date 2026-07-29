@@ -16,7 +16,7 @@ from BodyComposition.measurement.contracts import MeasurementBundle, Measurement
 from BodyComposition.orientation.core import OrientationOutcome, OrientationResult
 from BodyComposition.vertebral.contracts import QCFlag, VertebralResult
 
-REPORT_SCHEMA_VERSION = "1.0.0"
+REPORT_SCHEMA_VERSION = "1.1.0"
 CASE_REPORT_NAME = "case_report.pdf"
 CASE_MANIFEST_NAME = "report_manifest.json"
 COMBINED_REPORT_NAME = "case_reports.pdf"
@@ -46,20 +46,20 @@ PATIENT_METADATA_FIELDS = frozenset(
 )
 
 MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
-    "sm_mean_csa_cm2": {
-        "label": "SM area",
-        "short_label": "SM",
+    "sm_compartment_mean_csa_cm2": {
+        "label": "SM compartment area",
+        "short_label": "SM comp.",
         "unit": "cm2",
         "kind": "area",
-        "source": "sm_mean_csa_cm2",
+        "source": "sm_compartment_mean_csa_cm2",
     },
-    "sm_mean_hu": {
-        "label": "SM attenuation",
-        "short_label": "SM HU",
+    "sm_compartment_mean_hu": {
+        "label": "SM compartment attenuation",
+        "short_label": "SM comp. HU",
         "unit": "HU",
         "kind": "hu",
-        "source": "sm_mean_hu",
-        "weight_source": "sm_mean_csa_cm2",
+        "source": "sm_compartment_mean_hu",
+        "weight_source": "sm_compartment_mean_csa_cm2",
     },
     "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2": {
         "label": "Skeletal muscle tissue area",
@@ -76,33 +76,33 @@ MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
         "source": "skeletal_muscle_tissue_hu_m29_150_mean_hu",
         "weight_source": "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
     },
-    "vat_total_hu_m190_m30_mean_csa_cm2": {
+    "vat_tissue_hu_m190_m30_mean_csa_cm2": {
         "label": "VAT area (-190 to -30 HU)",
         "short_label": "VAT",
         "unit": "cm2",
         "kind": "area",
-        "source": "vat_total_hu_m190_m30_mean_csa_cm2",
+        "source": "vat_tissue_hu_m190_m30_mean_csa_cm2",
     },
-    "sat_total_hu_m190_m30_mean_csa_cm2": {
+    "sat_tissue_hu_m190_m30_mean_csa_cm2": {
         "label": "SAT area (-190 to -30 HU)",
         "short_label": "SAT",
         "unit": "cm2",
         "kind": "area",
-        "source": "sat_total_hu_m190_m30_mean_csa_cm2",
+        "source": "sat_tissue_hu_m190_m30_mean_csa_cm2",
     },
-    "total_vat_mean_csa_cm2": {
-        "label": "Total VAT area",
-        "short_label": "VAT",
+    "vat_compartment_union_mean_csa_cm2": {
+        "label": "Native VAT compartment-union area",
+        "short_label": "VAT comp.",
         "unit": "cm2",
         "kind": "area",
-        "source": "total_vat_mean_csa_cm2",
+        "source": "vat_compartment_union_mean_csa_cm2",
     },
-    "sat_mean_csa_cm2": {
-        "label": "SAT area",
-        "short_label": "SAT",
+    "sat_compartment_mean_csa_cm2": {
+        "label": "SAT compartment area",
+        "short_label": "SAT comp.",
         "unit": "cm2",
         "kind": "area",
-        "source": "sat_mean_csa_cm2",
+        "source": "sat_compartment_mean_csa_cm2",
     },
     "trunk_mean_circumference_cm": {
         "label": "Trunk circumference",
@@ -114,8 +114,8 @@ MEASUREMENT_DEFINITIONS: dict[str, dict[str, str]] = {
 }
 DEFAULT_MEASUREMENT_COLUMNS = (
     "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
-    "vat_total_hu_m190_m30_mean_csa_cm2",
-    "sat_total_hu_m190_m30_mean_csa_cm2",
+    "vat_tissue_hu_m190_m30_mean_csa_cm2",
+    "sat_tissue_hu_m190_m30_mean_csa_cm2",
     "trunk_mean_circumference_cm",
 )
 

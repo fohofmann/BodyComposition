@@ -11,7 +11,7 @@ measurements:
           threshold: 5
           unit: voxel
           connectivity: 8
-    sat_total_hu_m190_m30_holes_2d_50px:
+    sat_tissue_hu_m190_m30_holes_2d_50px:
       enabled: true
       source_labels: [SAT]
       hu_range: [-190, -30]
@@ -21,7 +21,7 @@ measurements:
           threshold: 50
           unit: voxel
           connectivity: 8
-    vat_total_hu_m190_m30_holes_2d_5px:
+    vat_tissue_hu_m190_m30_holes_2d_5px:
       enabled: true
       source_labels: [aVAT, tVAT, VAT]
       hu_range: [-190, -30]

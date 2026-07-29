@@ -33,6 +33,7 @@ from BodyComposition.measurement.contracts import (
     MeasurementIdentity,
     canonical_arrow_schema,
 )
+from BodyComposition.measurement.csv_export import write_csv_table
 from BodyComposition.measurement.landmarks import (
     TOTALSEGMENTATOR_LANDMARK_BACKEND,
     landmarks_from_totalsegmentator,
@@ -50,6 +51,11 @@ VERTEBRA_TABLE = "tables/vertebrae.parquet"
 SUMMARY_TABLE = "tables/summaries.parquet"
 SIGNATURE_TABLE = "tables/signature.parquet"
 HU_DISTRIBUTION_TABLE = "tables/hu_distributions.parquet"
+SLICE_TABLE_CSV = "tables/slices.csv"
+VERTEBRA_TABLE_CSV = "tables/vertebrae.csv"
+SUMMARY_TABLE_CSV = "tables/summaries.csv"
+SIGNATURE_TABLE_CSV = "tables/signature.csv"
+HU_DISTRIBUTION_TABLE_CSV = "tables/hu_distributions.csv"
 TISSUE_LABEL_MASK = "masks/tissue_labels.nii.gz"
 TOTALSEG_BODY_LABEL = "masks/totalsegmentator_body.nii.gz"
 TOTALSEG_LANDMARK_LABEL = "masks/totalsegmentator_landmarks.nii.gz"
@@ -203,7 +209,7 @@ class CreateBodySurface(PipelineAction):
                 geometry,
                 tissue.geometry,
                 reference_name="orientation-prepared CT",
-                candidate_name="raw tissue compartments used for body envelope",
+                candidate_name="model-native compartments used for body envelope",
             )
             result = tissue_segmentation_envelope(
                 tissue.data,
@@ -301,6 +307,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         self.compartment_mask_name = compartment_mask
         self.vertebral_body_source_name = vertebral_body_source
         self.settings = self.config["measurements"]
+        self.analysis_scope = self.config["analysis"]["scope"]
         self.timestamp = pipeline.timestamp
         self.io_inputs = [
             "tmp/prepared_image",
@@ -311,13 +318,15 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         ]
         if self.settings["landmarks"]["enabled"]:
             self.io_inputs.append("tmp/measurement_landmarks")
+        if self.analysis_scope == "l3_vertebral_level":
+            self.io_inputs.append("tmp/tissue_analysis_region")
         self.io_outputs = [
             "tmp/measurement_bundle",
             "tmp/slice_measurements",
             "tmp/vertebra_measurements",
             "tmp/case_summaries",
             "tmp/longitudinal_signature",
-            "tmp/tissue_hu_distributions",
+            "tmp/compartment_hu_distributions",
         ]
 
     def __call__(self, memory):
@@ -331,7 +340,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             geometry,
             compartment.geometry,
             reference_name="orientation-prepared CT",
-            candidate_name="raw tissue-compartment labels",
+            candidate_name="model-native compartment labels",
         )
         tissue_labels = memory[TISSUE_LABEL_MASK]
         tissue_labels.validate()
@@ -344,10 +353,21 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         body_surface = memory["tmp/body_surface_result"]
         vertebral_result = memory["tmp/vertebral_result"]
         orientation_result = memory["tmp/prepared_image"].result
+        analysis_region = memory.get("tmp/tissue_analysis_region")
+        analyzed_slices_z = (
+            analysis_region.analyzed_slices_mask_z
+            if analysis_region is not None
+            else None
+        )
+        analysis_region_provenance = (
+            analysis_region.as_dict() if analysis_region is not None else {}
+        )
         measurement_config = _scientific_measurement_configuration(self.settings)
         tissue_preprocessing = {
             "source": "raw_model_compartments",
             "profile_id": self.settings["tissue_profile_id"],
+            "analysis_scope": self.analysis_scope,
+            "analysis_region": analysis_region_provenance,
         }
         analysis_id = memory.get("analysis_id") or measurement_analysis_id(
             image_zyx,
@@ -382,6 +402,9 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             landmarks=memory.get("tmp/measurement_landmarks"),
             settings=self.settings,
             orientation_provenance=orientation_result.to_dict(),
+            analysis_scope=self.analysis_scope,
+            analyzed_slices_z=analyzed_slices_z,
+            analysis_region_provenance=analysis_region_provenance,
         )
         memory["analysis_id"] = identity.analysis_id
         memory["run_id"] = identity.run_id
@@ -390,7 +413,7 @@ class MeasureCanonicalBodyComposition(PipelineAction):
         memory["tmp/vertebra_measurements"] = bundle.vertebrae
         memory["tmp/case_summaries"] = bundle.summaries
         memory["tmp/longitudinal_signature"] = bundle.signature
-        memory["tmp/tissue_hu_distributions"] = bundle.hu_distributions
+        memory["tmp/compartment_hu_distributions"] = bundle.hu_distributions
 
 
 class WriteMeasurementReview(PipelineAction):
@@ -415,7 +438,7 @@ class WriteMeasurementReview(PipelineAction):
 
 
 class ExportMeasurementBundle(PipelineAction):
-    """Atomically persist the authoritative Parquet tables and QC JSON."""
+    """Persist canonical Parquet tables, optional CSV mirrors, and QC JSON."""
 
     table_templates = {
         "slices": SLICE_TABLE,
@@ -424,13 +447,37 @@ class ExportMeasurementBundle(PipelineAction):
         "signature": SIGNATURE_TABLE,
         "hu_distributions": HU_DISTRIBUTION_TABLE,
     }
+    csv_table_templates = {
+        "slices": SLICE_TABLE_CSV,
+        "vertebrae": VERTEBRA_TABLE_CSV,
+        "summaries": SUMMARY_TABLE_CSV,
+        "signature": SIGNATURE_TABLE_CSV,
+        "hu_distributions": HU_DISTRIBUTION_TABLE_CSV,
+    }
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
+        self.csv_enabled = bool(self.config["measurements"]["export"]["csv"])
+        csv_outputs = (
+            list(self.csv_table_templates.values()) if self.csv_enabled else []
+        )
         self.io_inputs = ["tmp/measurement_bundle"]
-        self.io_outputs = [*self.table_templates.values(), MEASUREMENT_QC, "tmp/return"]
-        self.io_persisted_outputs = [*self.table_templates.values(), MEASUREMENT_QC]
-        self.io_reset_outputs = [*self.table_templates.values(), MEASUREMENT_QC]
+        self.io_outputs = [
+            *self.table_templates.values(),
+            *csv_outputs,
+            MEASUREMENT_QC,
+            "tmp/return",
+        ]
+        self.io_persisted_outputs = [
+            *self.table_templates.values(),
+            *csv_outputs,
+            MEASUREMENT_QC,
+        ]
+        self.io_reset_outputs = [
+            *self.table_templates.values(),
+            *csv_outputs,
+            MEASUREMENT_QC,
+        ]
 
     def __call__(self, memory):
         super().__call__(memory)
@@ -444,6 +491,17 @@ class ExportMeasurementBundle(PipelineAction):
             )
             for name, template in self.table_templates.items()
         }
+        if self.csv_enabled:
+            paths.update(
+                {
+                    f"{name}_csv": write_csv_table(
+                        getattr(bundle, name),
+                        _path(memory, template),
+                        overwrite=True,
+                    )
+                    for name, template in self.csv_table_templates.items()
+                }
+            )
         qc_path = _atomic_json(
             {
                 **bundle.identity.as_columns(),
@@ -458,6 +516,9 @@ class ExportMeasurementBundle(PipelineAction):
         paths["qc"] = qc_path
         for template in self.table_templates.values():
             memory[template] = _path(memory, template)
+        if self.csv_enabled:
+            for template in self.csv_table_templates.values():
+                memory[template] = _path(memory, template)
         memory[MEASUREMENT_QC] = qc_path
         bundle = replace(bundle, paths=paths)
         memory["tmp/measurement_bundle"] = bundle

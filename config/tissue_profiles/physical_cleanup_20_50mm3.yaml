@@ -11,7 +11,7 @@ measurements:
           threshold: 20
           unit: physical
           connectivity: 26
-    sat_total_hu_m190_m30_min_component_50mm3:
+    sat_tissue_hu_m190_m30_min_component_50mm3:
       enabled: true
       source_labels: [SAT]
       hu_range: [-190, -30]
@@ -21,7 +21,7 @@ measurements:
           threshold: 50
           unit: physical
           connectivity: 26
-    vat_total_hu_m190_m30_min_component_20mm3:
+    vat_tissue_hu_m190_m30_min_component_20mm3:
       enabled: true
       source_labels: [aVAT, tVAT, VAT]
       hu_range: [-190, -30]

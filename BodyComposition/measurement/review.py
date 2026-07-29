@@ -172,17 +172,17 @@ def _tissue_curve_panel(bundle: MeasurementBundle, width: int, height: int) -> n
             (80, 180, 255),
         ),
         (
-            "sat_total_hu_m190_m30_area_cm2",
+            "sat_tissue_hu_m190_m30_area_cm2",
             "SAT (-190..-30 HU)",
             (80, 220, 220),
         ),
         (
-            "avat_hu_m190_m30_area_cm2",
+            "avat_tissue_hu_m190_m30_area_cm2",
             "aVAT (-190..-30 HU)",
             (40, 80, 230),
         ),
         (
-            "tvat_hu_m190_m30_area_cm2",
+            "tvat_tissue_hu_m190_m30_area_cm2",
             "tVAT (-190..-30 HU)",
             (120, 80, 230),
         ),

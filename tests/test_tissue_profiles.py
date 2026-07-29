@@ -48,10 +48,25 @@ def test_default_is_the_consensus_profile():
         default["measurements"]["tissue_profile_id"]
         == CONSENSUS_TISSUE_PROFILE_ID
     )
+    definitions = default["measurements"]["tissue_definitions"]
+    assert set(definitions) == {
+        "skeletal_muscle_tissue_hu_m29_150",
+        "sat_tissue_hu_m190_m30",
+        "avat_tissue_hu_m190_m30",
+        "tvat_tissue_hu_m190_m30",
+        "vat_tissue_hu_m190_m30",
+    }
+    assert {
+        tuple(definition["hu_range"]) for definition in definitions.values()
+    } == {(-29, 150), (-190, -30)}
+    assert all(
+        set(definition) == {"enabled", "source_labels", "hu_range"}
+        for definition in definitions.values()
+    )
 
 
 def test_native_and_consensus_visualization_label_sets_are_stable(base_config):
-    expected = {
+    expected_compartments = {
         1: "SM",
         2: "BONE",
         3: "SAT",
@@ -60,13 +75,19 @@ def test_native_and_consensus_visualization_label_sets_are_stable(base_config):
         6: "HEART",
         7: "LUNG",
     }
-    assert base_config["LBL_TISSUE_COMPARTMENTS"] == expected
-    assert base_config["LBL_TISSUE"] == expected
+    expected_tissues = {
+        1: "SM",
+        3: "SAT",
+        4: "aVAT",
+        5: "tVAT",
+    }
+    assert base_config["LBL_TISSUE_COMPARTMENTS"] == expected_compartments
+    assert base_config["LBL_TISSUE"] == expected_tissues
 
     for profile in Path("config/tissue_profiles").glob("*.yaml"):
         runtime = PipelineConfig.load(profile).to_runtime_dict()
-        assert runtime["LBL_TISSUE_COMPARTMENTS"] == expected
-        assert runtime["LBL_TISSUE"] == expected
+        assert runtime["LBL_TISSUE_COMPARTMENTS"] == expected_compartments
+        assert runtime["LBL_TISSUE"] == expected_tissues
 
 
 def test_unknown_label_is_rejected_as_a_model_native_compartment(base_config):
@@ -244,9 +265,9 @@ def test_consensus_phenotypes_use_raw_compartments_and_raw_hu(base_config):
     )
     table = calculate_canonical_slice_measurements(
         image,
-        compartments,
+        np.zeros_like(compartments),
         geometry,
-        base_config["LBL_TISSUE_COMPARTMENTS"],
+        base_config["LBL_TISSUE"],
         body_surface,
         MeasurementIdentity("case", "run", "analysis"),
         compartment_labels_zyx=compartments,
@@ -255,24 +276,26 @@ def test_consensus_phenotypes_use_raw_compartments_and_raw_hu(base_config):
     )
     row = table.iloc[0]
 
-    assert row["sm_voxel_count"] == 5
-    assert row["bone_voxel_count"] == 2
+    assert row["sm_compartment_voxel_count"] == 5
+    assert row["bone_compartment_voxel_count"] == 2
     assert row["skeletal_muscle_tissue_hu_m29_150_voxel_count"] == 2
-    assert row["sat_total_hu_m190_m30_voxel_count"] == 1
-    assert row["avat_hu_m190_m30_voxel_count"] == 2
-    assert row["tvat_hu_m190_m30_voxel_count"] == 0
-    assert row["vat_total_hu_m190_m30_voxel_count"] == 2
-    assert row["sm_mean_hu"] == pytest.approx(4.0)
+    assert row["sat_tissue_hu_m190_m30_voxel_count"] == 1
+    assert row["avat_tissue_hu_m190_m30_voxel_count"] == 2
+    assert row["tvat_tissue_hu_m190_m30_voxel_count"] == 0
+    assert row["vat_tissue_hu_m190_m30_voxel_count"] == 2
+    assert row["sm_compartment_mean_hu"] == pytest.approx(4.0)
+    assert "sm_area_cm2" not in table
+    assert "sat_total_hu_m190_m30_area_cm2" not in table
     assert "imat_hu_m190_m30_voxel_count" not in table
     assert "bone_tissue_hu_152_1000_voxel_count" not in table
-    assert "vat_total_hu_m150_m50_voxel_count" not in table
+    assert "vat_tissue_hu_m150_m50_voxel_count" not in table
 
     aggregate = aggregate_physical_range(
         table,
         float(table["slice_slab_inferior_mm"].iloc[0]),
         float(table["slice_slab_superior_mm"].iloc[0]),
     )
-    assert aggregate["vat_to_sat_ratio_hu_m190_m30"] == pytest.approx(2.0)
+    assert aggregate["vat_to_sat_tissue_ratio_hu_m190_m30"] == pytest.approx(2.0)
 
 
 def test_literature_window_profile_adds_a_named_definition(base_config):
@@ -290,8 +313,8 @@ def test_literature_window_profile_adds_a_named_definition(base_config):
         spacing_xyz=(1.0, 1.0, 1.0),
     )
 
-    assert masks["vat_total_hu_m190_m30"].sum() == 3
-    assert masks["vat_total_hu_m150_m50"].sum() == 1
+    assert masks["vat_tissue_hu_m190_m30"].sum() == 3
+    assert masks["vat_tissue_hu_m150_m50"].sum() == 1
     streamed = dict(
         iter_configured_tissue_masks(
             image,

@@ -16,7 +16,7 @@ from BodyComposition.vertebral.spineps_manifest import (
     SPINEPS_VERSION,
     SPINEPS_WHEEL_SHA256,
     TPTBOX_COMPAT_VERSION,
-    TPTBOX_LICENSE_STATUS,
+    TPTBOX_SOURCE_LICENSE,
     VIBESEG_CROP_ASSETS,
     VIBESEG_CROP_DATASET_ID,
     VIBESEG_CROP_RELEASE,
@@ -94,7 +94,7 @@ class SpinepsModelSession:
             "spineps_source_commit": SPINEPS_SOURCE_COMMIT,
             "spineps_wheel_sha256": SPINEPS_WHEEL_SHA256,
             "tptbox_compat_version": TPTBOX_COMPAT_VERSION,
-            "tptbox_license_status": TPTBOX_LICENSE_STATUS,
+            "tptbox_code_license": TPTBOX_SOURCE_LICENSE,
             "models": {
                 asset.model_id: {
                     "release": asset.release,

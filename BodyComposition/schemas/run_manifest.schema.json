@@ -75,7 +75,10 @@
       "properties": {
         "cases": {"type": "string", "minLength": 1},
         "failures": {"type": "string", "minLength": 1},
-        "review_queue": {"type": "string", "minLength": 1}
+        "review_queue": {"type": "string", "minLength": 1},
+        "cases_csv": {"type": "string", "minLength": 1},
+        "failures_csv": {"type": "string", "minLength": 1},
+        "review_queue_csv": {"type": "string", "minLength": 1}
       }
     },
     "reporting": {

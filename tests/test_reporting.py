@@ -23,6 +23,7 @@ from BodyComposition.actions.reporting import (
     RenderCaseReport,
 )
 from BodyComposition.cli import build_parser
+from BodyComposition.config import default_config
 from BodyComposition.measurement.body_surface import body_surface_from_totalsegmentator
 from BodyComposition.measurement.builder import build_measurement_bundle
 from BodyComposition.measurement.contracts import MeasurementIdentity
@@ -192,8 +193,8 @@ def test_reporting_settings_and_palette_are_frozen():
     assert settings.measure_aggregation == "territory_mean"
     assert settings.measurement_columns == (
         "skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2",
-        "vat_total_hu_m190_m30_mean_csa_cm2",
-        "sat_total_hu_m190_m30_mean_csa_cm2",
+        "vat_tissue_hu_m190_m30_mean_csa_cm2",
+        "sat_tissue_hu_m190_m30_mean_csa_cm2",
         "trunk_mean_circumference_cm",
     )
     assert vertebral_color("T13") == vertebral_color("T13")
@@ -207,6 +208,44 @@ def test_reporting_settings_and_palette_are_frozen():
     jsonschema.validate(settings.normalized(), schema)
 
 
+def test_run_cover_lists_only_result_or_reproducibility_relevant_configuration():
+    settings = _settings("spine_profile_v2")
+    rows = reporting_service.run_cover_configuration_rows(
+        settings,
+        normalized_config=default_config().normalized(),
+    )
+
+    assert [row["label"] for row in rows] == [
+        "Analysis scope",
+        "Orientation policy",
+        "Orientation decision",
+        "Anatomy evidence",
+        "Axial 180 repair",
+        "Body surface",
+        "Surface cleanup",
+        "Measurement coverage",
+        "Vertebral cleanup",
+        "SM HU filter",
+        "AT HU filter",
+        "Deterministic execution",
+    ]
+    values = {row["label"]: row["value"] for row in rows}
+    assert values["Analysis scope"] == "Full CT"
+    assert values["SM HU filter"] == "-29..150 HU"
+    assert values["AT HU filter"] == "-190..-30 HU"
+    assert values["Deterministic execution"] == "On"
+    assert not {
+        "Orientation inference",
+        "Vertebral settings",
+        "Execution",
+        "Failure policy",
+        "Report layout",
+        "Projection",
+        "Overlay",
+        "Report values",
+    }.intersection(values)
+
+
 def test_projection_label_collision_handling_preserves_order_and_spacing():
     desired = [48.0, 45.0, 44.0, 43.0]
     placed = _separate_label_y_positions(desired, lower=10.0, upper=55.0)
@@ -217,7 +256,7 @@ def test_projection_label_collision_handling_preserves_order_and_spacing():
     assert max(placed) <= 55.0
     with pytest.raises(ValueError, match="one to six"):
         ReportingSettings.from_mapping(
-            {"enabled": True, "measurement_columns": ["sm_mean_csa_cm2"] * 7}
+            {"enabled": True, "measurement_columns": ["sm_compartment_mean_csa_cm2"] * 7}
         )
     with pytest.raises(ValueError, match="fixed ISO A4"):
         ReportingSettings.from_mapping({"enabled": True, "page_size": "A3"})
@@ -477,16 +516,16 @@ def test_whole_territory_report_values_reconstruct_canonical_bins(base_config):
     case = _report_case(base_config)
     rows = aggregate_vertebral_measurements(
         case.measurement_bundle,
-        ("sm_mean_csa_cm2", "sm_mean_hu", "trunk_mean_circumference_cm"),
+        ("sm_compartment_mean_csa_cm2", "sm_compartment_mean_hu", "trunk_mean_circumference_cm"),
     )
     l3 = next(row for row in rows if row["vertebral_level"] == "L3")
     source = case.measurement_bundle.vertebrae.query("vertebral_level == 'L3'")
     weights = source["bin_integration_length_mm"].to_numpy(dtype=float)
-    expected_csa = np.average(source["sm_mean_csa_cm2"], weights=weights)
-    hu_weights = source["sm_mean_csa_cm2"].to_numpy(dtype=float) * weights
-    expected_hu = np.average(source["sm_mean_hu"], weights=hu_weights)
-    assert l3["metrics"]["sm_mean_csa_cm2"]["value"] == pytest.approx(expected_csa)
-    assert l3["metrics"]["sm_mean_hu"]["value"] == pytest.approx(expected_hu)
+    expected_csa = np.average(source["sm_compartment_mean_csa_cm2"], weights=weights)
+    hu_weights = source["sm_compartment_mean_csa_cm2"].to_numpy(dtype=float) * weights
+    expected_hu = np.average(source["sm_compartment_mean_hu"], weights=hu_weights)
+    assert l3["metrics"]["sm_compartment_mean_csa_cm2"]["value"] == pytest.approx(expected_csa)
+    assert l3["metrics"]["sm_compartment_mean_hu"]["value"] == pytest.approx(expected_hu)
 
 
 def test_whole_territory_report_retains_observed_mean_for_incomplete_level(
@@ -501,43 +540,43 @@ def test_whole_territory_report_retains_observed_mean_for_incomplete_level(
     table.loc[l3_rows, "territory_qc_status"] = "review"
     second_bin = l3_rows & table["territory_bin"].eq(2)
     third_bin = l3_rows & table["territory_bin"].eq(3)
-    table.loc[second_bin, "sm_mean_csa_cm2_coverage_fraction"] = 0.5
-    table.loc[third_bin, "sm_mean_csa_cm2"] = np.nan
-    table.loc[third_bin, "sm_mean_csa_cm2_valid"] = False
-    table.loc[third_bin, "sm_mean_csa_cm2_reason"] = "outside_fov"
-    table.loc[third_bin, "sm_mean_csa_cm2_coverage_fraction"] = 0.0
+    table.loc[second_bin, "sm_compartment_mean_csa_cm2_coverage_fraction"] = 0.5
+    table.loc[third_bin, "sm_compartment_mean_csa_cm2"] = np.nan
+    table.loc[third_bin, "sm_compartment_mean_csa_cm2_valid"] = False
+    table.loc[third_bin, "sm_compartment_mean_csa_cm2_reason"] = "outside_fov"
+    table.loc[third_bin, "sm_compartment_mean_csa_cm2_coverage_fraction"] = 0.0
     table.loc[third_bin, "bin_valid"] = False
     table.loc[third_bin, "bin_missing_reason"] = "outside_fov"
     bundle = replace(case.measurement_bundle, vertebrae=table)
 
     rows = aggregate_vertebral_measurements(
         bundle,
-        ("sm_mean_csa_cm2", "sm_mean_hu"),
+        ("sm_compartment_mean_csa_cm2", "sm_compartment_mean_hu"),
     )
     l3 = next(row for row in rows if row["vertebral_level"] == "L3")
     source = table.loc[l3_rows]
-    valid = source["sm_mean_csa_cm2_valid"] & source["bin_valid"]
+    valid = source["sm_compartment_mean_csa_cm2_valid"] & source["bin_valid"]
     effective_lengths = (
-        source["bin_integration_length_mm"] * source["sm_mean_csa_cm2_coverage_fraction"]
+        source["bin_integration_length_mm"] * source["sm_compartment_mean_csa_cm2_coverage_fraction"]
     )
     expected = np.average(
-        source.loc[valid, "sm_mean_csa_cm2"],
+        source.loc[valid, "sm_compartment_mean_csa_cm2"],
         weights=effective_lengths.loc[valid],
     )
 
     assert not l3["territory_complete"]
     assert l3["territory_reason"] == "truncated_vertebra"
-    assert l3["metrics"]["sm_mean_csa_cm2"]["valid"]
-    assert l3["metrics"]["sm_mean_csa_cm2"]["value"] == pytest.approx(expected)
-    assert l3["source_audit"]["sm_mean_csa_cm2"][
+    assert l3["metrics"]["sm_compartment_mean_csa_cm2"]["valid"]
+    assert l3["metrics"]["sm_compartment_mean_csa_cm2"]["value"] == pytest.approx(expected)
+    assert l3["source_audit"]["sm_compartment_mean_csa_cm2"][
         "effective_integration_length_mm"
     ] == pytest.approx(effective_lengths.to_numpy(dtype=float))
-    hu_valid = valid & source["sm_mean_hu_valid"] & source["sm_mean_csa_cm2"].gt(0)
-    hu_weights = source["sm_mean_csa_cm2"] * effective_lengths
-    assert l3["metrics"]["sm_mean_hu"]["valid"]
-    assert l3["metrics"]["sm_mean_hu"]["value"] == pytest.approx(
+    hu_valid = valid & source["sm_compartment_mean_hu_valid"] & source["sm_compartment_mean_csa_cm2"].gt(0)
+    hu_weights = source["sm_compartment_mean_csa_cm2"] * effective_lengths
+    assert l3["metrics"]["sm_compartment_mean_hu"]["valid"]
+    assert l3["metrics"]["sm_compartment_mean_hu"]["value"] == pytest.approx(
         np.average(
-            source.loc[hu_valid, "sm_mean_hu"],
+            source.loc[hu_valid, "sm_compartment_mean_hu"],
             weights=hu_weights.loc[hu_valid],
         )
     )
@@ -547,7 +586,7 @@ def test_whole_territory_report_retains_observed_mean_for_incomplete_level(
         {
             "enabled": True,
             "layout": "spine_overview_v1",
-            "measurement_columns": ["sm_mean_csa_cm2"],
+            "measurement_columns": ["sm_compartment_mean_csa_cm2"],
         }
     )
     result = render_case_report(report_case, tmp_path, settings)
@@ -597,20 +636,20 @@ def test_hu_aggregation_ignores_only_valid_zero_area_bins(base_config):
     case = _report_case(base_config)
     table = case.measurement_bundle.vertebrae.copy()
     target = table["vertebral_level"].eq("L3") & table["territory_bin"].eq(1)
-    table.loc[target, "sm_mean_csa_cm2"] = 0.0
-    table.loc[target, "sm_mean_csa_cm2_valid"] = True
-    table.loc[target, "sm_mean_hu"] = np.nan
-    table.loc[target, "sm_mean_hu_valid"] = False
-    table.loc[target, "sm_mean_hu_reason"] = "empty_tissue"
+    table.loc[target, "sm_compartment_mean_csa_cm2"] = 0.0
+    table.loc[target, "sm_compartment_mean_csa_cm2_valid"] = True
+    table.loc[target, "sm_compartment_mean_hu"] = np.nan
+    table.loc[target, "sm_compartment_mean_hu_valid"] = False
+    table.loc[target, "sm_compartment_mean_hu_reason"] = "empty_compartment"
     bundle = replace(case.measurement_bundle, vertebrae=table)
-    rows = aggregate_vertebral_measurements(bundle, ("sm_mean_hu",))
+    rows = aggregate_vertebral_measurements(bundle, ("sm_compartment_mean_hu",))
     l3 = next(row for row in rows if row["vertebral_level"] == "L3")
     source = table.query("vertebral_level == 'L3' and territory_bin != 1")
-    weights = source["sm_mean_csa_cm2"].to_numpy(dtype=float) * source[
+    weights = source["sm_compartment_mean_csa_cm2"].to_numpy(dtype=float) * source[
         "bin_integration_length_mm"
     ].to_numpy(dtype=float)
-    assert l3["metrics"]["sm_mean_hu"]["value"] == pytest.approx(
-        np.average(source["sm_mean_hu"], weights=weights)
+    assert l3["metrics"]["sm_compartment_mean_hu"]["value"] == pytest.approx(
+        np.average(source["sm_compartment_mean_hu"], weights=weights)
     )
 
 
@@ -618,16 +657,16 @@ def test_pdf_distinguishes_valid_zero_missing_and_native_variant(base_config, tm
     case = _report_case(base_config, "case-variant")
     table = case.measurement_bundle.vertebrae.copy()
     l3 = table["vertebral_level"].eq("L3")
-    table.loc[l3, "sm_mean_csa_cm2"] = 0.0
-    table.loc[l3, "sm_mean_csa_cm2_valid"] = True
+    table.loc[l3, "sm_compartment_mean_csa_cm2"] = 0.0
+    table.loc[l3, "sm_compartment_mean_csa_cm2_valid"] = True
     l1 = table["vertebral_level"].eq("L1")
     variant_native_label = int(table.loc[l1, "native_label"].iloc[0])
     table.loc[l1, "vertebral_level"] = "T13"
     table.loc[l1, "anatomical_variant"] = True
     table.loc[l1, "territory_complete"] = False
     l5 = table["vertebral_level"].eq("L5")
-    table.loc[l5, "sm_mean_csa_cm2"] = np.nan
-    table.loc[l5, "sm_mean_csa_cm2_valid"] = False
+    table.loc[l5, "sm_compartment_mean_csa_cm2"] = np.nan
+    table.loc[l5, "sm_compartment_mean_csa_cm2_valid"] = False
     bundle = replace(case.measurement_bundle, vertebrae=table)
     schema = dict(case.vertebral_result.label_schema)
     schema[variant_native_label] = "T13"
@@ -638,13 +677,23 @@ def test_pdf_distinguishes_valid_zero_missing_and_native_variant(base_config, tm
         vertebral_result=vertebral_result,
     )
     settings = ReportingSettings.from_mapping(
-        {"enabled": True, "measurement_columns": ["sm_mean_csa_cm2"]}
+        {"enabled": True, "measurement_columns": ["sm_compartment_mean_csa_cm2"]}
     )
     result = render_case_report(case, tmp_path, settings)
     text = PdfReader(result.pdf_path).pages[0].extract_text()
+    manifest = validate_report_manifest(result.manifest_path, pdf_path=result.pdf_path)
     assert "L3 0.0" in " ".join(text.split())
     assert "NA*" in text
     assert "T13 V!" in " ".join(text.split())
+    assert "Measurements" in text
+    assert "Whole-level mean" in " ".join(text.split())
+    assert "HU filter inactive" in text
+    assert manifest["display"]["audit"]["table"]["hu_filter"] == {
+        "status": "inactive",
+        "caption": "HU filter inactive",
+        "active_ranges_hu": {},
+        "icon": "funnel",
+    }
 
 
 @pytest.mark.parametrize("layout", ["spine_overview_v1", "spine_profile_v2"])
@@ -680,12 +729,17 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
         font_sizes = {round(float(char["size"]), 1) for char in page.chars}
         page_height = float(page.height)
     normalized_text = " ".join(text.split())
-    assert "Sagittal thick-slab projection" in text
-    assert "Vertebral summary" in text
+    assert "Sagittal thick-slab projection" not in text
+    assert "window -450 to 1050 HU" not in normalized_text
+    assert "window -190 to 250 HU" not in normalized_text
+    assert "Measurements" in text
     assert "Whole-level mean" in normalized_text
+    assert "SM -29..150 | AT -190..-30 HU" in normalized_text
     assert "three physical bins" not in normalized_text
     expected_axial_title = (
-        "Axial tissue segmentation | L3" if layout == "spine_overview_v1" else "Axial overlay | L3"
+        "Axial filtered tissues | L3"
+        if layout == "spine_overview_v1"
+        else "Axial overlay | L3"
     )
     assert expected_axial_title in text
     assert "Key anthropometry" in text
@@ -715,7 +769,7 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     assert "Waist min 12.3 cm*" in normalized_text
     assert "Pelvic max 12.3 cm" in normalized_text
     assert "Waist / pelvic 1.0 *" in normalized_text
-    assert "* unavailable or not fully eligible" in normalized_text
+    assert "* incomplete range or FOV edge" in normalized_text
     assert (
         "Waist min observed, but the anatomical range is incomplete."
     ) in normalized_text
@@ -738,7 +792,7 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     assert manifest["display"]["palette"] == (
         "vertebral_region_modern_v2_and_warm_tissue_v2"
     )
-    assert audit["layout_revision"] == "scientific_onepager_v24"
+    assert audit["layout_revision"] == "scientific_onepager_v35"
     assert audit["design"] == {
         "card_gap_pt": 8.0,
         "content_padding_pt": 10.0,
@@ -775,7 +829,7 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     assert audit["notes_qc"]["maximum_columns"] == 4
     assert audit["notes_qc"]["content_padding_pt"] == 10
     assert audit["notes_qc"]["outer_border_visible"] is False
-    assert audit["notes_qc"]["inner_header_rule_visible"] is True
+    assert audit["notes_qc"]["inner_header_rule_visible"] is False
     assert audit["notes_qc"]["inner_column_divider_count"] == 2
     assert audit["notes_qc"]["block_split"] is False
     assert audit["notes_qc"]["structured"] is True
@@ -803,8 +857,12 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     ]
     assert (
         audit["anthropometry"]["asterisk_explanation"]
-        == "* unavailable or not fully eligible"
+        == "* incomplete range or FOV edge"
     )
+    assert audit["anthropometry"]["asterisk_semantics"] == [
+        "incomplete_anatomical_range",
+        "contour_reaches_field_of_view_edge",
+    ]
     assert audit["technical_context"]["location"] == "right_column"
     assert audit["technical_context"]["metadata_scope"] == "complete"
     assert audit["technical_context"]["input_voxel_size_included"] is True
@@ -897,9 +955,32 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     assert audit["sagittal_projection"]["method"] == "sagittal_thick_slab_vertebral_crop_v2"
     markers = audit["sagittal_projection"]["anthropometry_markers"]
     assert [marker["label"] for marker in markers] == ["Waist min", "Pelvic max"]
-    assert [marker["line_style"] for marker in markers] == ["solid", "dashed"]
-    assert [marker["label_side"] for marker in markers] == ["left", "right"]
+    assert [marker["line_style"] for marker in markers] == ["solid", "solid"]
+    assert [marker["label_side"] for marker in markers] == ["left", "left"]
+    assert [marker["label_placement"] for marker in markers] == [
+        "below_rule",
+        "below_rule",
+    ]
     assert all(marker["measured"] and marker["displayed"] for marker in markers)
+    scale = audit["sagittal_projection"]["physical_scale"]
+    assert scale["placement"] == "right_clear_of_anthropometry_labels"
+    assert scale["vertical_anchor"] in {"lower", "center", "upper"}
+    assert scale["orientation"] == "vertical"
+    assert scale["text_alignment"] == "inward_left"
+    assert scale["collision_policy"] == "avoid_anthropometry_label_boxes"
+    assert scale["collision_count"] == 0
+    assert scale["collision_overlap_area_pt2"] == pytest.approx(0)
+    assert scale["length_mm"] in {20.0, 50.0}
+    scale_box = scale["bounds_pt"]
+    for marker in markers:
+        label_box = marker["label_box_pt"]
+        overlaps = (
+            max(scale_box["left"], label_box["left"])
+            < min(scale_box["right"], label_box["right"])
+            and max(scale_box["bottom"], label_box["bottom"])
+            < min(scale_box["top"], label_box["top"])
+        )
+        assert not overlaps
     summary = case.measurement_bundle.summaries.iloc[0]
     assert markers[0]["position_superior_mm"] == pytest.approx(
         summary["ct_min_trunk_circumference_t10_l5_position_superior_mm"]
@@ -909,16 +990,40 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     )
     vertebral_labels = audit["sagittal_projection"]["vertebral_labels"]
     assert vertebral_labels == {
-        "style": "centered_translucent_badge_v1",
+        "style": "centered_translucent_badge_v2",
         "placement": "vertebral_centroid",
         "leader_lines_visible": False,
-        "background": "translucent_dark_neutral",
-        "background_alpha": pytest.approx(0.68),
+        "background": "translucent_white_neutral",
+        "background_alpha": pytest.approx(0.55),
         "minimum_vertical_gap_pt": pytest.approx(10.0),
     }
+    assert audit["sagittal_projection"]["ct_window_hu"] == [-450.0, 1050.0]
+    assert audit["sagittal_projection"]["ct_window_caption_visible"] is False
+    assert audit["sagittal_projection"]["projection_method_caption_visible"] is False
     assert audit["table"]["row_layout"] == "uniform_categorical_grid"
+    assert audit["table"]["title"] == "Measurements"
+    assert audit["table"]["detail_lines"] == [
+        "SM -29..150 | AT -190..-30 HU",
+        "Whole-level mean",
+    ]
+    assert audit["table"]["hu_filter"] == {
+        "status": "active",
+        "caption": "SM -29..150 | AT -190..-30 HU",
+        "active_ranges_hu": {
+            "SM": [-29, 150],
+            "AT": [-190, -30],
+        },
+        "icon": "funnel",
+    }
     assert audit["table"]["display_labels"] == ["SM", "VAT", "SAT", "Trunk"]
-    assert "sm_mean_hu" not in audit["table"]["measurement_columns"]
+    assert audit["table"]["display_units"] == ["cm2", "cm2", "cm2", "cm"]
+    assert audit["table"]["footer_lines"] == [
+        "* unavailable | V variant",
+        "! incomplete or FOV-limited",
+    ]
+    assert "* unavailable | V variant" in normalized_text
+    assert "! incomplete or FOV-limited" in normalized_text
+    assert "sm_compartment_mean_hu" not in audit["table"]["measurement_columns"]
     assert manifest["display"]["audit"]["axial_view"]["vertebral_level"] == "L3"
     assert manifest["display"]["audit"]["axial_view"]["tissue_names"] == [
         "SM",
@@ -926,43 +1031,48 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
         "aVAT",
         "tVAT",
     ]
+    assert manifest["display"]["audit"]["axial_view"]["ct_window_hu"] == [
+        -190.0,
+        250.0,
+    ]
+    assert manifest["display"]["audit"]["axial_view"]["ct_window_caption_visible"] is False
     assert "tissue_labels" in {artifact["name"] for artifact in manifest["source_artifacts"]}
     assert "hu_distributions.parquet_content" in {
         artifact["name"] for artifact in manifest["source_artifacts"]
     }
     heading_x = {
         heading: next(float(word["x0"]) for word in words if word["text"] == heading)
-        for heading in ("Spine", "Vertebral", "Axial")
+        for heading in ("Spine", "Measurements", "Axial")
     }
     if layout == "spine_profile_v2":
-        assert "Stacked tissue-area profile" in text
-        assert "Tissue HU distributions" in text
-        assert "Model-native masks" in text
-        assert "median [IQR] | peak scale" in text
+        assert "Tissue area" in text
+        assert "HU distribution" in text
+        assert "HU filter inactive" in text
+        assert "median [IQR]" in text
+        assert "peak scale" not in text
+        assert "shape only" not in text
         assert "Tissue mean HU" not in text
         assert "white = NA" not in text
         assert "5-HU bins" not in text
         assert "Tissue area (cm2)" in text
         assert "Trunk area" in text
-        heading_x["Stacked"] = next(
-            float(word["x0"]) for word in words if word["text"] == "Stacked"
+        heading_x["Tissue"] = next(
+            float(word["x0"]) for word in words if word["text"] == "Tissue"
         )
-        heading_x["HU"] = next(
-            float(word["x0"])
-            for word in words
-            if word["text"] == "HU" and float(word["x0"]) > heading_x["Stacked"]
+        heading_x["Distribution"] = next(
+            float(word["x0"]) for word in words if word["text"] == "distribution"
         )
         assert (
             heading_x["Spine"]
-            < heading_x["Stacked"]
-            < heading_x["HU"]
-            < heading_x["Vertebral"]
+            < heading_x["Tissue"]
+            < heading_x["Distribution"]
+            < heading_x["Measurements"]
             < heading_x["Axial"]
         )
         assert manifest["display"]["audit"]["panel_order"] == [
             "sagittal_spine",
             "tissue_area_profile",
-            "tissue_hu_distribution",
+            "compartment_hu_distribution",
             "vertebral_summary",
             "axial_segmentation",
             "key_anthropometry",
@@ -974,8 +1084,50 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
         assert profile["legend_rows"] == 1
         assert profile["legend_style"] == "tissue_swatch_regular_8pt_v1"
         assert profile["axis_style"] == "ink_regular_ticks_bold_title_8pt_v1"
+        assert profile["frame_visible"] is False
+        assert profile["vertical_gridlines_visible"] is False
+        assert profile["x_axis_baseline_visible"] is True
+        assert profile["x_axis_tick_marks_visible"] is True
+        image_y_box = audit["sagittal_projection"]["image_box_pt"]
+        profile_y_box = profile["physical_y_axis_box_pt"]
+        assert profile_y_box["bottom"] == pytest.approx(image_y_box["bottom"])
+        assert profile_y_box["top"] == pytest.approx(image_y_box["top"])
+        assert profile_y_box["height"] == pytest.approx(image_y_box["height"])
+        assert profile["physical_y_axis_alignment"] == (
+            "shared_exact_projection_image_box"
+        )
+        assert audit["sagittal_projection"]["profile_alignment_policy"] == (
+            "shared_exact_physical_y_box"
+        )
+        edge_closure = profile["sampling_cell_edge_closure"]
+        profile_positions = np.sort(
+            case.measurement_bundle.slices["position_superior_mm"].unique()
+        )
+        assert edge_closure == {
+            "method": "half_sampling_interval_clipped_to_projection_bounds",
+            "half_step_mm": pytest.approx(
+                float(np.median(np.diff(profile_positions))) / 2.0
+            ),
+            "inferior_bound_reached": True,
+            "superior_bound_reached": True,
+        }
         assert audit["axial_view"]["legend_style"] == profile["legend_style"]
-        assert profile["hu_definition_caption"] == "SM -29..150 | fat -190..-30 HU"
+        assert profile["title"] == "Tissue area"
+        assert profile["detail_lines"] == ["SM -29..150 | AT -190..-30 HU"]
+        assert profile["hu_definition_caption"] == "SM -29..150 | AT -190..-30 HU"
+        assert profile["filter_icon_visible"] is True
+        assert profile["filter_icon_semantics"] == "hu_filter_state"
+        assert profile["hu_filter"] == {
+            "status": "active",
+            "caption": "SM -29..150 | AT -190..-30 HU",
+            "active_ranges_hu": {
+                "SM": [-29, 150],
+                "AT": [-190, -30],
+            },
+            "icon": "funnel",
+        }
+        assert profile["x_axis_display_label"] == "Tissue area (cm2)"
+        assert profile["unit_rendering"] == "plain_ascii"
         assert profile["trunk_area_reference_label"] == "Trunk area"
         assert profile["trunk_area_reference_gap_policy"] == "never_bridge_omitted_slices"
         assert profile["trunk_area_reference_style_policy"] == {
@@ -991,24 +1143,39 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
         assert profile["trunk_dotted_section_count"] == 0
         assert profile["trunk_invalid_reasons"] == []
         distributions = manifest["display"]["audit"]["hu_distributions"]
-        assert distributions["tissues"] == ["sm", "sat", "avat", "tvat"]
+        assert distributions["title"] == "HU distribution"
+        assert distributions["detail_lines"] == ["HU filter inactive", "median [IQR]"]
+        assert distributions["hu_filter"] == {
+            "status": "inactive",
+            "caption": "HU filter inactive",
+            "active_ranges_hu": {},
+            "icon": "funnel",
+        }
+        assert distributions["compartments"] == ["sm", "sat", "avat", "tvat"]
         assert distributions["display_labels"] == ["SM", "SAT", "aVAT", "tVAT"]
         assert distributions["legend_style"] == profile["legend_style"]
         assert distributions["axis_style"] == profile["axis_style"]
         assert distributions["x_axis_label"] == "HU"
         assert distributions["source_table"] == "hu_distributions.parquet"
         assert distributions["distribution_schema_version"] == (
-            "fixed-bin-native-compartment-hu-v1"
+            "fixed-bin-native-compartment-hu-v2"
         )
         assert distributions["distribution_scope"] == "analyzed_volume"
         assert distributions["histogram_range_hu"] == [-190.0, 150.0]
         assert distributions["bin_width_hu"] == 5.0
-        assert distributions["normalization"] == "within_tissue_peak"
-        assert distributions["cross_tissue_magnitude_comparison"] is False
+        assert distributions["normalization"] == "within_compartment_peak"
+        assert distributions["normalization_caption"] is None
+        assert distributions["normalization_caption_visible"] is False
+        assert distributions["normalization_explanation"] == (
+            "Each compartment histogram is divided by its own maximum bin height."
+        )
+        assert distributions["cross_compartment_magnitude_comparison"] is False
         assert distributions["summary_statistics"] == ("exact_raw_voxel_mean_sd_median_and_iqr")
         assert distributions["iqr_display"] == "numeric_summary_only"
         assert distributions["iqr_band_displayed"] is False
         assert distributions["median_reference_line_displayed"] is True
+        assert distributions["reference_guides_hu"] == []
+        assert distributions["background_band_displayed"] is False
         assert distributions["source_semantics"] == "model_native_compartment"
         assert distributions["quantile_method"] == "linear"
         assert distributions["per_slice_mean_hu_displayed"] is False
@@ -1052,7 +1219,7 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
             assert profile["displayed_layer_integrals_cm3"][layer] == pytest.approx(expected_cm3)
             assert profile["valid_slice_counts"][layer] == int(np.count_nonzero(layer_valid))
     else:
-        assert heading_x["Spine"] < heading_x["Vertebral"] < heading_x["Axial"]
+        assert heading_x["Spine"] < heading_x["Measurements"] < heading_x["Axial"]
         assert manifest["display"]["audit"]["panel_order"] == [
             "sagittal_spine",
             "vertebral_summary",
@@ -1060,7 +1227,7 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
             "key_anthropometry",
             "technical_context",
         ]
-    table_left = heading_x["Vertebral"]
+    table_left = heading_x["Measurements"]
     table_right = heading_x["Axial"]
     table_levels = set(audit["table"]["displayed_levels"])
     level_words = [
@@ -1168,7 +1335,7 @@ def test_hu_panel_marks_native_voxels_outside_the_fixed_display_range(
 ):
     case = _report_case(base_config, "case-hu-tail-marker")
     distributions = case.measurement_bundle.hu_distributions.copy()
-    sm_rows = distributions["tissue_key"].eq("sm")
+    sm_rows = distributions["compartment_key"].eq("sm")
     total = int(distributions.loc[sm_rows, "total_voxel_count"].iloc[0])
     populated_index = distributions.loc[sm_rows, "voxel_count"].idxmax()
     distributions.loc[sm_rows, "below_histogram_voxel_count"] = 1
@@ -1195,8 +1362,10 @@ def test_hu_panel_marks_native_voxels_outside_the_fixed_display_range(
     text = PdfReader(result.pdf_path).pages[0].extract_text()
     audit = manifest["display"]["audit"]["hu_distributions"]
 
-    assert "* outside plot" in text
-    assert audit["clipped_tail_marker_displayed"]
+    assert "* outside plot" not in text
+    assert audit["clipped_tail_present"]
+    assert audit["clipped_tail_marker_displayed"] is False
+    assert audit["clipped_tail_annotation_policy"] == "audit_only"
     assert audit["clipped_voxel_counts"]["sm"] == 1
     assert audit["statistics"]["sm"]["outside_display_range_voxel_fraction"] == (
         pytest.approx(1.0 / total)
@@ -1245,7 +1414,6 @@ def test_review_findings_are_rendered_as_plain_language_notes(base_config, tmp_p
     assert reasons["vertebra_touches_cranial_fov"] not in normalized
     assert "Report details" not in normalized
     assert "Spine segmentation" not in normalized
-    assert "Measurements" not in normalized
     notes_audit = manifest["display"]["audit"]["notes_qc"]
     assert notes_audit["columns_used"] == 3
     assert sum(notes_audit["column_item_counts"]) == 4
@@ -1396,7 +1564,7 @@ def test_profile_keeps_valid_tissues_when_one_layer_has_a_missing_slice(
 ):
     case = _report_case(base_config, "case-profile-partial-layer")
     slices = case.measurement_bundle.slices.copy()
-    source = "sat_total_hu_m190_m30_area_cm2"
+    source = "sat_tissue_hu_m190_m30_area_cm2"
     target = slices.index[len(slices) // 2]
     slices.loc[target, source] = np.nan
     slices.loc[target, source.replace("_cm2", "_valid")] = False
@@ -1515,11 +1683,14 @@ def test_report_label_view_is_distinct_from_raw_measurement_compartments(
     tmp_path,
 ):
     case = _report_case(base_config, "case-dual-tissue-source")
-    tissue_provenance = case.measurement_bundle.provenance["tissue"]
+    body_composition = case.measurement_bundle.provenance["body_composition"]
 
-    assert tissue_provenance["label_sha256"] != tissue_provenance["compartment_sha256"]
+    assert (
+        body_composition["tissues"]["sha256"]
+        != body_composition["compartments"]["sha256"]
+    )
     processed_sm_count = int(np.count_nonzero(case.tissue_labels_zyx[0] == 1))
-    assert case.measurement_bundle.slices.iloc[0]["sm_voxel_count"] == (processed_sm_count + 1)
+    assert case.measurement_bundle.slices.iloc[0]["sm_compartment_voxel_count"] == (processed_sm_count + 1)
 
     result = render_case_report(case, tmp_path / "dual-source", _settings())
     assert result.pdf_path.is_file()
@@ -1544,7 +1715,10 @@ def test_interrupted_rerender_removes_stale_pdf_completion_marker(
     assert not first.pdf_path.exists()
 
 
-def test_orientation_repair_is_annotated_and_summary_is_conditional(base_config, tmp_path):
+def test_orientation_repair_is_annotated_and_run_cover_is_always_first(
+    base_config,
+    tmp_path,
+):
     ordinary = render_case_report(
         _report_case(base_config, "case-ordinary"),
         tmp_path / "ordinary",
@@ -1564,8 +1738,32 @@ def test_orientation_repair_is_annotated_and_summary_is_conditional(base_config,
             }
         ],
     }
+    repaired_case = _report_case(
+        base_config,
+        "case-repaired",
+        orientation=orientation,
+    )
+    repaired_case = replace(
+        repaired_case,
+        extra_review_entries=(
+            ReviewEntry(
+                case_id="case-repaired",
+                domain="measurement",
+                code="trunk_contour_touches_fov",
+                reason="The trunk contour reaches the image boundary.",
+                automatic_action="Processing completed; inspect canonical QC.",
+            ),
+            ReviewEntry(
+                case_id="case-repaired",
+                domain="vertebral",
+                code="vertebra_touches_cranial_fov",
+                reason="A predicted vertebra reaches the upper image boundary.",
+                automatic_action="Processing completed; inspect canonical QC.",
+            ),
+        ),
+    )
     repaired = render_case_report(
-        _report_case(base_config, "case-repaired", orientation=orientation),
+        repaired_case,
         tmp_path / "repaired",
         _settings(),
     )
@@ -1576,8 +1774,16 @@ def test_orientation_repair_is_annotated_and_summary_is_conditional(base_config,
         settings=_settings(),
     )
     clean_reader = PdfReader(clean_export["pdf_path"])
-    assert len(clean_reader.pages) == 1
-    assert "Page 1 of 1" in (clean_reader.pages[0].extract_text() or "")
+    assert len(clean_reader.pages) == 2
+    assert [str(item.title) for item in clean_reader.outline] == [
+        "Run summary",
+        "case-ordinary",
+    ]
+    assert "BodyComposition run summary" in (
+        clean_reader.pages[0].extract_text() or ""
+    )
+    assert "Page 1 of 2" in (clean_reader.pages[0].extract_text() or "")
+    assert "Page 2 of 2" in (clean_reader.pages[1].extract_text() or "")
     reviewed_export = collate_reports(
         [ordinary, repaired],
         export_id="export-review",
@@ -1587,25 +1793,48 @@ def test_orientation_repair_is_annotated_and_summary_is_conditional(base_config,
     reader = PdfReader(reviewed_export["pdf_path"])
     assert len(reader.pages) == 3
     assert [str(item.title) for item in reader.outline] == [
-        "Manual review summary",
+        "Run summary",
         "case-ordinary",
         "case-repaired",
     ]
     manifest = json.loads(reviewed_export["manifest_path"].read_text())
+    assert manifest["cover_page"]["included"]
+    assert manifest["cover_page"]["page_number"] == 1
     assert manifest["manual_review_summary"]["included"]
+    assert manifest["manual_review_summary"]["placement"] == "cover_page"
     assert manifest["manual_review_summary"]["cases"][0]["case_id"] == "case-repaired"
     assert manifest["cases"][1]["combined_page_number"] == 3
     assert "Page 1 of 3" in (reader.pages[0].extract_text() or "")
     assert "Page 2 of 3" in (reader.pages[1].extract_text() or "")
     assert "Page 3 of 3" in (reader.pages[2].extract_text() or "")
+    cover_text = " ".join((reader.pages[0].extract_text() or "").split())
+    assert "Issues" in cover_text
+    assert "Technical issues" not in cover_text
+    assert "Finding Cases (N=2)" in cover_text
+    assert "Execution failures 0 (0%)" in cover_text
+    assert "Trunk contour reaches field of view 1 (50%)" in cover_text
+    assert "Substantial orientation repair applied 1 (50%)" in cover_text
+    assert "Vertebra touches cranial fov" not in cover_text
+    quality_issues = manifest["cover_page"]["summary"]["quality_issues"]
+    assert {(item["domain"], item["code"], item["count"]) for item in quality_issues} == {
+        ("measurement", "trunk_contour_touches_fov", 1),
+        ("orientation", "severe_misorientation_repaired", 1),
+    }
+    cover_audit = manifest["cover_page"]["audit"]
+    assert cover_audit["quality_issue_type_count"] == 2
+    assert cover_audit["quality_issue_rows_displayed"] == 2
+    assert cover_audit["issue_table_columns"] == ["finding", "cases_percent"]
+    assert cover_audit["issue_count_header"] == "Cases (N=2)"
+    assert cover_audit["issue_percentage_denominator"] == "included_case_count"
+    assert cover_audit["issue_denominator_case_count"] == 2
+    assert cover_audit["issue_counts_may_overlap"]
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     normalized_text = " ".join(text.split())
-    assert "Lossless orientation transform applied" in text
     assert (
         "Input CT was automatically reoriented after a substantial orientation mismatch."
         in normalized_text
     )
-    assert "not_adjudicated" in text
+    assert "BodyComposition run summary" in text
 
 
 def test_collation_rejects_result_manifest_or_configuration_mismatch(
@@ -1638,6 +1867,316 @@ def test_collation_rejects_result_manifest_or_configuration_mismatch(
             output_directory=tmp_path / "config-mismatch",
             settings=changed_settings,
         )
+
+
+def test_incremental_run_cover_is_complete_and_failed_refresh_preserves_snapshot(
+    base_config,
+    tmp_path,
+    monkeypatch,
+):
+    first = render_case_report(
+        _report_case(base_config, "case-first"),
+        tmp_path / "first",
+        _settings(),
+    )
+    second = render_case_report(
+        _report_case(base_config, "case-second"),
+        tmp_path / "second",
+        _settings(),
+    )
+
+    def summary(case_ids, *, state):
+        included = len(case_ids)
+        return {
+            "run_id": "incremental-run",
+            "document_state": state,
+            "planned_case_count": 2,
+            "included_case_count": included,
+            "remaining_case_count": 2 - included,
+            "included_case_ids": list(case_ids),
+            "case_counts": {
+                "succeeded": included,
+                "failed": 0,
+                "skipped_identical": 0,
+                "cancelled": 0,
+            },
+            "qc_counts": {
+                "pass": included,
+                "review": 0,
+                "fail": 0,
+                "not_assessed": 0,
+            },
+            "manual_review_case_count": 0,
+            "mean_runtime_seconds": 120.0,
+            "runtime_case_count": included,
+            "started_at": "2026-07-29T08:00:00+00:00",
+            "ended_at": (
+                "2026-07-29T08:04:00+00:00"
+                if state == "complete"
+                else None
+            ),
+            "run_duration_seconds": 240.0 if state == "complete" else None,
+            "updated_at": "2026-07-29T08:02:00+00:00",
+            "layout": first.layout,
+            "pipeline": {
+                "name": "BodyComposition",
+                "version": "1.0.0rc1",
+                "configuration_sha256": "a" * 64,
+                "source_revision": "b" * 40,
+            },
+            "configuration_rows": [
+                {
+                    "label": "Orientation policy",
+                    "value": "Check and safe repair",
+                },
+                {
+                    "label": "SM HU filter",
+                    "value": "-29..150 HU",
+                },
+                {
+                    "label": "AT HU filter",
+                    "value": "-190..-30 HU",
+                },
+            ],
+            "models": [
+                {"role": "Orientation", "identifier": "ctdeeprot_2d_v1"},
+                {
+                    "role": "Vertebral bodies",
+                    "identifier": "spineps_veridah_ct_v1",
+                },
+                {
+                    "role": "Native compartments",
+                    "identifier": "bodycomposition_resenc_l_v1",
+                },
+                {
+                    "role": "Body surface",
+                    "identifier": "tissue_segmentation_envelope_v1",
+                },
+                {
+                    "role": "Landmarks",
+                    "identifier": "totalsegmentator_total_task297_landmarks_v1",
+                },
+            ],
+            "runtime": {
+                "device": "cuda",
+                "hardware": "NVIDIA A100",
+                "cuda": "13.0",
+                "torch": "2.13.0",
+                "python": "3.11.14",
+                "strategy": "stage_aware_model_cache",
+            },
+            "technical_errors": [],
+            "paths": {
+                "output_root": "output",
+                "run_folder": "runs/incremental-run",
+                "input_directories": ["cohort-input"],
+                "output_directory": "incremental-run",
+                "case_folder_pattern": "cases/<case-id>/<analysis-id>",
+                "failed_folder_pattern": "failed/<case-id>/<attempt-id>",
+                "combined_pdf": (
+                    "aggregate/reports/incremental-run/case_reports.pdf"
+                ),
+            },
+        }
+
+    output = tmp_path / "incremental"
+    partial = collate_reports(
+        [first],
+        export_id="incremental-run",
+        output_directory=output,
+        settings=_settings(),
+        run_summary=summary(["case-first"], state="in_progress"),
+    )
+    partial_bytes = partial["pdf_path"].read_bytes()
+    partial_pdf_link_inode = partial["pdf_path"].lstat().st_ino
+    partial_manifest_link_inode = partial["manifest_path"].lstat().st_ino
+    partial_reader = PdfReader(partial["pdf_path"])
+    assert len(partial_reader.pages) == 2
+    assert partial["pdf_path"].is_symlink()
+    assert partial["manifest_path"].is_symlink()
+    assert (output / ".current").is_symlink()
+    assert partial["manifest"]["publication"] == {
+        "strategy": "atomic_snapshot_pointer_v1",
+        "snapshot_id": partial["manifest"]["report_id"],
+        "pointer": ".current",
+    }
+    raw_cover_text = partial_reader.pages[0].extract_text() or ""
+    cover_text = " ".join(raw_cover_text.split())
+    assert "IN PROGRESS | 1 remaining" in cover_text
+    assert "2.0 min" in cover_text
+    assert "ctdeeprot_2d_v1" in cover_text
+    assert "Output directory incremental-run" in cover_text
+    assert "Run directories" in cover_text
+    assert "Input directory cohort-input" in cover_text
+    assert "Output structure" not in cover_text
+    assert "Case folders" not in cover_text
+    assert "Failed cases" not in cover_text
+    assert "Combined PDF" not in cover_text
+    assert "Immutable input-manifest order" not in cover_text
+    assert "Execution strategy" not in cover_text
+    assert "stage_aware_model_cache" not in cover_text
+    assert "Configuration digest" not in cover_text
+    assert "Source revision" not in cover_text
+    assert "Check and safe repair" in cover_text
+    assert "SM HU filter -29..150 HU" in cover_text
+    assert "AT HU filter -190..-30 HU" in cover_text
+    assert "SM -29..150 | AT -190..-30 HU" not in cover_text
+    assert "Analysis finished" in cover_text
+    assert "Run duration" in cover_text
+    assert cover_text.count("In progress") == 2
+    assert "Snapshot" not in cover_text
+    assert (
+        partial["manifest"]["cover_page"]["audit"]["section_rows_displayed"][
+            "case_progress"
+        ]
+        == 2
+    )
+    assert "Vertebral metrics" not in cover_text
+    assert "Whole-level mean | detected levels" not in cover_text
+    assert "Body surface" not in cover_text
+    assert "tissue_segmentation_envelope_v1" not in cover_text
+    assert "Landmarks" not in cover_text
+    assert "totalsegmentator_total_task297_landmarks_v1" not in cover_text
+    expected_pipeline_order = [
+        "Pipeline",
+        "Orientation",
+        "Orientation policy",
+        "Vertebral bodies",
+        "Native compartments",
+        "SM HU filter",
+        "AT HU filter",
+    ]
+    assert partial["manifest"]["cover_page"]["audit"]["pipeline_row_order"] == (
+        expected_pipeline_order
+    )
+    assert partial["manifest"]["cover_page"]["audit"][
+        "pipeline_row_order_policy"
+    ] == "canonical_execution_order"
+    row_offsets = [cover_text.index(label) for label in expected_pipeline_order]
+    assert row_offsets == sorted(row_offsets)
+    assert partial["manifest"]["cover_page"]["audit"]["hidden_model_roles"] == [
+        "Body surface",
+        "Landmarks",
+    ]
+    assert any(
+        model["identifier"] == "tissue_segmentation_envelope_v1"
+        for model in partial["manifest"]["cover_page"]["summary"]["models"]
+    )
+    assert any(
+        model["identifier"] == "totalsegmentator_total_task297_landmarks_v1"
+        for model in partial["manifest"]["cover_page"]["summary"]["models"]
+    )
+    assert (
+        partial["manifest"]["cover_page"]["summary"]["runtime"]["strategy"]
+        == "stage_aware_model_cache"
+    )
+    assert partial["manifest"]["cover_page"]["audit"]["hidden_runtime_fields"] == [
+        "strategy"
+    ]
+    assert partial["manifest"]["cover_page"]["audit"][
+        "runtime_context_style"
+    ] == "inline_key_value"
+    assert not partial["manifest"]["cover_page"]["audit"][
+        "runtime_period_complete"
+    ]
+    assert partial["manifest"]["cover_page"]["audit"]["body_column_layout"] == [
+        "pipeline_models_configuration",
+        "runtime_directories_progress",
+        "issues",
+    ]
+    assert partial["manifest"]["cover_page"]["audit"][
+        "issues_full_height_column"
+    ]
+    assert (
+        partial["manifest"]["cover_page"]["audit"]["technical_issue_row_capacity"]
+        > 4
+    )
+
+    complete = collate_reports(
+        [first, second],
+        export_id="incremental-run",
+        output_directory=tmp_path / "complete-period",
+        settings=_settings(),
+        run_summary=summary(
+            ["case-first", "case-second"],
+            state="complete",
+        ),
+    )
+    complete_text = " ".join(
+        (PdfReader(complete["pdf_path"]).pages[0].extract_text() or "").split()
+    )
+    assert "Analysis finished 2026-07-29 08:04 UTC" in complete_text
+    assert "Run duration 4.0 min" in complete_text
+    assert complete["manifest"]["cover_page"]["audit"]["runtime_period_complete"]
+
+    original_replace_symlink = reporting_service._replace_relative_symlink
+
+    def fail_pointer_switch(path, target):
+        if Path(path).name == ".current":
+            raise RuntimeError("simulated pointer switch interruption")
+        return original_replace_symlink(path, target)
+
+    with monkeypatch.context() as pointer_failure:
+        pointer_failure.setattr(
+            reporting_service,
+            "_replace_relative_symlink",
+            fail_pointer_switch,
+        )
+        with pytest.raises(RuntimeError, match="pointer switch interruption"):
+            collate_reports(
+                [first, second],
+                export_id="incremental-run",
+                output_directory=output,
+                settings=_settings(),
+                run_summary=summary(
+                    ["case-first", "case-second"],
+                    state="complete",
+                ),
+            )
+    assert partial["pdf_path"].read_bytes() == partial_bytes
+    validate_report_manifest(
+        partial["manifest_path"],
+        pdf_path=partial["pdf_path"],
+    )
+    published_complete = collate_reports(
+        [first, second],
+        export_id="incremental-run",
+        output_directory=output,
+        settings=_settings(),
+        run_summary=summary(
+            ["case-first", "case-second"],
+            state="complete",
+        ),
+    )
+    complete_bytes = published_complete["pdf_path"].read_bytes()
+    assert complete_bytes != partial_bytes
+    assert published_complete["pdf_path"].lstat().st_ino != partial_pdf_link_inode
+    assert (
+        published_complete["manifest_path"].lstat().st_ino
+        != partial_manifest_link_inode
+    )
+    validate_report_manifest(
+        published_complete["manifest_path"],
+        pdf_path=published_complete["pdf_path"],
+    )
+
+    def fail_cover(*args, **kwargs):
+        raise RuntimeError("simulated cover render failure")
+
+    monkeypatch.setattr(reporting_service, "render_run_cover_page", fail_cover)
+    with pytest.raises(RuntimeError, match="simulated cover"):
+        collate_reports(
+            [first, second],
+            export_id="incremental-run",
+            output_directory=output,
+            settings=_settings(),
+            run_summary=summary(
+                ["case-first", "case-second"],
+                state="complete",
+            ),
+        )
+    assert published_complete["pdf_path"].read_bytes() == complete_bytes
+    assert len(PdfReader(published_complete["pdf_path"]).pages) == 3
 
 
 def test_uncertain_unchanged_orientation_has_distinct_action(base_config, tmp_path):
@@ -1700,7 +2239,11 @@ def test_downstream_copies_of_orientation_qc_are_not_duplicated(
     ]
 
 
-def test_summary_capacity_overflow_fails_before_output(base_config, tmp_path):
+def test_cover_summarizes_more_than_24_flagged_cases(
+    base_config,
+    tmp_path,
+    monkeypatch,
+):
     source = render_case_report(_report_case(base_config), tmp_path / "source", _settings())
     reports = []
     for index in range(MAX_REVIEW_SUMMARY_ROWS + 1):
@@ -1726,14 +2269,25 @@ def test_summary_capacity_overflow_fails_before_output(base_config, tmp_path):
             )
         )
     destination = tmp_path / "overflow"
-    with pytest.raises(ValueError, match="exceeds 24"):
-        collate_reports(
-            reports,
-            export_id="export-overflow",
-            output_directory=destination,
-            settings=_settings(),
-        )
-    assert not (destination / "case_reports.pdf").exists()
+    source_manifest = json.loads(source.manifest_path.read_text())
+    monkeypatch.setattr(
+        reporting_service,
+        "_validate_case_result_for_collation",
+        lambda item, settings: source_manifest,
+    )
+    export = collate_reports(
+        reports,
+        export_id="export-overflow",
+        output_directory=destination,
+        settings=_settings(),
+    )
+    reader = PdfReader(export["pdf_path"])
+    assert len(reader.pages) == MAX_REVIEW_SUMMARY_ROWS + 2
+    manifest = json.loads(export["manifest_path"].read_text())
+    assert manifest["manual_review_summary"]["case_count"] == (
+        MAX_REVIEW_SUMMARY_ROWS + 1
+    )
+    assert manifest["cover_page"]["included"]
 
 
 def test_failure_page_is_explicit_and_one_page(tmp_path):
@@ -1795,13 +2349,13 @@ def test_failure_page_preserves_available_vertebral_body_overview(
     text = reader.pages[0].extract_text()
     assert "ANALYSIS INCOMPLETE - FAILURE PAGE" in text
     assert "AVAILABLE SPINE OVERVIEW" in text
-    assert "Sagittal thick-slab projection" in text
+    assert "Sagittal thick-slab projection" not in text
     assert "Measurements unavailable" in text
     for column in _settings(layout).measurement_columns:
         definition = MEASUREMENT_DEFINITIONS[column]
         assert f"{definition['short_label']} ({definition['unit']}): NA*" in text
     if layout == "spine_profile_v2":
-        assert "Stacked tissue-area profile" in text
+        assert "Tissue area" in text
         assert "Measurement output incomplete" in text
 
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))

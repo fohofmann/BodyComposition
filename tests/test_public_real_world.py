@@ -47,6 +47,11 @@ EXPECTED_OUTPUTS = (
     "tables/summaries.parquet",
     "tables/signature.parquet",
     "tables/hu_distributions.parquet",
+    "tables/slices.csv",
+    "tables/vertebrae.csv",
+    "tables/summaries.csv",
+    "tables/signature.csv",
+    "tables/hu_distributions.csv",
     "qc/vertebral_result.json",
     "qc/spine_review.png",
     "qc/qc.json",
@@ -289,6 +294,16 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     summaries = pd.read_parquet(bundle / "tables/summaries.parquet")
     signature = pd.read_parquet(bundle / "tables/signature.parquet")
     hu_distributions = pd.read_parquet(bundle / "tables/hu_distributions.parquet")
+    for name, table in {
+        "slices": slices,
+        "vertebrae": vertebrae,
+        "summaries": summaries,
+        "signature": signature,
+        "hu_distributions": hu_distributions,
+    }.items():
+        csv_table = pd.read_csv(bundle / f"tables/{name}.csv")
+        assert csv_table.columns.tolist() == table.columns.tolist()
+        assert len(csv_table) == len(table)
     assert len(slices) == ct_image.GetSize()[2]
     assert slices["slice_id"].is_unique
     assert np.all(np.diff(slices["position_superior_mm"].to_numpy()) > 0)
@@ -299,7 +314,7 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     assert len(signature) == 100
     assert signature["bin_width_mm"].eq(20.0).all()
     assert signature["signature_bin"].tolist() == list(range(100))
-    assert hu_distributions.groupby("tissue_key").size().to_dict() == {
+    assert hu_distributions.groupby("compartment_key").size().to_dict() == {
         "avat": 68,
         "sat": 68,
         "sm": 68,

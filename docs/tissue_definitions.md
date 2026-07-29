@@ -1,6 +1,6 @@
 # CT compartments and tissue definitions
 
-This document defines the tissue contract for measurement schema `3.2.0`.
+This document defines the tissue contract for measurement schema `3.4.0`.
 The default is intentionally small: preserve the model-native anatomical
 compartments, measure their raw CT attenuation, and add only the conventional
 muscle and adipose HU filters needed for broad clinical comparability.
@@ -33,28 +33,31 @@ silently discard a scan because optional DICOM fields are unavailable.
 | 6 | heart |
 | 7 | lung |
 
-Every native compartment receives per-slice voxel count, CSA, mean HU,
-validity, and missing-reason columns. In particular, `sm_mean_hu` is the
-continuous attenuation of the complete predicted muscle compartment and is
-the default measure for analyses of fatty muscle change.
+Every native compartment uses a `<name>_compartment_*` export prefix and
+receives per-slice voxel count, CSA, mean HU, validity, and missing-reason
+columns. In particular, `sm_compartment_mean_hu` is the continuous attenuation
+of the complete predicted muscle compartment and is the default measure for
+analyses of fatty muscle change.
 
 ## Default consensus profile
 
 The default profile is
-`consensus_hu_muscle_m29_150_adipose_m190_m30_v1`. It adds these inclusive
-raw-HU intersections:
+`consensus_hu_muscle_m29_150_adipose_m190_m30_v1`. It has exactly two
+inclusive raw-HU rules: -29 to 150 HU for the SM compartment and -190 to -30
+HU for adipose compartments. Those two rules create these named views:
 
 | Output prefix | Anatomical support | Inclusive HU range |
 | --- | --- | ---: |
 | `skeletal_muscle_tissue_hu_m29_150` | SM | -29 to 150 |
-| `sat_total_hu_m190_m30` | SAT | -190 to -30 |
-| `avat_hu_m190_m30` | aVAT | -190 to -30 |
-| `tvat_hu_m190_m30` | tVAT | -190 to -30 |
-| `vat_total_hu_m190_m30` | aVAT union tVAT | -190 to -30 |
+| `sat_tissue_hu_m190_m30` | SAT | -190 to -30 |
+| `avat_tissue_hu_m190_m30` | aVAT | -190 to -30 |
+| `tvat_tissue_hu_m190_m30` | tVAT | -190 to -30 |
+| `vat_tissue_hu_m190_m30` | aVAT union tVAT | -190 to -30 |
 
-The total-VAT union is convenient for conventional summaries and the
-VAT-to-SAT ratio. It is not duplicated in the default longitudinal signature,
-which retains aVAT and tVAT separately.
+The VAT tissue union is convenient for conventional summaries and the
+VAT-to-SAT tissue ratio. It is derived from the filtered aVAT and tVAT views,
+not a third HU rule. It is not duplicated in the default longitudinal
+signature, which retains aVAT and tVAT separately.
 
 The default applies no denoising, hole filling, connected-component removal,
 or minimum-size rule to these tissue definitions. Mean HU is always measured
@@ -76,7 +79,7 @@ Additional definitions belong in a named profile under
 measurements:
   tissue_profile_id: study_specific_muscle_filter_v1
   tissue_definitions:
-    filter_muscle_hu_m190_m30:
+    filter_muscle_tissue_hu_m190_m30:
       enabled: true
       source_labels: [SM]
       hu_range: [-190, -30]

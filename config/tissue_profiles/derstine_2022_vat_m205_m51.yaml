@@ -1,7 +1,7 @@
 measurements:
   tissue_profile_id: derstine_2022_vat_m205_m51_v1
   tissue_definitions:
-    vat_total_hu_m205_m51:
+    vat_tissue_hu_m205_m51:
       enabled: true
       source_labels: [aVAT, tVAT, VAT]
       hu_range: [-205, -51]

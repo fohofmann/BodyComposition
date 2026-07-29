@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import zipfile
+from pathlib import PurePosixPath
 from types import SimpleNamespace
 
 import cv2
@@ -37,9 +40,44 @@ def _zip_bytes(members: dict[str, bytes | str]) -> bytes:
     return output.getvalue()
 
 
-def _model_pin(model_id: str, phase: str, archive: bytes) -> ModelAssetSpec:
-    import hashlib
+def _inventory_sha256(members: dict[str, bytes | str]) -> str:
+    records = []
+    for name, content in sorted(members.items()):
+        payload = content.encode("utf-8") if isinstance(content, str) else content
+        records.append(
+            {
+                "path": name,
+                "bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    encoded = json.dumps(
+        records,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
+
+def _zip_model_inventory_sha256(archive_bytes: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+        config = next(
+            PurePosixPath(member.filename)
+            for member in archive.infolist()
+            if PurePosixPath(member.filename).name == "inference_config.json"
+        )
+        root = config.parent
+        members = {
+            PurePosixPath(member.filename).relative_to(root).as_posix(): archive.read(member)
+            for member in archive.infolist()
+            if not member.is_dir()
+            and PurePosixPath(member.filename).is_relative_to(root)
+        }
+    return _inventory_sha256(members)
+
+
+def _model_pin(model_id: str, phase: str, archive: bytes) -> ModelAssetSpec:
     return ModelAssetSpec(
         model_id=model_id,
         phase=phase,
@@ -51,13 +89,12 @@ def _model_pin(model_id: str, phase: str, archive: bytes) -> ModelAssetSpec:
         ),
         bytes=len(archive),
         sha256=hashlib.sha256(archive).hexdigest(),
+        installed_inventory_sha256=_zip_model_inventory_sha256(archive),
         install_dir=model_id,
     )
 
 
 def _release_pin(name: str, archive: bytes) -> ReleaseAssetPin:
-    import hashlib
-
     return ReleaseAssetPin(
         asset_name=name,
         url=(
@@ -105,8 +142,22 @@ def test_sync_models_downloads_six_pins_once_and_is_idempotent(tmp_path, monkeyp
     vibeseg_pins = tuple(
         _release_pin(name, archive) for name, archive in vibeseg_archives.items()
     )
+    vibeseg_inventory_sha256 = _inventory_sha256(
+        {
+            "Trainer/dataset.json": "{}",
+            "Trainer/plans.json": "{}",
+            "Trainer/fold_0/checkpoint_final.pth": "fold0",
+            "Trainer/fold_1/checkpoint_final.pth": "fold1",
+            "Trainer/fold_2/checkpoint_final.pth": "fold2",
+        }
+    )
     monkeypatch.setattr(spineps_assets, "SPINEPS_MODEL_ASSETS", model_pins)
     monkeypatch.setattr(spineps_assets, "VIBESEG_CROP_ASSETS", vibeseg_pins)
+    monkeypatch.setattr(
+        spineps_assets,
+        "VIBESEG_CROP_INSTALLED_INVENTORY_SHA256",
+        vibeseg_inventory_sha256,
+    )
     payloads = {
         **{pin.url: model_archives[pin.phase] for pin in model_pins},
         **{pin.url: vibeseg_archives[pin.asset_name] for pin in vibeseg_pins},

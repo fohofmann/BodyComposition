@@ -14,37 +14,37 @@ import pyarrow as pa
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCStatus
 
-MEASUREMENT_SCHEMA_VERSION = "3.2.0"
+MEASUREMENT_SCHEMA_VERSION = "3.4.0"
 VERTEBRAL_TERRITORY_SCHEMA_VERSION = "native-physical-territories-v2-bins3"
 BINS_PER_VERTEBRAL_TERRITORY = 3
-SIGNATURE_SCHEMA_VERSION = "vertebral-reference-fixed-mm-v1"
+SIGNATURE_SCHEMA_VERSION = "vertebral-reference-fixed-mm-v2"
 REFERENCE_ALIGNMENT_VERSION = "robust-vertebral-linear-reference-v1"
 SIGNATURE_BIN_COUNT = 100
 SIGNATURE_BIN_WIDTH_MM = 20.0
 SIGNATURE_REFERENCE_LEVEL = "L3"
-TISSUE_HU_DISTRIBUTION_SCHEMA_VERSION = "fixed-bin-native-compartment-hu-v1"
+COMPARTMENT_HU_DISTRIBUTION_SCHEMA_VERSION = "fixed-bin-native-compartment-hu-v2"
 HU_DISTRIBUTION_SCOPE = "analyzed_volume"
 HU_DISTRIBUTION_MIN_HU = -190.0
 HU_DISTRIBUTION_MAX_HU = 150.0
 HU_DISTRIBUTION_BIN_WIDTH_HU = 5.0
-HU_DISTRIBUTION_TISSUES: tuple[tuple[str, str, str], ...] = (
+HU_DISTRIBUTION_COMPARTMENTS: tuple[tuple[str, str, str], ...] = (
     ("sm", "SM", "sm"),
     ("sat", "SAT", "sat"),
     ("avat", "aVAT", "avat"),
     ("tvat", "tVAT", "tvat"),
 )
 SIGNATURE_CORE_CHANNELS: tuple[tuple[str, str], ...] = (
-    ("sm", "sm"),
+    ("sm_compartment", "sm_compartment"),
     (
         "skeletal_muscle_tissue_hu_m29_150",
         "skeletal_muscle_tissue_hu_m29_150",
     ),
-    ("sat_total_hu_m190_m30", "sat_total_hu_m190_m30"),
-    ("avat_hu_m190_m30", "avat_hu_m190_m30"),
-    ("tvat_hu_m190_m30", "tvat_hu_m190_m30"),
-    ("bone", "bone"),
-    ("heart", "heart"),
-    ("lung", "lung"),
+    ("sat_tissue_hu_m190_m30", "sat_tissue_hu_m190_m30"),
+    ("avat_tissue_hu_m190_m30", "avat_tissue_hu_m190_m30"),
+    ("tvat_tissue_hu_m190_m30", "tvat_tissue_hu_m190_m30"),
+    ("bone_compartment", "bone_compartment"),
+    ("heart_compartment", "heart_compartment"),
+    ("lung_compartment", "lung_compartment"),
 )
 
 SLICE_REQUIRED_COLUMNS = {
@@ -68,10 +68,12 @@ SLICE_REQUIRED_COLUMNS = {
     "normal_mm_per_superior_mm",
     "in_plane_pixel_area_mm2",
     "full_coverage_tolerance",
+    "analysis_scope",
+    "body_composition_analysis_available",
     "assigned_vertebral_level",
     "vertebral_assignment_status",
     "vertebral_territory_bin",
-    "total_segmented_tissue_area_cm2",
+    "total_segmented_compartment_area_cm2",
     "trunk_area_cm2",
     "trunk_area_valid",
     "trunk_area_reason",
@@ -221,7 +223,7 @@ HU_DISTRIBUTION_REQUIRED_COLUMNS = {
     "case_id",
     "distribution_schema_version",
     "distribution_scope",
-    "tissue_key",
+    "compartment_key",
     "display_label",
     "source_compartment",
     "source_label_ids",
@@ -277,6 +279,8 @@ for _destination, _ in SIGNATURE_CORE_CHANNELS:
 MISSING_REASONS = {
     "outside_fov",
     "partial_fov",
+    "outside_analysis_region",
+    "partial_analysis_region",
     "partial_contour_coverage",
     "missing_vertebra",
     "truncated_vertebra",
@@ -289,6 +293,7 @@ MISSING_REASONS = {
     "uncertain_landmark",
     "boundary_extremum",
     "empty_tissue",
+    "empty_compartment",
     "zero_denominator",
     "empty_mask",
     "contour_not_found",
@@ -310,7 +315,7 @@ _STRING_COLUMNS = {
     "reference_alignment_version",
     "distribution_schema_version",
     "distribution_scope",
-    "tissue_key",
+    "compartment_key",
     "display_label",
     "tissue_definition",
     "source_compartment",
@@ -328,9 +333,10 @@ _STRING_COLUMNS = {
     "range_name",
     "start_level",
     "end_level",
-    "total_vat_source",
+    "vat_compartment_union_source",
     "orientation_state",
     "orientation_qc_status",
+    "analysis_scope",
     "territory_qc_status",
     "reference_level",
     "reference_alignment_method",
@@ -342,7 +348,7 @@ _STRING_COLUMNS = {
 _BOOLEAN_COLUMNS = {
     "allow_partial",
     "anatomical_variant",
-    "tissue_exceeds_body_area",
+    "compartment_exceeds_body_area",
     "trunk_mask_fragmented",
     "body_mask_internal_gap",
     "trunk_mask_internal_gap",
@@ -353,6 +359,7 @@ _BOOLEAN_COLUMNS = {
     "reference_alignment_review_required",
     "bin_valid",
     "bin_upper_inclusive",
+    "body_composition_analysis_available",
     "distribution_valid",
     "body_surface_touches_fov",
     "ct_max_pelvic_circumference_value_is_fov_cropped",
@@ -371,6 +378,7 @@ _INTEGER_COLUMNS = {
     "bins_per_territory",
     "vertebral_territory_bin",
     "contributing_slice_count",
+    "acquired_slice_count",
     "signature_bin",
     "relative_bin_index",
     "reference_alignment_anchor_count",
@@ -643,7 +651,7 @@ def validate_hu_distribution_contract(
     *,
     table_name: str = "hu_distributions",
 ) -> None:
-    """Validate the fixed-bin, raw-voxel tissue HU distribution contract."""
+    """Validate the fixed-bin, raw-voxel compartment HU distribution contract."""
 
     missing = sorted(HU_DISTRIBUTION_REQUIRED_COLUMNS - set(table.columns))
     if missing:
@@ -651,21 +659,24 @@ def validate_hu_distribution_contract(
     expected_bin_count = int(
         round((HU_DISTRIBUTION_MAX_HU - HU_DISTRIBUTION_MIN_HU) / HU_DISTRIBUTION_BIN_WIDTH_HU)
     )
-    expected_row_count = len(HU_DISTRIBUTION_TISSUES) * expected_bin_count
+    expected_row_count = len(HU_DISTRIBUTION_COMPARTMENTS) * expected_bin_count
     if len(table) != expected_row_count:
         raise ValueError(
-            f"{table_name} must contain exactly {expected_row_count} fixed tissue/bin rows."
+            f"{table_name} must contain exactly {expected_row_count} "
+            "fixed compartment/bin rows."
         )
-    expected_tissue_sequence = [
-        tissue_key
-        for tissue_key, _display_label, _definition in HU_DISTRIBUTION_TISSUES
+    expected_compartment_sequence = [
+        compartment_key
+        for compartment_key, _display_label, _definition in HU_DISTRIBUTION_COMPARTMENTS
         for _ in range(expected_bin_count)
     ]
-    if table["tissue_key"].astype(str).tolist() != expected_tissue_sequence:
-        raise ValueError(f"{table_name} must retain the fixed SM, SAT, aVAT, tVAT tissue order.")
+    if table["compartment_key"].astype(str).tolist() != expected_compartment_sequence:
+        raise ValueError(
+            f"{table_name} must retain the fixed SM, SAT, aVAT, tVAT compartment order."
+        )
     if (
         table["distribution_schema_version"].isna().any()
-        or not table["distribution_schema_version"].eq(TISSUE_HU_DISTRIBUTION_SCHEMA_VERSION).all()
+        or not table["distribution_schema_version"].eq(COMPARTMENT_HU_DISTRIBUTION_SCHEMA_VERSION).all()
     ):
         raise ValueError(f"{table_name} has an unsupported distribution_schema_version.")
     if (
@@ -680,8 +691,8 @@ def validate_hu_distribution_contract(
         raise ValueError(f"{table_name} has unsupported histogram bin semantics.")
     if table["quantile_method"].isna().any() or not table["quantile_method"].eq("linear").all():
         raise ValueError(f"{table_name} has an unsupported quantile method.")
-    if table[["tissue_key", "bin_index"]].duplicated().any():
-        raise ValueError(f"{table_name} contains duplicate tissue/bin identities.")
+    if table[["compartment_key", "bin_index"]].duplicated().any():
+        raise ValueError(f"{table_name} contains duplicate compartment/bin identities.")
 
     scope_inferior = pd.to_numeric(
         table["scope_inferior_position_superior_mm"],
@@ -709,19 +720,19 @@ def validate_hu_distribution_contract(
     expected_indices = np.arange(expected_bin_count, dtype=np.int64)
     expected_inclusive = np.zeros(expected_bin_count, dtype=bool)
     expected_inclusive[-1] = True
-    tissue_metadata = {
-        tissue_key: (display_label, source_compartment)
-        for tissue_key, display_label, source_compartment in HU_DISTRIBUTION_TISSUES
+    compartment_metadata = {
+        compartment_key: (display_label, source_compartment)
+        for compartment_key, display_label, source_compartment in HU_DISTRIBUTION_COMPARTMENTS
     }
     allowed_invalid_reasons = {
-        "empty_tissue",
+        "empty_compartment",
         "invalid_measurement",
         "missing_compartment",
     }
 
-    for tissue_key, group in table.groupby("tissue_key", sort=False):
+    for compartment_key, group in table.groupby("compartment_key", sort=False):
         group = group.reset_index(drop=True)
-        display_label, source_compartment = tissue_metadata[str(tissue_key)]
+        display_label, source_compartment = compartment_metadata[str(compartment_key)]
         if (
             group[
                 [
@@ -738,12 +749,12 @@ def validate_hu_distribution_contract(
             or not group["source_compartment"].eq(source_compartment).all()
             or not group["source_semantics"].eq("model_native_compartment").all()
         ):
-            raise ValueError(f"{table_name} has inconsistent metadata for {tissue_key}.")
+            raise ValueError(f"{table_name} has inconsistent metadata for {compartment_key}.")
         if not np.array_equal(
             pd.to_numeric(group["bin_index"], errors="coerce").to_numpy(dtype=np.int64),
             expected_indices,
         ):
-            raise ValueError(f"{table_name} has unstable bin identities for {tissue_key}.")
+            raise ValueError(f"{table_name} has unstable bin identities for {compartment_key}.")
         for column, expected in (
             ("bin_lower_hu", expected_edges[:-1]),
             ("bin_upper_hu", expected_edges[1:]),
@@ -763,13 +774,13 @@ def validate_hu_distribution_contract(
             observed = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=float)
             if not np.allclose(observed, expected, rtol=0.0, atol=1e-9):
                 raise ValueError(
-                    f"{table_name} {column} differs from the fixed HU grid for {tissue_key}."
+                    f"{table_name} {column} differs from the fixed HU grid for {compartment_key}."
                 )
         if not group["bin_upper_inclusive"].notna().all() or not np.array_equal(
             group["bin_upper_inclusive"].to_numpy(dtype=bool),
             expected_inclusive,
         ):
-            raise ValueError(f"{table_name} has inconsistent final-bin inclusion for {tissue_key}.")
+            raise ValueError(f"{table_name} has inconsistent final-bin inclusion for {compartment_key}.")
         for column in (
             "source_label_ids",
             "total_voxel_count",
@@ -792,7 +803,7 @@ def validate_hu_distribution_contract(
             "q3_hu",
         ):
             if group[column].nunique(dropna=False) != 1:
-                raise ValueError(f"{table_name} has inconsistent {column} for {tissue_key}.")
+                raise ValueError(f"{table_name} has inconsistent {column} for {compartment_key}.")
 
         counts = pd.to_numeric(group["voxel_count"], errors="coerce").to_numpy(dtype=float)
         fractions = pd.to_numeric(
@@ -806,7 +817,7 @@ def validate_hu_distribution_contract(
             or not np.all(np.isfinite(fractions))
             or np.any((fractions < 0.0) | (fractions > 1.0))
         ):
-            raise ValueError(f"{table_name} has invalid histogram values for {tissue_key}.")
+            raise ValueError(f"{table_name} has invalid histogram values for {compartment_key}.")
         totals = {
             column: int(group[column].iloc[0])
             for column in (
@@ -820,7 +831,7 @@ def validate_hu_distribution_contract(
             )
         }
         if any(value < 0 for value in totals.values()):
-            raise ValueError(f"{table_name} has negative counts for {tissue_key}.")
+            raise ValueError(f"{table_name} has negative counts for {compartment_key}.")
         if (
             totals["finite_voxel_count"] + totals["nonfinite_voxel_count"]
             != totals["total_voxel_count"]
@@ -830,14 +841,14 @@ def validate_hu_distribution_contract(
             != totals["finite_voxel_count"]
             or int(counts.sum()) != totals["in_histogram_voxel_count"]
         ):
-            raise ValueError(f"{table_name} count accounting differs for {tissue_key}.")
+            raise ValueError(f"{table_name} count accounting differs for {compartment_key}.")
         expected_fractions = (
             counts / totals["total_voxel_count"]
             if totals["total_voxel_count"]
             else np.zeros(expected_bin_count, dtype=float)
         )
         if not np.allclose(fractions, expected_fractions, rtol=0.0, atol=1e-12):
-            raise ValueError(f"{table_name} voxel fractions differ for {tissue_key}.")
+            raise ValueError(f"{table_name} voxel fractions differ for {compartment_key}.")
         below_fraction = float(group["below_histogram_voxel_fraction"].iloc[0])
         above_fraction = float(group["above_histogram_voxel_fraction"].iloc[0])
         expected_below_fraction = (
@@ -861,7 +872,7 @@ def validate_hu_distribution_contract(
             rtol=0.0,
             atol=1e-12,
         ):
-            raise ValueError(f"{table_name} overflow fractions differ for {tissue_key}.")
+            raise ValueError(f"{table_name} overflow fractions differ for {compartment_key}.")
         voxel_volume_mm3 = float(group["voxel_volume_mm3"].iloc[0])
         total_volume_cm3 = float(group["total_volume_cm3"].iloc[0])
         if (
@@ -874,26 +885,32 @@ def validate_hu_distribution_contract(
                 atol=1e-9,
             )
         ):
-            raise ValueError(f"{table_name} has inconsistent physical volume for {tissue_key}.")
+            raise ValueError(f"{table_name} has inconsistent physical volume for {compartment_key}.")
 
         valid = bool(group["distribution_valid"].iloc[0])
         reason_value = group["distribution_reason"].iloc[0]
         reason = None if pd.isna(reason_value) else str(reason_value)
-        quantiles = np.asarray(
-            [
-                group["q1_hu"].iloc[0],
-                group["median_hu"].iloc[0],
-                group["q3_hu"].iloc[0],
-            ],
-            dtype=float,
-        )
-        moments = np.asarray(
-            [
-                group["mean_hu"].iloc[0],
-                group["standard_deviation_hu"].iloc[0],
-            ],
-            dtype=float,
-        )
+        quantiles = pd.to_numeric(
+            pd.Series(
+                [
+                    group["q1_hu"].iloc[0],
+                    group["median_hu"].iloc[0],
+                    group["q3_hu"].iloc[0],
+                ],
+                dtype="object",
+            ),
+            errors="coerce",
+        ).to_numpy(dtype=float)
+        moments = pd.to_numeric(
+            pd.Series(
+                [
+                    group["mean_hu"].iloc[0],
+                    group["standard_deviation_hu"].iloc[0],
+                ],
+                dtype="object",
+            ),
+            errors="coerce",
+        ).to_numpy(dtype=float)
         source_label_ids = str(group["source_label_ids"].iloc[0])
         parsed_source_label_ids: tuple[int, ...] = ()
         if source_label_ids:
@@ -901,12 +918,12 @@ def validate_hu_distribution_contract(
                 parsed_source_label_ids = tuple(int(value) for value in source_label_ids.split(","))
             except ValueError as error:
                 raise ValueError(
-                    f"{table_name} has invalid source_label_ids for {tissue_key}."
+                    f"{table_name} has invalid source_label_ids for {compartment_key}."
                 ) from error
             if any(value <= 0 for value in parsed_source_label_ids) or len(
                 set(parsed_source_label_ids)
             ) != len(parsed_source_label_ids):
-                raise ValueError(f"{table_name} has invalid source_label_ids for {tissue_key}.")
+                raise ValueError(f"{table_name} has invalid source_label_ids for {compartment_key}.")
         if valid:
             if (
                 totals["total_voxel_count"] <= 0
@@ -920,18 +937,20 @@ def validate_hu_distribution_contract(
                 or not quantiles[0] <= quantiles[1] <= quantiles[2]
             ):
                 raise ValueError(
-                    f"{table_name} has inconsistent valid statistics for {tissue_key}."
+                    f"{table_name} has inconsistent valid statistics for {compartment_key}."
                 )
         elif reason not in allowed_invalid_reasons:
-            raise ValueError(f"{table_name} has an unsupported invalid reason for {tissue_key}.")
+            raise ValueError(f"{table_name} has an unsupported invalid reason for {compartment_key}.")
         if totals["total_voxel_count"] == 0 and (
             totals["contributing_slice_count"] != 0
             or np.any(np.isfinite(moments))
             or np.any(np.isfinite(quantiles))
         ):
-            raise ValueError(f"{table_name} has statistics for an empty tissue {tissue_key}.")
+            raise ValueError(
+                f"{table_name} has statistics for an empty compartment {compartment_key}."
+            )
         if reason == "missing_compartment" and parsed_source_label_ids:
-            raise ValueError(f"{table_name} marks {tissue_key} missing despite source labels.")
+            raise ValueError(f"{table_name} marks {compartment_key} missing despite source labels.")
 
 
 def _validate_mask(mask_zyx: np.ndarray, geometry: ImageGeometry, name: str) -> np.ndarray:
@@ -1162,6 +1181,17 @@ class MeasurementBundle:
                 raise ValueError(f"Measurement table {name} is missing columns: {missing}.")
         if self.slices.empty:
             raise ValueError("slices must retain every acquired CT slice and cannot be empty.")
+        scopes = self.slices["analysis_scope"].dropna().astype(str).unique()
+        if len(scopes) != 1 or scopes[0] not in {
+            "full_ct",
+            "l3_vertebral_level",
+        }:
+            raise ValueError("slices must contain one supported analysis_scope.")
+        availability = self.slices["body_composition_analysis_available"].fillna(False).astype(bool)
+        if not bool(availability.any()):
+            raise ValueError("At least one acquired slice must be available for tissue analysis.")
+        if scopes[0] == "full_ct" and not bool(availability.all()):
+            raise ValueError("full_ct slices cannot contain unavailable tissue-analysis rows.")
         validate_signature_contract(self.signature)
         validate_hu_distribution_contract(self.hu_distributions)
         if self.slices["slice_id"].duplicated().any():

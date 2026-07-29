@@ -83,7 +83,7 @@ class MasksInternalTissue(PipelineAction):
         )
         if unknown_labels:
             raise ValueError(
-                "Model-native tissue compartments contain labels outside the "
+                "Model-native compartments contain labels outside the "
                 f"0-7 contract: {unknown_labels}."
             )
         if self.config_tissue["save_compartment_mask"] and not input_label_tissue.path.exists():
@@ -97,8 +97,9 @@ class MasksInternalTissue(PipelineAction):
             name: self.config["measurements"]["tissue_definitions"][name]
             for name in (
                 "skeletal_muscle_tissue_hu_m29_150",
-                "sat_total_hu_m190_m30",
-                "vat_total_hu_m190_m30",
+                "sat_tissue_hu_m190_m30",
+                "avat_tissue_hu_m190_m30",
+                "tvat_tissue_hu_m190_m30",
             )
         }
         expected = {name: CANONICAL_TISSUE_DEFINITIONS[name] for name in definitions}
@@ -115,16 +116,15 @@ class MasksInternalTissue(PipelineAction):
             spacing_xyz=tuple(float(value) for value in input_image.spacing),
         )
         raw = input_label_tissue.data
-        output_np = raw.copy()
+        output_np = np.zeros_like(raw, dtype=np.uint8)
         consensus_by_label = {
             self.LBL_COMPARTMENT_R["SM"]: derived["skeletal_muscle_tissue_hu_m29_150"],
-            self.LBL_COMPARTMENT_R["SAT"]: derived["sat_total_hu_m190_m30"],
-            self.LBL_COMPARTMENT_R["aVAT"]: derived["vat_total_hu_m190_m30"],
-            self.LBL_COMPARTMENT_R["tVAT"]: derived["vat_total_hu_m190_m30"],
+            self.LBL_COMPARTMENT_R["SAT"]: derived["sat_tissue_hu_m190_m30"],
+            self.LBL_COMPARTMENT_R["aVAT"]: derived["avat_tissue_hu_m190_m30"],
+            self.LBL_COMPARTMENT_R["tVAT"]: derived["tvat_tissue_hu_m190_m30"],
         }
         for label, consensus_mask in consensus_by_label.items():
-            compartment = raw == label
-            output_np[compartment & ~consensus_mask] = 0
+            output_np[(raw == label) & consensus_mask] = label
         output_mask.meta = input_label_tissue.meta
 
         output_mask.data = output_np
