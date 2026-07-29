@@ -192,6 +192,7 @@ def _service(tmp_path, pipeline=SuccessfulPipeline, *, config=None, source=None)
 
 
 def test_public_config_is_strict_roundtrippable_and_cwd_independent(tmp_path, monkeypatch):
+    monkeypatch.delenv("BODYCOMPOSITION_MODEL_ROOT", raising=False)
     monkeypatch.chdir(tmp_path)
     config = PipelineConfig.load()
     assert config.vertebral_backend == "spineps_veridah_ct_v1"
