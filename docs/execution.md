@@ -165,8 +165,11 @@ CPU offload/eviction scheduler and no public model-order option. Normal runs
 use a stage-aware cache: compatible models remain resident, but prior
 segmentation bundles are released before the memory-intensive task-297/299
 measurement-support predictor is loaded, and that support predictor is
-released immediately after use. This prevents the standard pipeline from
-requiring all model families to fit in accelerator memory simultaneously.
+released immediately after use. The support-model exporter applies the pinned
+nnU-Net interpolation to bounded channel groups and updates the multiclass
+argmax incrementally; it does not allocate every class on the full source grid
+at once. These controls prevent the standard pipeline from requiring all model
+families or the complete task-297 logit grid to fit in memory simultaneously.
 
 The explicit `--low-resource` L3 preset enables the same model-unloading
 strategy from the first attempt rather than waiting for an OOM marker. It also

@@ -22,7 +22,10 @@ from BodyComposition.actions.measurement import (
     _scientific_measurement_configuration,
 )
 from BodyComposition.actions.segm_int import SegmIntBodyComposition, _SegmInternal
-from BodyComposition.actions.segm_totalsegmentator import SegmTotalSegmentator
+from BodyComposition.actions.segm_totalsegmentator import (
+    SegmTotalSegmentator,
+    _bounded_multiclass_segmentation,
+)
 from BodyComposition.actions.vertebral import SPINEPS_BODY_MASK
 from BodyComposition.config import PipelineConfig
 from BodyComposition.measurement import totalsegmentator_assets
@@ -1246,6 +1249,84 @@ def test_measurement_support_action_resolves_pinned_nnunet_directory(
         / "nnUNetTrainer_4000epochs_NoMirroring__nnUNetPlans__3d_fullres"
     )
     assert list(model_root.iterdir()) == []
+
+
+def test_bounded_totalsegmentator_export_matches_upstream_multiclass_result():
+    import torch
+    from nnunetv2.inference.export_prediction import (
+        convert_predicted_logits_to_segmentation_with_correct_shape,
+    )
+    from nnunetv2.preprocessing.resampling.default_resampling import (
+        resample_data_or_seg_to_shape,
+    )
+
+    calls = []
+
+    def resample(data, new_shape, current_spacing, new_spacing):
+        calls.append(int(data.shape[0]))
+        return resample_data_or_seg_to_shape(
+            data,
+            new_shape,
+            current_spacing,
+            new_spacing,
+            is_seg=False,
+            order=1,
+            order_z=0,
+            force_separate_z=False,
+        )
+
+    class LabelManager:
+        has_regions = False
+        num_segmentation_heads = 4
+        all_labels = (0, 1, 2, 3)
+        foreground_labels = (1, 2, 3)
+
+        @staticmethod
+        def apply_inference_nonlin(logits):
+            return torch.softmax(torch.as_tensor(logits).float(), dim=0)
+
+        @staticmethod
+        def convert_probabilities_to_segmentation(probabilities):
+            return probabilities.argmax(0)
+
+    plans = SimpleNamespace(
+        transpose_forward=(0, 1, 2),
+        transpose_backward=(2, 1, 0),
+    )
+    configuration = SimpleNamespace(
+        spacing=(2.0, 2.0, 2.0),
+        resampling_fn_probabilities=resample,
+    )
+    properties = {
+        "spacing": (1.0, 1.0, 1.0),
+        "shape_after_cropping_and_before_resampling": (5, 6, 7),
+        "shape_before_cropping": (7, 8, 9),
+        "bbox_used_for_cropping": ((1, 6), (1, 7), (1, 8)),
+    }
+    logits = torch.from_numpy(
+        np.random.default_rng(17).normal(size=(4, 3, 4, 5)).astype(np.float32)
+    )
+
+    expected = convert_predicted_logits_to_segmentation_with_correct_shape(
+        logits.clone(),
+        plans,
+        configuration,
+        LabelManager(),
+        properties,
+    )
+    calls.clear()
+    actual = _bounded_multiclass_segmentation(
+        logits,
+        plans,
+        configuration,
+        LabelManager(),
+        properties,
+        maximum_resampled_bytes=2 * 5 * 6 * 7 * np.dtype(np.float32).itemsize,
+    )
+
+    assert np.array_equal(actual, expected)
+    assert actual.shape == (9, 8, 7)
+    assert calls == [2, 2]
 
 
 def test_measurement_totalsegmentator_assets_are_checked_without_download(

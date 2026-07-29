@@ -62,6 +62,10 @@ This is a deliberate breaking release candidate.
 - case manifests retain distinct QC observations even when their stage, code,
   and summary text match, so an error-level finding cannot be hidden by an
   earlier warning for another anatomical level.
+- the pinned TotalSegmentator support models retain nnU-Net preprocessing,
+  inference, interpolation, and multiclass decisions while resampling output
+  logits in bounded channel groups, avoiding full-FOV target-grid memory
+  spikes.
 
 ### Removed
 

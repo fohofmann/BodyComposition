@@ -105,7 +105,7 @@ class _SegmInternal(PipelineAction):
     def release_model(self) -> None:
         self.predictor = None
 
-    def _predict(self, predictor, input_image, spacing_zyx):
+    def _predict_once(self, predictor, input_image, spacing_zyx):
         arguments = (
             input_image.data[None],
             {"spacing": spacing_zyx},
@@ -113,8 +113,11 @@ class _SegmInternal(PipelineAction):
             None,
             False,
         )
+        return predictor.predict_single_npy_array(*arguments)
+
+    def _predict(self, predictor, input_image, spacing_zyx):
         try:
-            return predictor.predict_single_npy_array(*arguments)
+            return self._predict_once(predictor, input_image, spacing_zyx)
         except RuntimeError as error:
             cudnn_engine_error = any(
                 message in str(error)
@@ -135,7 +138,7 @@ class _SegmInternal(PipelineAction):
                 "for the remainder of the process."
             )
             torch.backends.cudnn.enabled = False
-            return predictor.predict_single_npy_array(*arguments)
+            return self._predict_once(predictor, input_image, spacing_zyx)
 
     def __call__(self, memory):
         super().__call__(memory)

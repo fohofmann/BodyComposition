@@ -74,6 +74,15 @@ incompatible nnUNet/acvl-utils APIs. The narrow direct adapter uses the same
 official model, plans, fold, checkpoint, preprocessing, and nnUNet inference
 engine without copying or reimplementing segmentation code.
 
+Task 297 has 118 mutually exclusive output classes. The pinned nnU-Net
+single-array exporter otherwise materializes every class on the complete
+source grid at once. BodyComposition therefore calls the unchanged upstream
+preprocessor, predictor, and interpolation function, but resamples channels in
+bounded groups and updates the multiclass argmax incrementally. This is
+numerically equivalent to the upstream non-region softmax decision and is
+covered by a direct equivalence regression; it changes peak memory, not the
+model or label definition.
+
 ## Public tissue-model sources
 
 The default ResEncL and optional ResEncM tissue assets are pinned to immutable
