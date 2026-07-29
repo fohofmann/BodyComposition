@@ -241,3 +241,5 @@ BodyComposition source is Apache-2.0. Model weights retain their own terms and
 are never relicensed by this project. Cite BodyComposition and every enabled
 model listed in the run provenance; see [CITATION.cff](CITATION.cff) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Parts of this code were implemented using Codex and GPT-5.6.

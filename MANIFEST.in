@@ -10,7 +10,5 @@ recursive-include config/tissue_profiles *.yaml
 recursive-include docs *.md
 recursive-include scripts *.py
 recursive-include tests/fixtures/public_ct *.json *.md
-prune docs/research
-prune docs/internal development material
 global-exclude .DS_Store
 global-exclude *.py[cod]

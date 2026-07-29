@@ -24,7 +24,12 @@ from scripts.release_checks import (
 )
 
 
-def _wheel(path: Path, *, include_weights: bool = False) -> Path:
+def _wheel(
+    path: Path,
+    *,
+    include_weights: bool = False,
+    extra_text: str | None = None,
+) -> Path:
     members = {
         "bodycomposition-1.0.dist-info/licenses/LICENSE": "Apache-2.0",
         "bodycomposition-1.0.dist-info/licenses/THIRD_PARTY_NOTICES.md": "Notices",
@@ -34,6 +39,8 @@ def _wheel(path: Path, *, include_weights: bool = False) -> Path:
     }
     if include_weights:
         members["BodyComposition/models/checkpoint.pth"] = "weights"
+    if extra_text is not None:
+        members["bodycomposition-1.0.dist-info/extra.txt"] = extra_text
     with zipfile.ZipFile(path, "w") as archive:
         for name, value in members.items():
             archive.writestr(name, value)
@@ -49,6 +56,14 @@ def test_distribution_audit_rejects_model_weights(tmp_path):
         "forbidden_path",
         "model_or_image_asset",
     }
+
+
+def test_distribution_audit_rejects_token_shaped_secret(tmp_path):
+    synthetic_token = "hf_" + ("A" * 24)
+    result = audit(_wheel(tmp_path / "credential.whl", extra_text=synthetic_token))
+
+    assert not result["passed"]
+    assert any(item["code"] == "provider_token" for item in result["findings"])
 
 
 def test_sbom_is_deterministic_and_covers_the_frozen_project():
@@ -87,6 +102,7 @@ def test_container_definition_is_weight_free_pinned_and_non_root():
     assert "--reinstall-package BodyComposition" in dockerfile
     assert "*.pth" in dockerignore and "*.pt" in dockerignore
     assert "output/" in dockerignore
+    assert "dev/" in dockerignore
 
 
 def test_measurement_support_uses_the_pinned_nnunet_engine_directly():
@@ -196,24 +212,76 @@ def test_array_digest_matches_c_order_bytes_for_empty_and_fortran_arrays():
 def test_public_product_surface_omits_internal_development_residue():
     public_files = [
         *Path("BodyComposition").rglob("*.py"),
+        *Path("BodyComposition").rglob("*.json"),
+        *Path("config").rglob("*.yaml"),
         *Path("scripts").rglob("*.py"),
+        *Path("tests").rglob("*.py"),
         *Path("docs").glob("*.md"),
+        *Path(".github").rglob("*.yml"),
+        Path(".dockerignore"),
+        Path(".gitignore"),
+        Path("Dockerfile"),
+        Path("MANIFEST.in"),
+        Path("pyproject.toml"),
         Path("README.md"),
+        Path("SECURITY.md"),
         Path("THIRD_PARTY_NOTICES.md"),
     ]
-    forbidden = {f"wp{index:02d}" for index in range(1, 10)}
     task_id = re.compile(
         r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
     )
+    private_path = re.compile(
+        r"/(?:Users/[^/\s]+|home/(?!bodycomposition(?:/|\b))[^/\s]+|"
+        r"data[0-9]*/[^/\s]+)/"
+    )
+    credential_assignment = re.compile(
+        r"(?:password|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*['\"][^'\"]+",
+        flags=re.IGNORECASE,
+    )
+    forbidden = {f"wp{index:02d}" for index in range(1, 11)}
+    forbidden.update(
+        {
+            "vibe" + "coding",
+            "chat" + "gpt",
+            "co" + "dex",
+            "gpt-" + "5.6",
+            "work" + "package",
+        }
+    )
+    allowed_notice = "Parts of this code were implemented using Codex and GPT-5.6."
+    token_shape = re.compile(
+        r"\b(?:"
+        r"(?:AKIA|ASIA)[0-9A-Z]{16}|"
+        r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}|"
+        r"github_pat_[A-Za-z0-9_]{20,}|"
+        r"gh[pousr]_[A-Za-z0-9]{20,}|"
+        r"hf_[A-Za-z0-9]{20,}|"
+        r"xox[baprs]-[A-Za-z0-9-]{10,}|"
+        r"AIza[0-9A-Za-z_-]{30,}"
+        r")\b"
+    )
     findings = {}
     for path in public_files:
-        text = path.read_text(encoding="utf-8").lower()
-        matched = sorted(token for token in forbidden if token in text)
+        text = path.read_text(encoding="utf-8")
+        searchable = text.replace(allowed_notice, "").lower()
+        matched = sorted(token for token in forbidden if token in searchable)
         if task_id.search(text):
             matched.append("task_id")
+        if private_path.search(text):
+            matched.append("private_path")
+        if credential_assignment.search(text):
+            matched.append("credential_assignment")
+        if token_shape.search(text):
+            matched.append("token_shape")
         if matched:
             findings[path.as_posix()] = matched
     assert findings == {}
+
+
+def test_local_development_material_is_ignored():
+    gitignore = Path(".gitignore").read_text(encoding="utf-8").splitlines()
+
+    assert "/dev/" in gitignore
 
 
 def _source_archive(path: Path, *, mtime: int) -> Path:

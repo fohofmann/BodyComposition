@@ -61,4 +61,5 @@ output/
 coverage.xml
 htmlcov/
 
-# Local automation state
+# Local development material
+dev/

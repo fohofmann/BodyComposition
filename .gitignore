@@ -60,4 +60,5 @@ MANIFEST
 *.ckpt
 *.onnx
 
-# Local planning, research, and automation state
+# Local development material
+/dev/

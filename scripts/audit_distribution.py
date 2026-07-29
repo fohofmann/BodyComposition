@@ -14,11 +14,32 @@ FORBIDDEN_SUFFIXES = (
     ".pt", ".pth", ".ckpt", ".onnx", ".nii", ".nii.gz", ".dcm",
 )
 FORBIDDEN_PARTS = {
-    ".env", ".git", ".DS_Store", "__pycache__", "models", "internal development material",
-    "research",
+    ".env",
+    ".git",
+    ".DS_Store",
+    "__pycache__",
+    "data",
+    "dev",
+    "internal",
+    "logs",
+    "models",
+    "planning",
+    "private",
+    "tmp",
 }
 SECRET_PATTERNS = {
     "private_key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    "aws_access_key": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    "provider_token": re.compile(
+        r"\b(?:"
+        r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}|"
+        r"github_pat_[A-Za-z0-9_]{20,}|"
+        r"gh[pousr]_[A-Za-z0-9]{20,}|"
+        r"hf_[A-Za-z0-9]{20,}|"
+        r"xox[baprs]-[A-Za-z0-9-]{10,}|"
+        r"AIza[0-9A-Za-z_-]{30,}"
+        r")\b"
+    ),
     "credential_assignment": re.compile(
         r"(?i)(?:password|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*['\"][^'\"]+"
     ),
