@@ -496,6 +496,34 @@ def test_qc_evidence_json_normalization_is_strict_and_private(tmp_path):
         )
 
 
+def test_case_qc_preserves_distinct_observations_and_error_severity():
+    warning = {
+        "code": "vertebral_body_extent_invalid",
+        "stage": "measurement",
+        "severity": "warning",
+        "reason": "A detected vertebral-body extent is invalid or truncated.",
+        "observed": {"vertebral_level": "T1", "missing_reason": "truncated_vertebra"},
+    }
+    error = {
+        **warning,
+        "severity": "error",
+        "observed": {"vertebral_level": "SACRUM", "missing_reason": "invalid_extent"},
+    }
+    memory = {
+        "tmp/measurement_bundle": SimpleNamespace(
+            qc_status=SimpleNamespace(value="fail"),
+            qc_flags=(warning, warning, error),
+        )
+    }
+
+    status, flags = service_module._case_qc(memory)
+
+    assert status == QCStatus.FAIL
+    assert len(flags) == 2
+    assert [flag["observed"]["vertebral_level"] for flag in flags] == ["T1", "SACRUM"]
+    assert [flag["severity"] for flag in flags] == ["warning", "error"]
+
+
 def test_service_rejects_loaded_pixels_that_differ_from_preflight(
     tmp_path,
     monkeypatch,

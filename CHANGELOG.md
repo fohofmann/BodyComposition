@@ -59,6 +59,9 @@ This is a deliberate breaking release candidate.
   telemetry without changing upstream inference or CUDA execution.
 - CTDeepRot checkpoint loading requires the exact validated PyTorch/torchvision
   pair and fails closed instead of retrying legacy pickle-loading APIs.
+- case manifests retain distinct QC observations even when their stage, code,
+  and summary text match, so an error-level finding cannot be hidden by an
+  earlier warning for another anatomical level.
 
 ### Removed
 

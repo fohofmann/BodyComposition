@@ -576,9 +576,9 @@ def _case_qc(memory: Mapping[str, Any]) -> tuple[QCStatus, tuple[dict[str, Any],
             _normalise_flag(value, default_stage="measurement") for value in measurement.qc_flags
         )
     unique: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[str] = set()
     for flag in flags:
-        key = (flag["stage"], flag["code"], flag["reason"])
+        key = json.dumps(flag, sort_keys=True, separators=(",", ":"))
         if key not in seen:
             unique.append(flag)
             seen.add(key)
