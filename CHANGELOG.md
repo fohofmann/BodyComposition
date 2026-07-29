@@ -8,15 +8,24 @@ This is a deliberate breaking release candidate.
 
 - one strict typed configuration with generated defaults/schema;
 - one service shared by the Python API and CLI;
-- strict direct DICOM CT input and standalone conversion through the shared
+- strict direct DICOM CT input and standalone transfer-ready NIfTI conversion
+  with a hash-bound, privacy-safe technical sidecar through the shared
   SimpleITK/GDCM geometry and provenance boundary;
 - content-addressed case identity, immutable manifests, artifact hashes,
   atomic promotion, deterministic resume, and ordered aggregate tables;
 - CTDeepRot orientation integrity with safe repair and mandatory review flags;
 - upstream SPINEPS/VERIDAH plus TPTBox/VibeSeg default vertebral backend;
-- canonical native-mm slice, three-bin vertebral, and summary measurements;
-- optional one-page case reports and ordered run/export collation with a
-  conditional manual-review summary;
+- canonical native-mm slice, three-bin vertebral, summary, fixed-grid
+  signature, and whole-volume native-compartment HU-distribution measurements;
+- deterministic CSV mirrors of the canonical Parquet tables, an opt-out flag,
+  and verified later CSV conversion from an existing result bundle;
+- an explicit L3-only low-resource preset using the ResEncM models without
+  resizing the in-plane field of view;
+- optional one-page scientific case reports with aligned sagittal spine,
+  tissue-area profile, native-compartment HU distributions, measurement table,
+  axial overlay, and ordered run/export collation;
+- a generic filesystem-backed scheduler-worker mode with shared input preflight,
+  collision-safe whole-case claims, and early release of surplus workers;
 - external pinned model synchronization/verification;
 - non-root, weight-free, digest-pinned container definition; and
 - release audit, SBOM, vulnerability, clean-install, and CI tooling.
@@ -36,6 +45,12 @@ This is a deliberate breaking release candidate.
   automatic device selection, and the `./output` result root are defaults.
 - source CT voxel dtype and calibrated values are preserved independently of
   path names; integer casting is explicit and validated only for output labels.
+- model-native inference results are named compartments; HU-filtered derived
+  results are named tissues. The default applies only the declared skeletal
+  muscle and adipose HU definitions and does not calculate IMAT, LAMA, or NAMA.
+- the default comparison signature combines a 100-by-20-mm translation-only
+  vertebral-reference grid with 5-HU whole-analyzed-volume distributions for
+  native SM, SAT, aVAT, and tVAT compartments.
 - JSON CLI mode reserves stdout for its single machine-readable payload and
   routes dependency progress to stderr.
 - the default pipeline-execution budget is four hours so the automatic CPU
