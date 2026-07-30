@@ -337,12 +337,25 @@ def build_measurement_bundle(
     for extent in extents.values():
         if extent.valid and extent.complete:
             continue
+        extent_invalid = not extent.valid
         flags.append(
             QCFlag(
-                code="vertebral_body_extent_invalid",
+                code=(
+                    "vertebral_body_extent_invalid"
+                    if extent_invalid
+                    else "vertebral_body_extent_truncated"
+                ),
                 stage="measurement",
-                severity=(QCSeverity.ERROR if not extent.valid else QCSeverity.WARNING),
-                reason="A detected vertebral-body extent is invalid or truncated.",
+                severity=(QCSeverity.WARNING if extent_invalid else QCSeverity.INFO),
+                reason=(
+                    "A vertebral-body extent is invalid because its retained component "
+                    "is too small or materially fragmented."
+                    if extent_invalid
+                    else (
+                        "A vertebral body reaches the acquisition boundary; measurements "
+                        "from the observed territory remain valid."
+                    )
+                ),
                 observed={
                     "vertebral_level": extent.anatomical_label,
                     "missing_reason": extent.missing_reason,
@@ -354,7 +367,13 @@ def build_measurement_bundle(
                     "maximum_removed_fraction": float(extent_settings["maximum_removed_fraction"]),
                 },
                 suggested_review_action=(
-                    "Review the vertebral-body mask and confirm truncation or segmentation failure."
+                    "Review the vertebral-body mask before using measurements assigned "
+                    "to this level."
+                    if extent_invalid
+                    else (
+                        "No automatic review is required; retain the recorded incomplete "
+                        "coverage when comparing vertebral territories."
+                    )
                 ),
             )
         )

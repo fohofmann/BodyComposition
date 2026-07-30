@@ -108,11 +108,29 @@ def make_measurement_inputs(config, *, empty_vertebrae=False):
     return image, tissues, geometry, body_surface, vertebral_result
 
 
-def make_bundle(config, *, empty_vertebrae=False):
+def make_bundle(config, *, empty_vertebrae=False, truncated_label=None):
     image, tissues, geometry, body_surface, vertebral_result = make_measurement_inputs(
         config,
         empty_vertebrae=empty_vertebrae,
     )
+    if truncated_label is not None:
+        labels = np.array(vertebral_result.vertebral_body_labels, copy=True)
+        coordinates = np.argwhere(labels == truncated_label)
+        if not len(coordinates):
+            raise ValueError(f"Synthetic vertebral label {truncated_label} is absent.")
+        lower = coordinates.min(axis=0)
+        upper = coordinates.max(axis=0) + 1
+        labels[labels == truncated_label] = 0
+        labels[
+            0 : upper[0] - lower[0],
+            lower[1] : upper[1],
+            lower[2] : upper[2],
+        ] = truncated_label
+        vertebral_result = replace(
+            vertebral_result,
+            whole_vertebra_labels=labels.copy(),
+            vertebral_body_labels=labels,
+        )
     identity = MeasurementIdentity("case-001", "run-001", "analysis-001")
     bundle = build_measurement_bundle(
         image_zyx=image,
@@ -176,6 +194,26 @@ def test_complete_bundle_validates_three_native_territory_bins(base_config):
     ]
     assert bundle.hu_distributions.groupby("compartment_key").size().eq(68).all()
     assert bundle.hu_distributions["distribution_scope"].eq("analyzed_volume").all()
+
+
+def test_truncated_vertebral_body_retains_measurements_without_manual_review_flag(
+    base_config,
+):
+    bundle, _, _, _, _ = make_bundle(base_config, truncated_label=12)
+    flag = next(
+        value
+        for value in bundle.qc_flags
+        if value.code == "vertebral_body_extent_truncated"
+        and value.observed["vertebral_level"] == "T12"
+    )
+    t12 = bundle.vertebrae.loc[
+        bundle.vertebrae["vertebral_level"].eq("T12")
+    ]
+
+    assert flag.severity == QCSeverity.INFO
+    assert t12["vertebral_extent_valid"].all()
+    assert not t12["vertebral_extent_complete"].all()
+    assert t12["sm_compartment_mean_csa_cm2_valid"].all()
 
 
 def test_hu_distributions_use_native_compartments_not_filtered_masks(base_config):

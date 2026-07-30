@@ -347,6 +347,7 @@ def collect_review_entries(
         _qc_entry(case_id, "vertebral", flag)
         for flag in vertebral_result.qc_flags
         if flag.stage != "orientation"
+        and flag.severity.value in {"warning", "error"}
     )
     entries.extend(
         _qc_entry(case_id, "measurement", flag)

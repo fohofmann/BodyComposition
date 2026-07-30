@@ -3,6 +3,9 @@
 Execution status and scientific QC are separate. A case can complete and still
 require review. The pipeline continues readable uncertain cases by default,
 retains structured reasons, and never clears flags automatically.
+Informational findings document expected coverage or acquisition-boundary
+conditions without requesting adjudication. Warnings and errors enter the
+manual-review queue; errors also make scientific QC fail.
 
 ## Where to start
 
@@ -46,7 +49,7 @@ Use `qc/spine_review.png`, `qc/vertebral_result.json`, the prepared CT, and
 - T13, L6, rib-remnant, and sacral conventions;
 - missing/internal sequence gaps;
 - fragments or merged corpora;
-- superior/inferior field-of-view truncation; and
+- material fragmentation or clinically relevant field-of-view truncation; and
 - physical alignment of every corpus mask.
 
 Only corpus labels are accepted downstream. The presence of a full-vertebra
@@ -70,6 +73,11 @@ full-body and primary-trunk contact separately; the case summary records their
 counts. A sacral maximum measured from a boundary-cropped but closed,
 nonfragmented trunk contour remains numeric and propagates to the ratios, but
 is marked FOV-cropped and ineligible as an exact anthropometric value.
+Routine cranial or caudal vertebral contact is retained as informational QC.
+It does not by itself request manual review, and observed measurements from a
+valid truncated vertebral territory remain available with explicit incomplete
+coverage. Material fragmentation above the configured 5% largest-component
+limit remains a warning.
 
 ## Adjudication
 

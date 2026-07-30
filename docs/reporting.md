@@ -64,7 +64,7 @@ quality-control findings. Each finding is reported as affected cases and the
 percentage of included cases; the column header states the total included
 denominator as `N`. Finding types may overlap within one case.
 Routine cranial or caudal vertebral contact with the field-of-view boundary is
-not printed there, but remains available in the canonical review records.
+not printed there, but remains available as informational case QC evidence.
 
 After every terminal case, the service rebuilds the combined document in a
 temporary file and validates the PDF together with its audit manifest. The

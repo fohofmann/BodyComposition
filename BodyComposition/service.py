@@ -582,9 +582,10 @@ def _case_qc(memory: Mapping[str, Any]) -> tuple[QCStatus, tuple[dict[str, Any],
         if key not in seen:
             unique.append(flag)
             seen.add(key)
-    if "fail" in statuses:
+    severities = {str(flag.get("severity", "warning")).lower() for flag in unique}
+    if "fail" in statuses or "error" in severities:
         status = QCStatus.FAIL
-    elif "review" in statuses or unique:
+    elif "review" in statuses or any(severity != "info" for severity in severities):
         status = QCStatus.REVIEW
     elif statuses:
         status = QCStatus.PASS
@@ -2440,6 +2441,8 @@ def aggregate_results(
                 }
             )
         for flag in result.flags:
+            if str(flag.get("severity", "warning")).lower() == "info":
+                continue
             review_rows.append(
                 {
                     "schema_version": "1.0.0",

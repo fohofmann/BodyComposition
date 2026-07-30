@@ -161,6 +161,32 @@ class SuccessfulPipeline:
         ]
 
 
+class InformationalPipeline(SuccessfulPipeline):
+    def __call__(self, memory):
+        super().__call__(memory)
+        memory["tmp/orientation_result"] = SimpleNamespace(
+            qc_status="pass",
+            review_flags=(),
+            to_dict=lambda: {
+                "state": "PASS_METADATA_MATCH",
+                "orientation_changed": False,
+                "manual_review_required": False,
+            },
+        )
+        memory["tmp/vertebral_result"] = SimpleNamespace(
+            backend_id="spineps_veridah_ct_v1",
+            qc_status=SimpleNamespace(value="pass"),
+            qc_flags=(
+                {
+                    "code": "vertebra_touches_cranial_fov",
+                    "stage": "vertebral",
+                    "severity": "info",
+                    "reason": "The observed anatomy reaches the acquisition boundary.",
+                },
+            ),
+        )
+
+
 class FailingPipeline:
     def __init__(self, config, timestamp):
         pass
@@ -523,6 +549,45 @@ def test_case_qc_preserves_distinct_observations_and_error_severity():
     assert len(flags) == 2
     assert [flag["observed"]["vertebral_level"] for flag in flags] == ["T1", "SACRUM"]
     assert [flag["severity"] for flag in flags] == ["warning", "error"]
+
+
+def test_case_qc_retains_information_without_requesting_manual_review():
+    information = {
+        "code": "vertebral_body_extent_truncated",
+        "stage": "measurement",
+        "severity": "info",
+        "reason": "The observed territory reaches the acquisition boundary.",
+        "observed": {"vertebral_level": "T1"},
+    }
+    memory = {
+        "tmp/measurement_bundle": SimpleNamespace(
+            qc_status=SimpleNamespace(value="pass"),
+            qc_flags=(information,),
+        )
+    }
+
+    status, flags = service_module._case_qc(memory)
+
+    assert status == QCStatus.PASS
+    assert flags == (service_module._normalise_flag(information, default_stage="measurement"),)
+
+
+def test_information_remains_in_case_manifest_but_not_review_queue(tmp_path):
+    source = _write_ct(tmp_path / "case.nii.gz")
+    result = _service(tmp_path, pipeline=InformationalPipeline).analyze_case(
+        source,
+        tmp_path / "outputs",
+        case_id="case-1",
+        run_id="information-only",
+    )
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    run = inspect_result(result.output_path.parents[2])
+    review_queue = pd.read_parquet(run.aggregate_paths["review_queue"])
+
+    assert result.qc_status == QCStatus.PASS
+    assert manifest["manual_review_required"] is False
+    assert manifest["qc_flags"][0]["severity"] == "info"
+    assert review_queue.empty
 
 
 def test_service_rejects_loaded_pixels_that_differ_from_preflight(

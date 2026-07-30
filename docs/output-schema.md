@@ -105,7 +105,9 @@ The aggregate tables never silently drop failures:
 - `cases.parquet` has one ordered row per requested case;
 - `failures.parquet` has one row per failed/cancelled case with sanitized stage,
   code, and summary; and
-- `review_queue.parquet` has one row per QC flag, including orientation repair.
+- `review_queue.parquet` has one row per warning/error QC flag, including
+  orientation repair. Informational flags remain in the immutable case
+  manifest and stage QC JSON but do not request adjudication.
 
 Default runs include same-name CSV mirrors of all three aggregates.
 Regeneration uses the output setting stored with the run, so it cannot silently

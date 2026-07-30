@@ -162,7 +162,7 @@ class VertebralResult:
             return QCStatus.NOT_ASSESSED
         if any(flag.severity == QCSeverity.ERROR for flag in self.qc_flags):
             return QCStatus.FAIL
-        if self.qc_flags:
+        if any(flag.severity == QCSeverity.WARNING for flag in self.qc_flags):
             return QCStatus.REVIEW
         return QCStatus.PASS
 

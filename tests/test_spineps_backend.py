@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -12,12 +13,13 @@ from BodyComposition.vertebral import (
     adapt_spineps_sitk_outputs,
     spineps_session,
 )
-from BodyComposition.vertebral.contracts import VertebralResult
+from BodyComposition.vertebral.contracts import QCFlag, QCSeverity, VertebralResult
 from BodyComposition.vertebral.spineps_manifest import (
     SPINEPS_AUXILIARY_INSTANCE_LABELS,
 )
 from BodyComposition.vertebral.spineps_qc import (
     construct_vertebral_body_labels,
+    evaluate_spineps_qc,
     vertebra_only_instance_labels,
 )
 
@@ -132,6 +134,84 @@ def test_adapter_returns_native_labels_centroids_and_provenance():
         == "user_model_sync"
     )
     assert result.native_outputs["seg_spine"] == Path("seg-spine.nii.gz")
+
+
+def test_informational_vertebral_flags_do_not_request_manual_review():
+    semantic, vertebra = _ordinary_outputs()
+    result = adapt_spineps_outputs(semantic, vertebra, _geometry())
+    result = replace(
+        result,
+        qc_flags=(
+            QCFlag(
+                code="expected_scan_boundary",
+                reason="The observed anatomy reaches the acquisition boundary.",
+                severity=QCSeverity.INFO,
+            ),
+        ),
+    )
+
+    assert result.qc_status == QCStatus.PASS
+
+
+def test_minor_disconnected_islands_do_not_trigger_vertebral_review():
+    shape = (12, 12, 12)
+    geometry = _geometry(shape)
+    vertebra = np.zeros(shape, dtype=np.uint8)
+    vertebra[2:7, 2:7, 2:7] = 22
+    vertebra[10, 10, 10] = 22
+    semantic = np.where(vertebra != 0, 49, 0).astype(np.uint8)
+
+    result = adapt_spineps_outputs(semantic, vertebra, geometry)
+
+    assert "disconnected_vertebral_body" not in {
+        flag.code for flag in result.qc_flags
+    }
+    assert result.qc_status == QCStatus.PASS
+
+
+def test_material_disconnected_fraction_requests_review_with_evidence():
+    shape = (14, 14, 14)
+    geometry = _geometry(shape)
+    vertebra = np.zeros(shape, dtype=np.uint8)
+    vertebra[1:7, 1:7, 1:7] = 22
+    vertebra[9:12, 9:12, 9:12] = 22
+    semantic = np.where(vertebra != 0, 49, 0).astype(np.uint8)
+
+    flags = evaluate_spineps_qc(
+        vertebra,
+        vertebra,
+        geometry,
+        semantic_labels_zyx=semantic,
+    )
+    flag = next(
+        value for value in flags if value.code == "disconnected_vertebral_body"
+    )
+
+    assert flag.severity == QCSeverity.WARNING
+    assert flag.observed["component_count_by_label"] == {22: 2}
+    assert flag.observed["removed_fraction_by_label"][22] == pytest.approx(1 / 9)
+    assert flag.thresholds == {
+        "maximum_disconnected_fraction": 0.05,
+        "connectivity": 18,
+    }
+
+
+def test_vertebral_scan_boundary_is_informational_unless_l3_is_truncated():
+    shape = (8, 10, 10)
+    geometry = _geometry(shape)
+    vertebra = np.zeros(shape, dtype=np.uint8)
+    vertebra[0:2, 1:9, 1:9] = 21
+    semantic = np.where(vertebra != 0, 49, 0).astype(np.uint8)
+
+    result = adapt_spineps_outputs(semantic, vertebra, geometry)
+    boundary = next(
+        flag
+        for flag in result.qc_flags
+        if flag.code == "vertebra_touches_caudal_fov"
+    )
+
+    assert boundary.severity == QCSeverity.INFO
+    assert result.qc_status == QCStatus.PASS
 
 
 def test_adapter_flags_t13_l6_and_physical_fov_boundaries():

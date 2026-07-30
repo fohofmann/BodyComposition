@@ -17,6 +17,7 @@ from BodyComposition.vertebral.spineps_manifest import (
 
 DEFAULT_MIN_BODY_VOLUME_MM3 = 500.0
 DEFAULT_MAX_NEIGHBOR_VOLUME_RATIO = 2.5
+DEFAULT_MAX_DISCONNECTED_FRACTION = 0.05
 
 
 def _validate_label_array(name: str, array: np.ndarray, geometry: ImageGeometry) -> None:
@@ -131,6 +132,7 @@ def evaluate_spineps_qc(
     semantic_labels_zyx: np.ndarray | None = None,
     min_body_volume_mm3: float = DEFAULT_MIN_BODY_VOLUME_MM3,
     max_neighbor_volume_ratio: float = DEFAULT_MAX_NEIGHBOR_VOLUME_RATIO,
+    max_disconnected_fraction: float = DEFAULT_MAX_DISCONNECTED_FRACTION,
 ) -> tuple[QCFlag, ...]:
     """Evaluate native labels without rewriting anatomical variants."""
 
@@ -138,6 +140,8 @@ def evaluate_spineps_qc(
     _validate_label_array("vertebral_body_labels_zyx", vertebral_body_labels_zyx, geometry)
     if semantic_labels_zyx is not None:
         _validate_label_array("semantic_labels_zyx", semantic_labels_zyx, geometry)
+    if not 0 <= max_disconnected_fraction < 1:
+        raise ValueError("max_disconnected_fraction must be in [0, 1).")
     if np.any((vertebral_body_labels_zyx != 0) & (vertebral_body_labels_zyx != whole_vertebra_labels_zyx)):
         raise ValueError("Vertebral-body labels are not a subset of whole vertebra labels.")
 
@@ -197,17 +201,23 @@ def evaluate_spineps_qc(
 
     body_volumes = {}
     small_bodies = {}
-    disconnected = {}
-    structure = ndimage.generate_binary_structure(3, 1)
+    disconnected_counts = {}
+    disconnected_fractions = {}
+    structure = ndimage.generate_binary_structure(3, 2)
     for label in sorted(body_labels):
         label_mask = vertebral_body_labels_zyx == label
         volume_mm3 = float(np.count_nonzero(label_mask) * geometry.voxel_volume_mm3)
         body_volumes[label] = volume_mm3
         if volume_mm3 < min_body_volume_mm3:
             small_bodies[label] = volume_mm3
-        _, components = ndimage.label(label_mask, structure=structure)
+        component_labels, components = ndimage.label(label_mask, structure=structure)
         if components > 1:
-            disconnected[label] = int(components)
+            counts = np.bincount(component_labels.ravel())
+            retained = int(counts[1:].max())
+            removed_fraction = float((label_mask.sum() - retained) / label_mask.sum())
+            if removed_fraction > max_disconnected_fraction:
+                disconnected_counts[label] = int(components)
+                disconnected_fractions[label] = removed_fraction
     if small_bodies:
         flags.append(
             _flag(
@@ -217,12 +227,19 @@ def evaluate_spineps_qc(
                 thresholds={"minimum_volume_mm3": min_body_volume_mm3},
             )
         )
-    if disconnected:
+    if disconnected_counts:
         flags.append(
             _flag(
                 "disconnected_vertebral_body",
-                "One or more labeled vertebral bodies contain multiple components.",
-                observed={"component_count_by_label": disconnected},
+                "A material fraction of one or more vertebral-body labels is disconnected from its largest component.",
+                observed={
+                    "component_count_by_label": disconnected_counts,
+                    "removed_fraction_by_label": disconnected_fractions,
+                },
+                thresholds={
+                    "maximum_disconnected_fraction": max_disconnected_fraction,
+                    "connectivity": 18,
+                },
             )
         )
 
@@ -351,6 +368,7 @@ def evaluate_spineps_qc(
             _flag(
                 "vertebra_touches_cranial_fov",
                 "A vertebral prediction touches the cranial field-of-view boundary.",
+                severity=QCSeverity.INFO,
                 observed={"labels": sorted(cranial_labels)},
             )
         )
@@ -359,6 +377,7 @@ def evaluate_spineps_qc(
             _flag(
                 "vertebra_touches_caudal_fov",
                 "A vertebral prediction touches the caudal field-of-view boundary.",
+                severity=QCSeverity.INFO,
                 observed={"labels": sorted(caudal_labels)},
             )
         )

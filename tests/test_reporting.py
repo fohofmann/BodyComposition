@@ -36,7 +36,10 @@ from BodyComposition.reporting.contracts import (
     ReviewEntry,
 )
 from BodyComposition.reporting.io import load_case_report_input
-from BodyComposition.reporting.metrics import aggregate_vertebral_measurements
+from BodyComposition.reporting.metrics import (
+    aggregate_vertebral_measurements,
+    collect_review_entries,
+)
 from BodyComposition.reporting.projection import (
     SAGITTAL_AP_CROP_MARGIN_MM,
     SAGITTAL_SI_CROP_MARGIN_MM,
@@ -66,6 +69,7 @@ from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import (
     ExecutionStatus,
     QCFlag,
+    QCSeverity,
     VertebralCentroid,
     VertebralResult,
 )
@@ -181,6 +185,29 @@ def _report_case(config, case_id="case-001", *, orientation=None):
             "scanner_model": "Synthetic CT 1.0",
         },
     )
+
+
+def test_informational_vertebral_flags_are_not_report_review_entries(base_config):
+    case = _report_case(base_config)
+    vertebral = replace(
+        case.vertebral_result,
+        qc_flags=(
+            QCFlag(
+                code="vertebra_touches_cranial_fov",
+                reason="The observed anatomy reaches the acquisition boundary.",
+                severity=QCSeverity.INFO,
+            ),
+        ),
+    )
+
+    entries = collect_review_entries(
+        case.case_id,
+        case.orientation_result,
+        vertebral,
+        case.measurement_bundle,
+    )
+
+    assert not entries
 
 
 def _settings(layout="spine_overview_v1"):
