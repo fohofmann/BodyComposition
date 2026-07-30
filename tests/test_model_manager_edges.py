@@ -152,6 +152,41 @@ def test_public_tissue_models_are_immutable_original_sources():
     assert len(models.INTERNAL_MODELS["bodycomposition_resenc_m_v1"]["files"]) == 3
 
 
+def test_public_vertebral_models_are_immutable_original_sources():
+    expected = {
+        "vertebral_bodies_resenc_l": {
+            "revision": "b5c3025abe6285832645b242f4abaf79ec65a8aa",
+            "repo_id": "fhofmann/VertebralBodiesCT-ResEncL",
+            "dataset": {
+                "sha256": "57fff4652aabc83008b76c5801e80654d33cf246d9dd5162ef00aaac9d4ba744",
+                "byte_size": 1015,
+            },
+        },
+        "vertebral_bodies_resenc_m": {
+            "revision": "c7f2d09ebe12d54b9413d8cf6c6f4bd1cc7ef9f0",
+            "repo_id": "fhofmann/VertebralBodiesCT-ResEncM",
+            "dataset": {
+                "sha256": "57fff4652aabc83008b76c5801e80654d33cf246d9dd5162ef00aaac9d4ba744",
+                "byte_size": 1015,
+            },
+        },
+    }
+
+    for model_id, pins in expected.items():
+        definition = models.INTERNAL_MODELS[model_id]
+        asset = models.model_asset(model_id)
+        assert definition["repo_id"] == pins["repo_id"]
+        assert definition["revision"] == pins["revision"]
+        assert definition["license"] == "CC-BY-SA-4.0"
+        assert definition["weight_license_status"] == "published_with_model_card"
+        assert definition["files"]["dataset.json"] == pins["dataset"]
+        assert asset["upstream_revision"] == pins["revision"]
+        assert asset["download_url"].endswith(f"/tree/{pins['revision']}")
+
+    assert len(models.INTERNAL_MODELS["vertebral_bodies_resenc_l"]["files"]) == 7
+    assert len(models.INTERNAL_MODELS["vertebral_bodies_resenc_m"]["files"]) == 3
+
+
 def test_verify_model_routes_ctdeeprot_and_captures_checkpoint_errors(
     monkeypatch,
     tmp_path,

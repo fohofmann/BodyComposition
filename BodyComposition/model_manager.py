@@ -98,7 +98,7 @@ INTERNAL_MODELS: Mapping[str, dict[str, Any]] = {
         "license": "CC-BY-SA-4.0",
         "weight_license_status": "published_with_model_card",
         "files": {
-            "dataset.json": _file("5fa8ef393148d555064b8f335bcf4f2fe90bcd7d60b23f5b4e30f5281f1a5061", 1136),
+            "dataset.json": _file("57fff4652aabc83008b76c5801e80654d33cf246d9dd5162ef00aaac9d4ba744", 1015),
             "plans.json": _file("5e65f241dd7760516495e5947f3ebee5ffbbe54114ecf85b8cb0173153ff302f", 10767),
             "fold_0/checkpoint_final.pth": _file("d7edae71a61cad518d870b1d367b7657c618872eb930758aadd44d6623857682", 820934534),
             "fold_1/checkpoint_final.pth": _file("abe017ce2fec85a1b8e98de1e2bf00925f11c763871571d9a7ee2fdbc43cd1f0", 820935302),
@@ -117,7 +117,7 @@ INTERNAL_MODELS: Mapping[str, dict[str, Any]] = {
         "license": "CC-BY-SA-4.0",
         "weight_license_status": "published_with_model_card",
         "files": {
-            "dataset.json": _file("5fa8ef393148d555064b8f335bcf4f2fe90bcd7d60b23f5b4e30f5281f1a5061", 1136),
+            "dataset.json": _file("57fff4652aabc83008b76c5801e80654d33cf246d9dd5162ef00aaac9d4ba744", 1015),
             "plans.json": _file("48179675760a922ed388fba505816bf7a1305a12b4b4e8f34aaefa66c5f2721e", 10766),
             "fold_all/checkpoint_final.pth": _file("0ebcfa65b7c3acc145839403db80676deca494ee5a0d46fa2db3a6607fdf2862", 820934982),
         },
