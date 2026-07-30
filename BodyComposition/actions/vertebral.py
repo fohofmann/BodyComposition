@@ -8,6 +8,7 @@ import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -48,12 +49,42 @@ def _suffix(path: Path) -> str:
     return ".nii.gz" if path.name.endswith(".nii.gz") else path.suffix
 
 
-def _write_json_atomic(payload: dict, destination: Path) -> Path:
+def _write_json_atomic(payload: Any, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.partial")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, destination)
     return destination
+
+
+def _redact_absolute_paths(value: Any, model_cache_root: Path) -> Any:
+    if isinstance(value, str):
+        candidate = Path(value).expanduser()
+        if not candidate.is_absolute():
+            return value
+        try:
+            relative = candidate.relative_to(model_cache_root)
+        except ValueError:
+            return "<external-path>"
+        return f"<mounted-model-cache>/{relative.as_posix()}"
+    if isinstance(value, dict):
+        return {
+            key: _redact_absolute_paths(item, model_cache_root)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_absolute_paths(item, model_cache_root) for item in value]
+    return value
+
+
+def _copy_native_output(source: Path, destination: Path, model_cache_root: Path) -> Path:
+    if source.suffix.lower() != ".json":
+        return _atomic_copy(source, destination)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    return _write_json_atomic(
+        _redact_absolute_paths(payload, model_cache_root),
+        destination,
+    )
 
 
 def _geometry_from_sitk(image: sitk.Image) -> ImageGeometry:
@@ -87,6 +118,9 @@ class SegmSpinepsVeridah(PipelineAction):
             self.config["paths"]["weights"]["spineps"],
             device=settings["device"],
         )
+        self.model_cache_root = Path(
+            self.config["paths"]["weights"]["totalsegmentator"]
+        ).expanduser()
         self.save_native_outputs = settings["save_native_outputs"]
         self.review_enabled = settings["review_enabled"]
         self.io_inputs = ["tmp/prepared_image"]
@@ -138,7 +172,11 @@ class SegmSpinepsVeridah(PipelineAction):
             if not source_path.is_file():
                 continue
             destination = root / f"{name}{_suffix(source_path)}"
-            output[name] = _atomic_copy(source_path, destination)
+            output[name] = _copy_native_output(
+                source_path,
+                destination,
+                self.model_cache_root,
+            )
         return output
 
     def _promote(self, memory: dict, result: VertebralResult) -> VertebralResult:

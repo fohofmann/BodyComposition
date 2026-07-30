@@ -4,7 +4,7 @@ import hashlib
 import io
 import json
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import cv2
@@ -486,6 +486,64 @@ def test_pipeline_action_promotes_validated_body_mask_and_summary(
     assert summary_path.is_file()
     assert memory["tmp/vertebral_result"].backend_id == "spineps_veridah_ct_v1"
     assert not any((tmp_path / ".attempts").rglob("*.nii.gz"))
+
+
+def test_pipeline_action_redacts_paths_in_native_json(
+    pipeline_stub,
+    tmp_path,
+):
+    model_root = tmp_path / "models"
+    pipeline_stub.config["paths"]["weights"]["totalsegmentator"] = model_root
+    pipeline_stub.config["paths"]["weights"]["spineps"] = (
+        model_root / "SPINEPS" / "spineps-veridah-ct-v1"
+    )
+    source = tmp_path / "upstream" / "out_ctd.json"
+    source.parent.mkdir()
+    source.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "model_path": str(
+                            model_root
+                            / "SPINEPS"
+                            / "spineps-veridah-ct-v1"
+                            / "semantic_ct"
+                        )
+                    }
+                ],
+                "temporary_path": str(tmp_path / "attempt" / "input.nii.gz"),
+                "download_url": "https://example.org/models/checkpoint.pth",
+            }
+        ),
+        encoding="utf-8",
+    )
+    labels = np.zeros((1, 1, 1), dtype=np.uint8)
+    result = VertebralResult(
+        backend_id="spineps_veridah_ct_v1",
+        execution_status=ExecutionStatus.SUCCEEDED,
+        geometry=ImageGeometry(
+            size_xyz=(1, 1, 1),
+            spacing_xyz=(1.0, 1.0, 1.0),
+            origin_lps_xyz=(0.0, 0.0, 0.0),
+            direction_lps=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        ),
+        whole_vertebra_labels=labels,
+        vertebral_body_labels=labels,
+        native_outputs={"out_ctd": source},
+    )
+
+    promoted = SegmSpinepsVeridah(pipeline_stub)._native_outputs(
+        {"workspace": tmp_path / "bundle"},
+        result,
+    )
+    payload = json.loads(Path(promoted["out_ctd"]).read_text(encoding="utf-8"))
+
+    assert payload["models"][0]["model_path"] == (
+        "<mounted-model-cache>/SPINEPS/spineps-veridah-ct-v1/semantic_ct"
+    )
+    assert payload["temporary_path"] == "<external-path>"
+    assert payload["download_url"] == "https://example.org/models/checkpoint.pth"
 
 
 @pytest.mark.parametrize(
