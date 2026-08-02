@@ -385,8 +385,11 @@ def evaluate_spineps_qc(
         flags.append(
             _flag(
                 "l3_touches_fov_boundary",
-                "The predicted L3 touches a cranial or caudal field-of-view boundary.",
-                severity=QCSeverity.ERROR,
+                (
+                    "The predicted L3 touches a cranial or caudal field-of-view "
+                    "boundary; measurements from the observed territory remain available."
+                ),
+                severity=QCSeverity.INFO,
             )
         )
     return tuple(flags)

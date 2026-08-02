@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from BodyComposition.config import PipelineConfig, low_resource_config
+from BodyComposition.config import ConfigError, PipelineConfig, low_resource_config
 from BodyComposition.dicom import convert_dicom, dicom_report_patient_metadata
 from BodyComposition.execution import (
     CaseLease,
@@ -2615,6 +2615,7 @@ def analyze_case(
     run_id: str | None = None,
     series_uid: str | None = None,
     low_resource: bool = False,
+    tissue_backend: str | None = None,
 ) -> CaseResult:
     """Analyze one NIfTI or DICOM CT using release defaults.
 
@@ -2632,6 +2633,20 @@ def analyze_case(
         if low_resource
         else config
     )
+    if low_resource and tissue_backend not in {None, "bodycomposition_resenc_m_v1"}:
+        raise ConfigError(
+            "low_resource=True has a fixed ResEncM tissue backend and cannot be "
+            "combined with another tissue_backend."
+        )
+    if tissue_backend is not None and not low_resource:
+        resolved = (
+            PipelineConfig.load(selected_config)
+            if isinstance(selected_config, (str, Path))
+            else PipelineConfig.model_validate(selected_config)
+        )
+        value = resolved.normalized()
+        value["tissue"]["backend"] = tissue_backend
+        selected_config = PipelineConfig.model_validate(value)
     return PipelineService(selected_config).analyze_case(
         input_path,
         output_root,
@@ -2648,6 +2663,7 @@ def analyze_batch(
     config: PipelineConfig | Mapping[str, Any] | str | Path | None = None,
     run_id: str | None = None,
     low_resource: bool = False,
+    tissue_backend: str | None = None,
 ) -> BatchResult:
     """Analyze an ordered collection using the same defaults as :func:`analyze_case`."""
 
@@ -2660,6 +2676,20 @@ def analyze_batch(
         if low_resource
         else config
     )
+    if low_resource and tissue_backend not in {None, "bodycomposition_resenc_m_v1"}:
+        raise ConfigError(
+            "low_resource=True has a fixed ResEncM tissue backend and cannot be "
+            "combined with another tissue_backend."
+        )
+    if tissue_backend is not None and not low_resource:
+        resolved = (
+            PipelineConfig.load(selected_config)
+            if isinstance(selected_config, (str, Path))
+            else PipelineConfig.model_validate(selected_config)
+        )
+        value = resolved.normalized()
+        value["tissue"]["backend"] = tissue_backend
+        selected_config = PipelineConfig.model_validate(value)
     return cast(
         BatchResult,
         PipelineService(selected_config).analyze_batch(

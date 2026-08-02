@@ -152,6 +152,8 @@ def test_runtime_returns_explicit_failure_for_upstream_error(tmp_path):
 
 
 def test_upstream_wrappers_disable_downloads_and_use_saved_outputs(monkeypatch, tmp_path):
+    import TPTBox.segmentation.nnUnet_utils.inference_api as inference_api
+
     vibeseg_call = {}
     spineps_call = {}
 
@@ -166,6 +168,7 @@ def test_upstream_wrappers_disable_downloads_and_use_saved_outputs(monkeypatch, 
         "TPTBox.segmentation.VibeSeg.inference_nnunet.run_inference_on_file",
         fake_vibeseg,
     )
+    monkeypatch.setattr(inference_api, "_interop", False)
     monkeypatch.setattr("spineps.seg_run.process_img_nii", fake_spineps)
     trained_model = tmp_path / "verified-dataset100"
     output = tmp_path / "attempt" / "vibeseg.nii.gz"
@@ -185,6 +188,7 @@ def test_upstream_wrappers_disable_downloads_and_use_saved_outputs(monkeypatch, 
     assert vibeseg_call["kwargs"]["cache_model"] is True
     assert vibeseg_call["kwargs"]["ddevice"] == "cuda"
     assert vibeseg_call["kwargs"]["max_folds"] is None
+    assert inference_api._interop is True
     assert runtime_adapter is None
     assert response == "response"
     assert spineps_call["img_ref"] == "img-ref"

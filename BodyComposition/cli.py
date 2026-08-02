@@ -17,7 +17,12 @@ from typing import Any, TextIO
 import pandas as pd
 
 from BodyComposition import __version__
-from BodyComposition.config import ConfigError, PipelineConfig, low_resource_config
+from BodyComposition.config import (
+    TISSUE_BACKEND_IDS,
+    ConfigError,
+    PipelineConfig,
+    low_resource_config,
+)
 from BodyComposition.dicom import convert_dicom
 from BodyComposition.model_manager import (
     MODEL_IDS,
@@ -95,8 +100,19 @@ def _machine_readable_stdout(enabled: bool) -> Iterator[None]:
 
 def _config(args: argparse.Namespace) -> PipelineConfig:
     config = PipelineConfig.load(getattr(args, "config", None))
-    if getattr(args, "low_resource", False):
+    low_resource = getattr(args, "low_resource", False)
+    tissue_backend = getattr(args, "tissue_backend", None)
+    if low_resource:
+        if tissue_backend not in {None, "bodycomposition_resenc_m_v1"}:
+            raise ConfigError(
+                "--low-resource has a fixed ResEncM tissue backend and cannot be "
+                "combined with another --tissue-backend."
+            )
         config = low_resource_config(config)
+    elif tissue_backend is not None:
+        value = config.normalized()
+        value["tissue"]["backend"] = tissue_backend
+        config = PipelineConfig.model_validate(value)
     device = getattr(args, "device", None)
     if device is not None:
         value = config.normalized()
@@ -450,6 +466,7 @@ def _config_flags(
     device: bool = False,
     low_resource: bool = False,
     csv_output: bool = False,
+    tissue_backend: bool = False,
 ) -> None:
     parser.add_argument(
         "-c",
@@ -472,6 +489,12 @@ def _config_flags(
                 "use ResEncM, unload models between stages, and analyze only "
                 "the detected L3 vertebral territory"
             ),
+        )
+    if tissue_backend:
+        parser.add_argument(
+            "--tissue-backend",
+            choices=TISSUE_BACKEND_IDS,
+            help="override the anatomical-compartment segmentation backend",
         )
     if csv_output:
         parser.add_argument(
@@ -522,7 +545,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="series_uid",
         help="DICOM Series Instance UID; required only when multiple CT series are present",
     )
-    _config_flags(analyze, device=True, low_resource=True, csv_output=True)
+    _config_flags(
+        analyze,
+        device=True,
+        low_resource=True,
+        csv_output=True,
+        tissue_backend=True,
+    )
     _leaf_json(analyze)
     analyze.set_defaults(handler=_cmd_analyze)
 
@@ -569,7 +598,13 @@ def build_parser() -> argparse.ArgumentParser:
             "are already owned by other workers"
         ),
     )
-    _config_flags(batch, device=True, low_resource=True, csv_output=True)
+    _config_flags(
+        batch,
+        device=True,
+        low_resource=True,
+        csv_output=True,
+        tissue_backend=True,
+    )
     _leaf_json(batch)
     batch.set_defaults(handler=_cmd_batch)
 
@@ -653,7 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use full publication readiness, rather than analysis readiness, as the exit gate",
     )
-    _config_flags(doctor, device=True, low_resource=True)
+    _config_flags(doctor, device=True, low_resource=True, tissue_backend=True)
     _leaf_json(doctor)
     doctor.set_defaults(handler=_cmd_doctor)
 

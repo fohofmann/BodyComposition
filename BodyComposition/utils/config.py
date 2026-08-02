@@ -11,6 +11,10 @@ from BodyComposition.config import (
     TISSUE_LABELS,
     ConfigError,
 )
+from BodyComposition.measurement.tissues import (
+    canonical_compartment_name,
+    tissue_source_compartment_name,
+)
 
 
 def _require_mapping(config: Mapping[str, Any], path: str) -> Mapping[str, Any]:
@@ -102,9 +106,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
 
     analysis = _require_mapping(config, "analysis")
     if analysis.get("scope") not in {"full_ct", "l3_vertebral_level"}:
-        raise ConfigError(
-            "analysis.scope must be full_ct or l3_vertebral_level."
-        )
+        raise ConfigError("analysis.scope must be full_ct or l3_vertebral_level.")
     _require_nonnegative_number(
         config,
         "analysis.l3.inference_context_mm",
@@ -198,8 +200,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     profile_id = measurement.get("tissue_profile_id")
     if not isinstance(profile_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", profile_id):
         raise ConfigError(
-            "measurements.tissue_profile_id must be a non-empty lowercase "
-            "profile identifier."
+            "measurements.tissue_profile_id must be a non-empty lowercase profile identifier."
         )
 
     def require_kernel(kernel: Any, path: str) -> list[int]:
@@ -216,6 +217,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         ):
             raise ConfigError(f"{path} must contain three positive odd integers.")
         return kernel
+
     definitions = _require_mapping(config, "measurements.tissue_definitions")
     for definition_name, definition in definitions.items():
         if not isinstance(definition_name, str) or not re.fullmatch(
@@ -237,9 +239,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         }
         unknown_definition_keys = sorted(set(definition) - allowed_definition_keys)
         if unknown_definition_keys:
-            raise ConfigError(
-                f"{definition_path} has unknown values: {unknown_definition_keys}."
-            )
+            raise ConfigError(f"{definition_path} has unknown values: {unknown_definition_keys}.")
         enabled = definition.get("enabled")
         if not isinstance(enabled, bool):
             raise ConfigError(
@@ -297,9 +297,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
                 "clip_hu_range",
                 *method_keys,
             }
-            unknown_preprocessing = sorted(
-                set(preprocessing) - allowed_preprocessing_keys
-            )
+            unknown_preprocessing = sorted(set(preprocessing) - allowed_preprocessing_keys)
             missing_preprocessing = sorted(method_keys - set(preprocessing))
             if unknown_preprocessing or missing_preprocessing:
                 raise ConfigError(
@@ -311,8 +309,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
                 not isinstance(clip_range, list)
                 or len(clip_range) != 2
                 or any(
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
+                    isinstance(value, bool) or not isinstance(value, (int, float))
                     for value in clip_range
                 )
                 or clip_range[0] > clip_range[1]
@@ -335,10 +332,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
                     preprocessing["maximum_kernel_zyx"],
                     f"{definition_path}.preprocessing.maximum_kernel_zyx",
                 )
-                if any(
-                    lower > upper
-                    for lower, upper in zip(minimum, maximum, strict=True)
-                ):
+                if any(lower > upper for lower, upper in zip(minimum, maximum, strict=True)):
                     raise ConfigError(
                         f"{definition_path}.preprocessing minimum kernel must "
                         "not exceed its maximum."
@@ -347,8 +341,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
                 diffusion = preprocessing["anisotropic_diffusion"]
                 if not isinstance(diffusion, Mapping):
                     raise ConfigError(
-                        f"{definition_path}.preprocessing.anisotropic_diffusion "
-                        "must be a mapping."
+                        f"{definition_path}.preprocessing.anisotropic_diffusion must be a mapping."
                     )
                 expected_diffusion = {
                     "dimensionality",
@@ -379,11 +372,7 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
                     )
                 for key in ("time_step", "conductance"):
                     value = diffusion[key]
-                    if (
-                        isinstance(value, bool)
-                        or not isinstance(value, (int, float))
-                        or value <= 0
-                    ):
+                    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
                         raise ConfigError(
                             f"{definition_path}.preprocessing."
                             f"anisotropic_diffusion.{key} must be positive."
@@ -400,13 +389,10 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         if cleanup is not None:
             if not isinstance(cleanup, Mapping):
                 raise ConfigError(f"{definition_path}.cleanup must be a mapping.")
-            unknown_cleanup = sorted(
-                set(cleanup) - {"fill_small_holes", "remove_small_objects"}
-            )
+            unknown_cleanup = sorted(set(cleanup) - {"fill_small_holes", "remove_small_objects"})
             if unknown_cleanup:
                 raise ConfigError(
-                    f"{definition_path}.cleanup has unknown values: "
-                    f"{unknown_cleanup}."
+                    f"{definition_path}.cleanup has unknown values: {unknown_cleanup}."
                 )
             for operation_name, operation in cleanup.items():
                 operation_path = f"{definition_path}.cleanup.{operation_name}"
@@ -420,30 +406,21 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
                 }
                 if set(operation) != expected_operation:
                     raise ConfigError(
-                        f"{operation_path} must contain exactly "
-                        f"{sorted(expected_operation)}."
+                        f"{operation_path} must contain exactly {sorted(expected_operation)}."
                     )
                 dimensionality = operation["dimensionality"]
                 if dimensionality not in {"2D", "3D"}:
-                    raise ConfigError(
-                        f"{operation_path}.dimensionality must be 2D or 3D."
-                    )
+                    raise ConfigError(f"{operation_path}.dimensionality must be 2D or 3D.")
                 threshold = operation["threshold"]
                 if (
                     isinstance(threshold, bool)
                     or not isinstance(threshold, (int, float))
                     or threshold < 0
                 ):
-                    raise ConfigError(
-                        f"{operation_path}.threshold must be non-negative."
-                    )
+                    raise ConfigError(f"{operation_path}.threshold must be non-negative.")
                 if operation["unit"] not in {"physical", "voxel"}:
-                    raise ConfigError(
-                        f"{operation_path}.unit must be physical or voxel."
-                    )
-                allowed_connectivity = (
-                    {4, 8} if dimensionality == "2D" else {6, 18, 26}
-                )
+                    raise ConfigError(f"{operation_path}.unit must be physical or voxel.")
+                allowed_connectivity = {4, 8} if dimensionality == "2D" else {6, 18, 26}
                 if operation["connectivity"] not in allowed_connectivity:
                     raise ConfigError(
                         f"{operation_path}.connectivity must be one of "
@@ -559,10 +536,12 @@ def validate_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     compartment_labels = _require_mapping(config, "LBL_TISSUE_COMPARTMENTS")
     tissue_labels = _require_mapping(config, "LBL_TISSUE")
     if tissue_labels != TISSUE_LABELS:
-        raise ConfigError(
-            "LBL_TISSUE must match the released HU-filtered tissue label schema."
-        )
-    if any(compartment_labels.get(label) != name for label, name in tissue_labels.items()):
-        raise ConfigError("LBL_TISSUE labels must retain their compartment names.")
+        raise ConfigError("LBL_TISSUE must match the released HU-filtered tissue label schema.")
+    tissue_source_compartments = {
+        tissue_source_compartment_name(name) for name in compartment_labels.values()
+    }
+    canonical_tissues = {canonical_compartment_name(name) for name in tissue_labels.values()}
+    if not canonical_tissues.issubset(tissue_source_compartments):
+        raise ConfigError("LBL_TISSUE labels must resolve to configured model-native compartments.")
 
     return config

@@ -196,24 +196,35 @@ def test_complete_bundle_validates_three_native_territory_bins(base_config):
     assert bundle.hu_distributions["distribution_scope"].eq("analyzed_volume").all()
 
 
-def test_truncated_vertebral_body_retains_measurements_without_manual_review_flag(
+@pytest.mark.parametrize(
+    ("truncated_label", "vertebral_level"),
+    [(12, "T12"), (15, "L3")],
+)
+def test_truncated_vertebral_body_retains_measurements_without_qc_failure(
     base_config,
+    truncated_label,
+    vertebral_level,
 ):
-    bundle, _, _, _, _ = make_bundle(base_config, truncated_label=12)
+    bundle, _, _, _, _ = make_bundle(
+        base_config,
+        truncated_label=truncated_label,
+    )
     flag = next(
         value
         for value in bundle.qc_flags
         if value.code == "vertebral_body_extent_truncated"
-        and value.observed["vertebral_level"] == "T12"
+        and value.observed["vertebral_level"] == vertebral_level
     )
-    t12 = bundle.vertebrae.loc[
-        bundle.vertebrae["vertebral_level"].eq("T12")
+    rows = bundle.vertebrae.loc[
+        bundle.vertebrae["vertebral_level"].eq(vertebral_level)
     ]
 
     assert flag.severity == QCSeverity.INFO
-    assert t12["vertebral_extent_valid"].all()
-    assert not t12["vertebral_extent_complete"].all()
-    assert t12["sm_compartment_mean_csa_cm2_valid"].all()
+    assert rows["vertebral_extent_valid"].all()
+    assert not rows["vertebral_extent_complete"].all()
+    assert rows["sm_compartment_mean_csa_cm2_valid"].all()
+    assert rows["sm_compartment_mean_csa_cm2"].notna().all()
+    assert bundle.qc_status != QCStatus.FAIL
 
 
 def test_hu_distributions_use_native_compartments_not_filtered_masks(base_config):
@@ -315,7 +326,13 @@ def test_body_fov_contact_is_distinct_from_trunk_contour_contact(base_config):
     assert summary["body_surface_touches_fov"]
     assert summary["body_surface_touches_fov_slice_count"] == len(bundle.slices)
     assert not summary["trunk_contour_touches_fov"]
-    assert any(flag.code == "body_surface_touches_fov" for flag in bundle.qc_flags)
+    flag = next(
+        flag for flag in bundle.qc_flags if flag.code == "body_surface_touches_fov"
+    )
+    assert flag.severity == QCSeverity.WARNING
+    assert bundle.qc_status == QCStatus.REVIEW
+    assert bundle.slices["sm_compartment_area_cm2"].notna().all()
+    assert bundle.vertebrae["sm_compartment_mean_csa_cm2"].notna().all()
 
 
 def test_cropped_pelvic_value_keeps_selected_slice_provenance(base_config):
@@ -344,6 +361,19 @@ def test_cropped_pelvic_value_keeps_selected_slice_provenance(base_config):
     assert summary["ct_max_pelvic_circumference_value_is_fov_cropped"]
     assert summary["ct_max_pelvic_circumference_valid"]
     assert not summary["ct_max_pelvic_circumference_eligible"]
+    trunk_flag = next(
+        flag for flag in bundle.qc_flags if flag.code == "trunk_contour_touches_fov"
+    )
+    assert trunk_flag.severity == QCSeverity.WARNING
+    assert bundle.qc_status == QCStatus.REVIEW
+    assert bundle.slices.loc[
+        bundle.slices["trunk_touching_fov"],
+        "trunk_circumference_cm",
+    ].notna().all()
+    assert bundle.slices.loc[
+        bundle.slices["trunk_touching_fov"],
+        "trunk_area_cm2",
+    ].notna().all()
     assert any(flag.code == "pelvic_maximum_fov_cropped" for flag in bundle.qc_flags)
 
     corrupted_slices = bundle.slices.copy()

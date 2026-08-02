@@ -36,6 +36,13 @@ Weights remain external to wheels and containers; a deployment is operational
 only after `bodycomposition models sync` has downloaded and verified every
 required asset from its declared source.
 
+The optional BOA Task 542 model predicts body regions rather than the default
+model's complete seven-compartment schema. HU-filtered SM, SAT, aVAT, and tVAT
+can be derived through the documented adapter mapping, but native aVAT/tVAT,
+heart, and lung channels are unavailable and remain missing. Cross-backend
+equivalence has not been established; studies must retain backend identity and
+must not pool outputs as if the source masks were interchangeable.
+
 The container removes torchmetrics' bundled optional DISTS image-metric
 checkpoint to enforce a strict no-model-weights image. BodyComposition does
 not use or expose that metric.

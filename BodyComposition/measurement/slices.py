@@ -12,6 +12,7 @@ from BodyComposition.measurement.contours import external_contour_measurement
 from BodyComposition.measurement.contracts import BodySurfaceResult, MeasurementIdentity
 from BodyComposition.measurement.physical import slice_geometry_table, validate_array_zyx
 from BodyComposition.measurement.tissues import (
+    CORE_COMPARTMENT_NAMES,
     DERIVED_RATIO_DEFINITIONS,
     canonical_compartment_name,
     iter_configured_tissue_masks,
@@ -27,8 +28,6 @@ def _validated_label_schema(labels: Mapping[int, str]) -> dict[int, str]:
         canonical = canonical_compartment_name(name)
         if not canonical:
             raise ValueError(f"Label {label} has an empty name.")
-        if canonical in output.values():
-            raise ValueError(f"Label name {canonical!r} is duplicated.")
         output[label] = canonical
     if not output:
         raise ValueError("At least one label is required.")
@@ -195,13 +194,8 @@ def calculate_canonical_slice_measurements(
         analysis_available_z = np.ones(geometry.size_xyz[2], dtype=bool)
     else:
         analysis_available_z = np.asarray(analyzed_slices_z)
-        if (
-            analysis_available_z.ndim != 1
-            or analysis_available_z.shape != (geometry.size_xyz[2],)
-        ):
-            raise ValueError(
-                "analyzed_slices_z must contain one boolean per array-z slice."
-            )
+        if analysis_available_z.ndim != 1 or analysis_available_z.shape != (geometry.size_xyz[2],):
+            raise ValueError("analyzed_slices_z must contain one boolean per array-z slice.")
         if analysis_available_z.dtype != np.bool_:
             raise TypeError("analyzed_slices_z must be a boolean array.")
         analysis_available_z = np.array(analysis_available_z, copy=True)
@@ -286,13 +280,32 @@ def calculate_canonical_slice_measurements(
     table["trunk_touching_fov"] = touching
     table["trunk_mask_fragmented"] = fragmented
 
-    native_output_names: set[str] = set()
+    canonical_compartment_names = CORE_COMPARTMENT_NAMES
+    native_output_names = {f"{name}_compartment" for name in canonical_compartment_names}
     vat_masks: dict[str, np.ndarray] = {}
     measurement_columns: dict[str, Any] = {}
-    for label, name in compartment_schema.items():
-        compartment_mask = compartment_labels == label
+    for name in canonical_compartment_names:
+        source_labels = tuple(
+            label for label, canonical in compartment_schema.items() if canonical == name
+        )
         output_name = f"{name}_compartment"
-        native_output_names.add(output_name)
+        if not source_labels:
+            measurement_columns.update(
+                {
+                    f"{output_name}_voxel_count": pd.array(
+                        [pd.NA] * len(table),
+                        dtype="Int64",
+                    ),
+                    f"{output_name}_area_cm2": np.full(len(table), np.nan),
+                    f"{output_name}_area_valid": np.zeros(len(table), dtype=bool),
+                    f"{output_name}_area_reason": ["missing_compartment"] * len(table),
+                    f"{output_name}_mean_hu": np.full(len(table), np.nan),
+                    f"{output_name}_hu_valid": np.zeros(len(table), dtype=bool),
+                    f"{output_name}_hu_reason": ["missing_compartment"] * len(table),
+                }
+            )
+            continue
+        compartment_mask = np.isin(compartment_labels, source_labels)
         if name in {"avat", "tvat", "vat"}:
             vat_masks[name] = compartment_mask
         measurement_columns.update(
@@ -309,9 +322,7 @@ def calculate_canonical_slice_measurements(
 
     if "avat" in vat_masks and "tvat" in vat_masks:
         vat_compartment_union_mask = vat_masks["avat"] | vat_masks["tvat"]
-        measurement_columns["vat_compartment_union_source"] = ["avat_plus_tvat"] * len(
-            table
-        )
+        measurement_columns["vat_compartment_union_source"] = ["avat_plus_tvat"] * len(table)
     elif "vat" in vat_masks:
         vat_compartment_union_mask = vat_masks["vat"]
         measurement_columns["vat_compartment_union_source"] = ["native_vat"] * len(table)

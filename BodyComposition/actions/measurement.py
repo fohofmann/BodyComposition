@@ -320,6 +320,8 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             self.io_inputs.append("tmp/measurement_landmarks")
         if self.analysis_scope == "l3_vertebral_level":
             self.io_inputs.append("tmp/tissue_analysis_region")
+        if self.tissue_backend_id == "boa_body_regions_task542_v1":
+            self.io_inputs.append("tmp/tissue_backend_provenance")
         self.io_outputs = [
             "tmp/measurement_bundle",
             "tmp/slice_measurements",
@@ -369,6 +371,9 @@ class MeasureCanonicalBodyComposition(PipelineAction):
             "analysis_scope": self.analysis_scope,
             "analysis_region": analysis_region_provenance,
         }
+        backend_inference = memory.get("tmp/tissue_backend_provenance")
+        if backend_inference is not None:
+            tissue_preprocessing["backend_inference"] = dict(backend_inference)
         analysis_id = memory.get("analysis_id") or measurement_analysis_id(
             image_zyx,
             tissue_labels.data,

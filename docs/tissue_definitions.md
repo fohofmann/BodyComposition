@@ -105,8 +105,10 @@ vertebral/range aggregates, and `signature.parquet`. The fixed signature grid
 and default core channels remain unchanged, so a study can use the common core
 and add prespecified profile-specific features without redefining it.
 `hu_distributions.parquet` is deliberately independent of these filters: it
-always uses the complete model-native SM, SAT, aVAT, and tVAT compartments and
-the unchanged prepared CT values.
+uses the complete model-native source for each fixed SM, SAT, aVAT, and tVAT
+channel and the unchanged prepared CT values. If the selected backend has no
+homologous native compartment, the corresponding channel remains explicitly
+missing; a broader region is not relabeled merely to fill the histogram.
 
 ## Shipped sensitivity profiles
 

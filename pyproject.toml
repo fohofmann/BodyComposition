@@ -105,6 +105,8 @@ files = [
     "BodyComposition/service.py",
     "BodyComposition/model_manager.py",
     "BodyComposition/cli.py",
+    "BodyComposition/tissue_backends/boa.py",
+    "BodyComposition/tissue_backends/boa_assets.py",
 ]
 
 [[tool.mypy.overrides]]

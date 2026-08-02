@@ -130,6 +130,8 @@ two-component, identity-linked view: `signature.parquet` preserves
 translation-only fixed-millimetre anatomy, physical scale, coverage, and null
 unscanned bins; `hu_distributions.parquet` preserves analyzed-volume native
 compartment attenuation without repeating global bins across longitudinal rows.
+Its four fixed channel slots remain present with reason `missing_compartment`
+when the selected backend has no homologous native source.
 
 Parquet is the authoritative representation. It preserves Arrow field types,
 nullable semantics, embedded table/identity metadata, and strict reader

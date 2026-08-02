@@ -11,8 +11,12 @@ def canonical_actions(pipeline):
         WriteMeasurementReview,
         measurement_support_actions,
     )
-    from BodyComposition.actions.segm_int import SegmIntBodyComposition
+    from BodyComposition.actions.segm_int import (
+        SegmBoaBodyRegions,
+        SegmIntBodyComposition,
+    )
     from BodyComposition.actions.vertebral import vertebral_backend_actions
+    from BodyComposition.tissue_backends.boa import BOA_BACKEND_ID
 
     if not pipeline.config["orientation"]["enabled"]:
         raise ValueError(
@@ -24,10 +28,8 @@ def canonical_actions(pipeline):
         "bodycomposition_resenc_l_v1": "ResEncL",
         "bodycomposition_resenc_m_v1": "ResEncM",
     }
-    try:
-        tissue_model = tissue_models[tissue_backend]
-    except KeyError as error:
-        raise ValueError(f"Unknown tissue backend {tissue_backend!r}.") from error
+    if tissue_backend not in {*tissue_models, BOA_BACKEND_ID}:
+        raise ValueError(f"Unknown tissue backend {tissue_backend!r}.")
     vertebral_actions, vertebral_body_source = vertebral_backend_actions(pipeline)
     compartment_mask = "masks/tissue_compartments.nii.gz"
     analysis_scope = pipeline.config["analysis"]["scope"]
@@ -53,16 +55,26 @@ def canonical_actions(pipeline):
         pipeline,
         compartment_mask=compartment_mask,
     )
+    tissue_action = (
+        SegmBoaBodyRegions(
+            pipeline,
+            image=tissue_input,
+            analysis_region=tissue_region,
+            restore_reference=restore_reference,
+        )
+        if tissue_backend == BOA_BACKEND_ID
+        else SegmIntBodyComposition(
+            pipeline,
+            image=tissue_input,
+            model=tissue_models[tissue_backend],
+            analysis_region=tissue_region,
+            restore_reference=restore_reference,
+        )
+    )
     actions = [
         *vertebral_actions,
         *region_actions,
-        SegmIntBodyComposition(
-            pipeline,
-            image=tissue_input,
-            model=tissue_model,
-            analysis_region=tissue_region,
-            restore_reference=restore_reference,
-        ),
+        tissue_action,
         MasksInternalTissue(pipeline, image="tmp/index"),
         *measurement_actions,
         MeasureCanonicalBodyComposition(

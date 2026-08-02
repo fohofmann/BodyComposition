@@ -125,7 +125,14 @@ def _run_explicit_vibeseg(
     *,
     cache_model: bool = True,
 ) -> dict[str, str] | None:
+    import TPTBox.segmentation.nnUnet_utils.inference_api as inference_api
     from TPTBox.segmentation.VibeSeg.inference_nnunet import run_inference_on_file
+
+    # InternalPipeline initializes PyTorch's process-global inter-op pool before
+    # any model work. The pinned TPTBox loader tracks the same one-time state in
+    # this module flag; keeping it synchronized avoids a redundant initialization
+    # attempt after CTDeepRot has already used PyTorch.
+    inference_api._interop = True
 
     with _tptbox_vibeseg_runtime_guard(device) as runtime_adapter:
         run_inference_on_file(

@@ -24,8 +24,10 @@ and three-bin summary contract as other supported levels.
 
 ## Native compartments
 
-`masks/tissue_compartments.nii.gz` is the untouched model-predicted anatomical
-compartment map. It contains native labels 1–7 only:
+`masks/tissue_compartments.nii.gz` is the selected backend's native-schema
+anatomical compartment or region map after its declared geometry and QC
+boundary. With the default BodyCompositionCT ResEncL model it contains labels
+1–7:
 
 | Label | Name |
 | ---: | --- |
@@ -43,6 +45,27 @@ compartment and may include macroscopic fat-attenuation regions.
 Native aVAT and tVAT remain separate. `vat_compartment_union` is a derived union in the
 tables and does not overwrite either source label.
 
+The optional BOA Task 542 backend preserves its different upstream schema:
+
+| Label | BOA native name |
+| ---: | --- |
+| 1 | SUBCUTANEOUS_TISSUE |
+| 2 | MUSCLE |
+| 3 | ABDOMINAL_CAVITY |
+| 4 | THORACIC_CAVITY |
+| 5 | BONE |
+| 6 | GLANDS |
+| 7 | PERICARDIUM |
+| 8 | BREAST_IMPLANT |
+| 9 | MEDIASTINUM |
+| 10 | BRAIN |
+| 11 | NERVOUS_SYSTEM |
+
+An abdominal or thoracic cavity is not relabeled as a native aVAT or tVAT
+compartment. Consequently BOA's native aVAT/tVAT HU-distribution channels are
+missing by design. The raw mask and its complete label schema remain available
+for backend-specific analyses.
+
 `masks/tissue_labels.nii.gz` is the default HU-filtered tissue mask. It uses
 labels 1, 3, 4, and 5 only: the conventional -29-to-150 HU part of the SM
 compartment and the -190-to--30 HU parts of the SAT, aVAT, and tVAT
@@ -50,6 +73,12 @@ compartments. Native bone, heart, and lung remain available only in
 `tissue_compartments.nii.gz`. The tissue mask never introduces label 8.
 Optional tissue definitions add named table/signature measurements but do not
 change this stable default artifact.
+
+For BOA, the same fixed tissue artifact is derived from BOA's native regions:
+SM from MUSCLE, SAT from SUBCUTANEOUS_TISSUE, aVAT from ABDOMINAL_CAVITY, and
+tVAT from THORACIC_CAVITY plus MEDIASTINUM, followed by the named HU windows.
+The tVAT source union is a versioned BodyComposition adapter definition, not a
+native BOA label or an upstream BOA tissue definition.
 
 Canonical derived tissue classes are nevertheless calculated from the raw
 compartment map and untouched prepared CT so excluded voxels remain auditable.

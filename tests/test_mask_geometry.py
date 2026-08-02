@@ -53,7 +53,7 @@ def test_consensus_materialization_rejects_non_native_label(
         labels,
     )
 
-    with pytest.raises(ValueError, match="outside the 0-7 contract: \\[8\\]"):
+    with pytest.raises(ValueError, match="outside the configured schema: \\[8\\]"):
         action(
             {
                 "id": "case",

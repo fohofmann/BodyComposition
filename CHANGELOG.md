@@ -21,6 +21,10 @@ This is a deliberate breaking release candidate.
   and verified later CSV conversion from an existing result bundle;
 - an explicit L3-only low-resource preset using the ResEncM models without
   resizing the in-plane field of view;
+- an optional, externally synchronized BOA Task 542 tissue backend using the
+  original Apache-2.0 model release, pinned nnU-Net inference, upstream-
+  compatible 5-mm thickness staging, native labels, and explicit missing
+  channels where BOA has no homologous compartment;
 - optional one-page scientific case reports with aligned sagittal spine,
   tissue-area profile, native-compartment HU distributions, measurement table,
   axial overlay, and ordered run/export collation;
@@ -73,8 +77,8 @@ This is a deliberate breaking release candidate.
 
 ### Removed
 
-- named pipeline registry and legacy Stanford/BOA/TotalSegmentator pipeline
-  variants;
+- named pipeline registry and the legacy Stanford/BOA/TotalSegmentator
+  multi-stage pipeline variants;
 - working-directory global and named-pipeline YAML configuration;
 - old command collection, bulk DICOM-conversion helper, mutable-memory Python
   API, and standalone measurement/report commands;

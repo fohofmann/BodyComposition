@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import nibabel as nib
@@ -14,9 +15,17 @@ import pytest
 import requests
 import SimpleITK as sitk
 
-from BodyComposition.config import PipelineConfig
+from BodyComposition.config import PipelineConfig, low_resource_config
 from BodyComposition.model_manager import required_model_ids, verify_models
 from BodyComposition.service import inspect_result
+from BodyComposition.tissue_backends.boa import (
+    BOA_BACKEND_ID,
+    BOA_NATIVE_COMPARTMENT_LABELS,
+)
+from BodyComposition.vertebral.spineps_manifest import (
+    SACRUM_BODY_SEMANTIC_LABEL,
+    VERTEBRA_CORPUS_SEMANTIC_LABEL,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPOSITORY_ROOT / "tests/fixtures/public_ct/ct_org_volume_0.json"
@@ -191,6 +200,26 @@ def _snapshot(paths: list[Path], root: Path) -> dict:
     }
 
 
+def _json_strings(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _json_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _json_strings(item)
+
+
+def _contains_local_path(payload: dict[str, object], path: Path) -> bool:
+    reference = str(path)
+    child_prefix = f"{reference.rstrip(os.sep)}{os.sep}"
+    return any(
+        value == reference or value.startswith(child_prefix)
+        for value in _json_strings(payload)
+    )
+
+
 def _same_geometry(left: sitk.Image, right: sitk.Image) -> bool:
     return (
         left.GetSize() == right.GetSize()
@@ -198,6 +227,20 @@ def _same_geometry(left: sitk.Image, right: sitk.Image) -> bool:
         and np.allclose(left.GetOrigin(), right.GetOrigin())
         and np.allclose(left.GetDirection(), right.GetDirection())
     )
+
+
+def _expected_vertebral_body_labels(
+    semantic: np.ndarray,
+    whole: np.ndarray,
+) -> np.ndarray:
+    expected = np.zeros_like(whole)
+    body_region = (
+        (semantic == VERTEBRA_CORPUS_SEMANTIC_LABEL) & (whole != 26)
+    ) | (
+        (semantic == SACRUM_BODY_SEMANTIC_LABEL) & (whole == 26)
+    )
+    expected[body_region] = whole[body_region]
+    return expected
 
 
 def test_public_ct_manifest_is_complete_and_keeps_scan_outside_package():
@@ -286,7 +329,7 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     body = sitk.GetArrayFromImage(images["body"])
     semantic = sitk.GetArrayFromImage(images["semantic"])
     whole = sitk.GetArrayFromImage(images["whole"])
-    assert np.array_equal(body, np.where(semantic == 49, whole, 0))
+    assert np.array_equal(body, _expected_vertebral_body_labels(semantic, whole))
     assert np.count_nonzero(body) <= np.count_nonzero(whole)
 
     slices = pd.read_parquet(bundle / "tables/slices.parquet")
@@ -332,8 +375,13 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     inspected = inspect_result(bundle)
     assert inspected.analysis_id == first["analysis_id"]
     manifest_text = inspected.manifest_path.read_text(encoding="utf-8")
-    assert str(public_ct) not in manifest_text
-    assert str(config.model_root) not in manifest_text
+    manifest_payload = json.loads(manifest_text)
+    assert not _contains_local_path(manifest_payload, public_ct)
+    assert not _contains_local_path(manifest_payload, config.model_root)
+    assert (
+        manifest_payload["provenance"]["configuration"]["models"]["root"]
+        == "<mounted-model-cache>"
+    )
     stage_events = [
         json.loads(line)
         for line in (bundle / "logs/stages.jsonl").read_text(encoding="utf-8").splitlines()
@@ -360,5 +408,313 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     }
     (tmp_path / "real_world_test_report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.model_integration
+@pytest.mark.real_world
+def test_low_resource_pipeline_on_pinned_public_ct(tmp_path):
+    if os.environ.get(RUN_ENVIRONMENT_VARIABLE) != "1":
+        pytest.skip(f"set {RUN_ENVIRONMENT_VARIABLE}=1 to run the public CT test")
+
+    manifest = _load_manifest()
+    public_ct = _public_ct_path(manifest)
+    config = low_resource_config(
+        {
+            "models": {"root": os.environ["BODYCOMPOSITION_MODEL_ROOT"]},
+            "runtime": {"device": "cuda"},
+        }
+    )
+    reports = verify_models(config)
+    assert tuple(report.model_id for report in reports) == (
+        "ctdeeprot_2d_v1",
+        "vertebral_bodies_resenc_m",
+        "bodycomposition_resenc_m_v1",
+    )
+    assert all(report.ready for report in reports)
+    runtime = _assert_cuda_available()
+
+    output = tmp_path / "output"
+    command = [
+        sys.executable,
+        "-m",
+        "BodyComposition.cli",
+        "analyze",
+        str(public_ct),
+        "--output",
+        str(output),
+        "--case-id",
+        f"{manifest['asset_id']}-low-resource",
+        "--run-id",
+        "public-real-world-low-resource",
+        "--low-resource",
+        "--device",
+        "cuda",
+        "--json",
+    ]
+    first = _run_cli(command)
+    assert first["execution_status"] == "succeeded"
+    bundle = Path(first["output_path"])
+    expected_outputs = (
+        "orientation/orientation_report.json",
+        "masks/vertebral_bodies.nii.gz",
+        "masks/tissue_compartments.nii.gz",
+        "masks/tissue_labels.nii.gz",
+        "masks/body_surface.nii.gz",
+        "tables/slices.parquet",
+        "tables/vertebrae.parquet",
+        "tables/summaries.parquet",
+        "tables/signature.parquet",
+        "tables/hu_distributions.parquet",
+        "qc/qc.json",
+        "case_manifest.json",
+    )
+    output_paths = [bundle / relative for relative in expected_outputs]
+    assert all(path.is_file() for path in output_paths)
+
+    inspected = inspect_result(bundle)
+    manifest_payload = json.loads(inspected.manifest_path.read_text(encoding="utf-8"))
+    configuration = manifest_payload["provenance"]["configuration"]
+    assert configuration["analysis"]["scope"] == "l3_vertebral_level"
+    assert configuration["vertebrae"]["backend"] == "vertebral_bodies_resenc_m"
+    assert configuration["tissue"]["backend"] == "bodycomposition_resenc_m_v1"
+    assert not configuration["measurements"]["landmarks"]["enabled"]
+    assert configuration["runtime"]["unload_models_between_stages"]
+    assert [
+        report["model_id"] for report in manifest_payload["provenance"]["models"]
+    ] == [
+        "ctdeeprot_2d_v1",
+        "vertebral_bodies_resenc_m",
+        "bodycomposition_resenc_m_v1",
+    ]
+    assert not _contains_local_path(manifest_payload, public_ct)
+    assert not _contains_local_path(manifest_payload, config.model_root)
+    assert configuration["models"]["root"] == "<mounted-model-cache>"
+
+    ct_image = sitk.ReadImage(str(public_ct))
+    images = {
+        name: sitk.ReadImage(str(bundle / relative))
+        for name, relative in {
+            "body": "masks/vertebral_bodies.nii.gz",
+            "compartments": "masks/tissue_compartments.nii.gz",
+            "tissues": "masks/tissue_labels.nii.gz",
+            "surface": "masks/body_surface.nii.gz",
+        }.items()
+    }
+    assert all(_same_geometry(ct_image, image) for image in images.values())
+
+    slices = pd.read_parquet(bundle / "tables/slices.parquet")
+    vertebrae = pd.read_parquet(bundle / "tables/vertebrae.parquet")
+    signature = pd.read_parquet(bundle / "tables/signature.parquet")
+    hu_distributions = pd.read_parquet(bundle / "tables/hu_distributions.parquet")
+    available = slices["body_composition_analysis_available"].to_numpy(dtype=bool)
+    assert 0 < int(available.sum()) < len(available) == ct_image.GetSize()[2]
+    for name in ("compartments", "tissues", "surface"):
+        occupied = np.any(sitk.GetArrayFromImage(images[name]) != 0, axis=(1, 2))
+        assert not np.any(occupied & ~available)
+
+    l3 = vertebrae.loc[vertebrae["vertebral_level"].eq("L3")]
+    assert l3["territory_bin"].tolist() == [1, 2, 3]
+    assert l3["bin_valid"].all()
+    assert l3["skeletal_muscle_tissue_hu_m29_150_mean_csa_cm2_valid"].all()
+    outside_l3 = vertebrae.loc[~vertebrae["vertebral_level"].eq("L3")]
+    assert not outside_l3["bin_valid"].any()
+    assert set(outside_l3["bin_missing_reason"].dropna()).issubset(
+        {"outside_analysis_region", "partial_analysis_region"}
+    )
+    assert len(signature) == 100
+    assert signature["bin_width_mm"].eq(20.0).all()
+    assert hu_distributions.groupby("compartment_key").size().to_dict() == {
+        "avat": 68,
+        "sat": 68,
+        "sm": 68,
+        "tvat": 68,
+    }
+    assert hu_distributions["source_semantics"].eq("model_native_compartment").all()
+    for name, table in {
+        "slices": slices,
+        "vertebrae": vertebrae,
+        "signature": signature,
+        "hu_distributions": hu_distributions,
+    }.items():
+        csv_table = pd.read_csv(bundle / f"tables/{name}.csv")
+        assert csv_table.columns.tolist() == table.columns.tolist()
+        assert len(csv_table) == len(table)
+
+    snapshot = _snapshot(output_paths, bundle)
+    second = _run_cli(command)
+    assert second["execution_status"] == "skipped_identical"
+    assert _snapshot(output_paths, bundle) == snapshot
+    (tmp_path / "low_resource_real_world_test_report.json").write_text(
+        json.dumps(
+            {
+                "asset_id": manifest["asset_id"],
+                "input_sha256": manifest["integrity"]["sha256"],
+                "runtime": runtime,
+                "analysis_id": first["analysis_id"],
+                "analyzed_slice_count": int(available.sum()),
+                "acquired_slice_count": len(available),
+                "resume_unchanged": True,
+                "output_snapshot": snapshot,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.model_integration
+@pytest.mark.real_world
+def test_boa_tissue_backend_on_pinned_public_ct(tmp_path):
+    if os.environ.get(RUN_ENVIRONMENT_VARIABLE) != "1":
+        pytest.skip(f"set {RUN_ENVIRONMENT_VARIABLE}=1 to run the public CT test")
+
+    manifest = _load_manifest()
+    public_ct = _public_ct_path(manifest)
+    config = PipelineConfig.model_validate(
+        {
+            "models": {"root": os.environ["BODYCOMPOSITION_MODEL_ROOT"]},
+            "orientation": {"model_device": "cpu"},
+            "vertebrae": {"device": "cuda"},
+            "tissue": {"backend": BOA_BACKEND_ID},
+            "runtime": {
+                "device": "cuda",
+                "timeout_seconds": 2400,
+                "allow_dirty": True,
+            },
+        }
+    )
+    reports = verify_models(config)
+    assert tuple(report.model_id for report in reports) == (
+        "ctdeeprot_2d_v1",
+        "spineps_veridah_ct_v1",
+        BOA_BACKEND_ID,
+        "totalsegmentator_total_task297_landmarks_v1",
+    )
+    assert all(report.ready for report in reports)
+    runtime = _assert_cuda_available()
+
+    output = tmp_path / "output"
+    command = [
+        sys.executable,
+        "-m",
+        "BodyComposition.cli",
+        "analyze",
+        str(public_ct),
+        "--output",
+        str(output),
+        "--case-id",
+        f"{manifest['asset_id']}-boa",
+        "--run-id",
+        "public-real-world-boa",
+        "--tissue-backend",
+        BOA_BACKEND_ID,
+        "--device",
+        "cuda",
+        "--json",
+    ]
+    first = _run_cli(command)
+    assert first["execution_status"] == "succeeded"
+    bundle = Path(first["output_path"])
+    output_paths = [
+        bundle / relative
+        for relative in (
+            "masks/vertebral_bodies.nii.gz",
+            "masks/tissue_compartments.nii.gz",
+            "masks/tissue_labels.nii.gz",
+            "masks/body_surface.nii.gz",
+            "tables/slices.parquet",
+            "tables/vertebrae.parquet",
+            "tables/summaries.parquet",
+            "tables/signature.parquet",
+            "tables/hu_distributions.parquet",
+            "qc/qc.json",
+            "case_manifest.json",
+        )
+    ]
+    assert all(path.is_file() for path in output_paths)
+
+    ct_image = sitk.ReadImage(str(public_ct))
+    images = {
+        name: sitk.ReadImage(str(bundle / relative))
+        for name, relative in {
+            "body": "masks/vertebral_bodies.nii.gz",
+            "compartments": "masks/tissue_compartments.nii.gz",
+            "tissues": "masks/tissue_labels.nii.gz",
+            "surface": "masks/body_surface.nii.gz",
+        }.items()
+    }
+    assert all(_same_geometry(ct_image, image) for image in images.values())
+    native_labels = set(
+        int(value) for value in np.unique(sitk.GetArrayFromImage(images["compartments"]))
+    )
+    tissue_labels = set(
+        int(value) for value in np.unique(sitk.GetArrayFromImage(images["tissues"]))
+    )
+    assert native_labels <= {0, *BOA_NATIVE_COMPARTMENT_LABELS}
+    assert native_labels - {0}
+    assert tissue_labels <= {0, 1, 3, 4, 5}
+    assert {1, 3, 4, 5} <= tissue_labels
+
+    slices = pd.read_parquet(bundle / "tables/slices.parquet")
+    distributions = pd.read_parquet(bundle / "tables/hu_distributions.parquet")
+    assert len(slices) == ct_image.GetSize()[2]
+    for prefix in (
+        "skeletal_muscle_tissue_hu_m29_150",
+        "sat_tissue_hu_m190_m30",
+        "avat_tissue_hu_m190_m30",
+        "tvat_tissue_hu_m190_m30",
+    ):
+        assert slices[f"{prefix}_voxel_count"].sum() > 0
+    source_ids = (
+        distributions.groupby("compartment_key", sort=False)["source_label_ids"]
+        .first()
+        .to_dict()
+    )
+    assert source_ids == {"sm": "2", "sat": "1", "avat": "", "tvat": ""}
+
+    qc = json.loads((bundle / "qc/qc.json").read_text(encoding="utf-8"))
+    inference = qc["provenance"]["body_composition"]["compartments"][
+        "inference_context"
+    ]["backend_inference"]
+    assert inference["backend_id"] == BOA_BACKEND_ID
+    assert inference["input_profile_id"] == "boa_v1.0.2_ras_5mm_thickness_v1"
+    assert inference["prepared_domain_preserved"] is True
+    assert inference["thickness_resampled"] is False
+
+    inspected = inspect_result(bundle)
+    manifest_payload = json.loads(inspected.manifest_path.read_text(encoding="utf-8"))
+    assert [
+        report["model_id"] for report in manifest_payload["provenance"]["models"]
+    ] == [
+        "ctdeeprot_2d_v1",
+        "spineps_veridah_ct_v1",
+        BOA_BACKEND_ID,
+        "totalsegmentator_total_task297_landmarks_v1",
+    ]
+    assert not _contains_local_path(manifest_payload, public_ct)
+    assert not _contains_local_path(manifest_payload, config.model_root)
+
+    snapshot = _snapshot(output_paths, bundle)
+    second = _run_cli(command)
+    assert second["execution_status"] == "skipped_identical"
+    assert _snapshot(output_paths, bundle) == snapshot
+    (tmp_path / "boa_real_world_test_report.json").write_text(
+        json.dumps(
+            {
+                "asset_id": manifest["asset_id"],
+                "input_sha256": manifest["integrity"]["sha256"],
+                "runtime": runtime,
+                "analysis_id": first["analysis_id"],
+                "native_labels": sorted(native_labels),
+                "tissue_labels": sorted(tissue_labels),
+                "resume_unchanged": True,
+                "output_snapshot": snapshot,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )

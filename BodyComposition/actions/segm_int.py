@@ -41,9 +41,7 @@ class _SegmInternal(PipelineAction):
         self.analysis_region_name = analysis_region
         self.restore_reference_name = restore_reference
         if (analysis_region is None) != (restore_reference is None):
-            raise ValueError(
-                "analysis_region and restore_reference must be configured together."
-            )
+            raise ValueError("analysis_region and restore_reference must be configured together.")
         if analysis_region is not None:
             self.io_inputs.extend((analysis_region, restore_reference))
 
@@ -62,8 +60,7 @@ class _SegmInternal(PipelineAction):
                 raise ValueError(f"Unknown internal model preset: {model}.")
             preset_directory, self.model_folds = model_settings[model]
             self.model_path = (
-                Path(self.config["paths"]["weights"][self.weight_key])
-                / preset_directory
+                Path(self.config["paths"]["weights"][self.weight_key]) / preset_directory
             )
         else:
             if model_folds is None:
@@ -86,9 +83,7 @@ class _SegmInternal(PipelineAction):
                 tile_step_size=0.5,
                 use_gaussian=True,
                 use_mirroring=False,
-                perform_everything_on_device=(
-                    getattr(self.device, "type", self.device) == "cuda"
-                ),
+                perform_everything_on_device=(getattr(self.device, "type", self.device) == "cuda"),
                 device=self.device,
                 verbose=True,
                 verbose_preprocessing=True,
@@ -140,6 +135,9 @@ class _SegmInternal(PipelineAction):
             torch.backends.cudnn.enabled = False
             return self._predict_once(predictor, input_image, spacing_zyx)
 
+    def _prepare_prediction(self, prediction: np.ndarray) -> np.ndarray:
+        return prediction
+
     def __call__(self, memory):
         super().__call__(memory)
         time_start = time()
@@ -162,6 +160,7 @@ class _SegmInternal(PipelineAction):
         stream = LoggingWriter(logging.DEBUG)
         with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
             prediction = self._predict(predictor, input_image, spacing_zyx)
+            prediction = self._prepare_prediction(prediction)
             log_gpu_usage(self.device)
         if self.analysis_region_name is None:
             output_label.meta = input_image.meta
@@ -200,6 +199,7 @@ class SegmIntVertebrae(_SegmInternal):
     output_label_name = "masks/vertebral_bodies.nii.gz"
     weight_key = "int-vertebrae"
     model_title = "VertebralBodiesCT"
+
     def __init__(self, pipeline, image: str, model: str = "ResEncM"):
         super().__init__(pipeline, image=image, model=model)
         self.io_outputs.append("tmp/vertebral_result")
@@ -243,3 +243,71 @@ class SegmIntBodyComposition(_SegmInternal):
     output_label_name = "masks/tissue_compartments.nii.gz"
     weight_key = "int-bodycomposition"
     model_title = "BodyCompositionCT"
+
+
+class SegmBoaBodyRegions(_SegmInternal):
+    """Run BOA Task 542 and retain its postprocessed anatomical compartments."""
+
+    output_label_name = "masks/tissue_compartments.nii.gz"
+    weight_key = "boa-body-regions"
+    model_title = "BOA-BodyRegions"
+
+    def __init__(
+        self,
+        pipeline,
+        image: str,
+        *,
+        analysis_region: str | None = None,
+        restore_reference: str | None = None,
+    ):
+        from BodyComposition.tissue_backends.boa_assets import boa_model_directory
+
+        model_root = pipeline.config["paths"]["weights"][self.weight_key]
+        super().__init__(
+            pipeline,
+            image=image,
+            model="Task542",
+            model_directory=boa_model_directory(model_root),
+            model_folds=[0, 1, 2, 3, 4],
+            analysis_region=analysis_region,
+            restore_reference=restore_reference,
+        )
+        self.io_outputs.append("tmp/tissue_backend_provenance")
+
+    def _get_predictor(self):
+        from BodyComposition.tissue_backends.boa_assets import require_boa_model
+
+        require_boa_model(self.config["paths"]["weights"][self.weight_key])
+        return super()._get_predictor()
+
+    def _predict(self, predictor, input_image, spacing_zyx):
+        from types import SimpleNamespace
+
+        from BodyComposition.tissue_backends.boa import (
+            prepare_boa_inference,
+            restore_boa_prediction,
+        )
+
+        model_input, context = prepare_boa_inference(input_image.img)
+        prepared = SimpleNamespace(data=model_input)
+        prediction = super()._predict(
+            predictor,
+            prepared,
+            context.model_spacing_zyx,
+        )
+        self.inference_provenance = context.provenance()
+        return restore_boa_prediction(prediction, context)
+
+    def _prepare_prediction(self, prediction: np.ndarray) -> np.ndarray:
+        from BodyComposition.tissue_backends.boa import postprocess_boa_body_regions
+
+        return postprocess_boa_body_regions(prediction)
+
+    def __call__(self, memory):
+        self.inference_provenance = {}
+        super().__call__(memory)
+        memory["tmp/tissue_backend_provenance"] = {
+            "backend_id": "boa_body_regions_task542_v1",
+            "native_postprocessing": "boa_v1.0.2_body_regions_components_v1",
+            **self.inference_provenance,
+        }

@@ -94,8 +94,8 @@ def test_runtime_configuration_checks_cross_field_constraints(base_config):
         validate_config(unexpected_filter_label)
 
     renamed_compartment = deepcopy(base_config)
-    renamed_compartment["LBL_TISSUE_COMPARTMENTS"][1] = "muscle"
-    with pytest.raises(ConfigError, match="retain their compartment names"):
+    renamed_compartment["LBL_TISSUE_COMPARTMENTS"][1] = "unrelated"
+    with pytest.raises(ConfigError, match="resolve to configured model-native compartments"):
         validate_config(renamed_compartment)
 
 

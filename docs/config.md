@@ -50,7 +50,7 @@ the authoritative reference.
 | `analysis.scope` | tissue-analysis extent | `full_ct`, `l3_vertebral_level` |
 | `orientation` | anatomy-based integrity check and safe lossless repair | `ctdeeprot_2d_v1`, policy `check_and_safe_repair` |
 | `vertebrae.backend` | vertebral-body segmentation and native labeling | `spineps_veridah_ct_v1`, `vertebral_bodies_resenc_l`, `vertebral_bodies_resenc_m` |
-| `tissue.backend` | anatomical body-composition compartments | `bodycomposition_resenc_l_v1`, `bodycomposition_resenc_m_v1` |
+| `tissue.backend` | anatomical body-composition compartments | `bodycomposition_resenc_l_v1`, `bodycomposition_resenc_m_v1`, `boa_body_regions_task542_v1` |
 | `body_surface.backend` | measurement support for trunk/body envelope | `tissue_segmentation_envelope_v1`, `totalsegmentator_body_task299_v1`, `deterministic_body_mask_v1` |
 | `measurements` | HU-filtered tissue definitions, physical territories, fixed-mm and native-compartment HU signature components, landmarks, QC | canonical schema 3.4 |
 | `reporting` | derived one-page PDF | disabled by default; enabled default `spine_profile_v2`; optional `spine_overview_v1` |
@@ -64,6 +64,12 @@ explicitly. SPINEPS/VERIDAH and the overall runtime accept `auto`, `cpu`, or
 `cuda`. `auto` selects an externally visible CUDA device and otherwise CPU.
 Apple MPS is not a released scientific-inference target because the complete
 pinned model stack has not passed a controlled MPS validation gate.
+
+The standard configuration remains SPINEPS/VERIDAH plus
+`bodycomposition_resenc_l_v1`. `--low-resource` is a fixed L3-only preset that
+uses the ResEncM vertebral-body and tissue models; it cannot be combined with
+another tissue backend. BOA is an explicit alternative for full-CT tissue
+segmentation and never activates implicitly or as a fallback.
 
 ### Optional tissue definitions
 

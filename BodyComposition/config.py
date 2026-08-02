@@ -21,6 +21,11 @@ from typing import Any
 
 import yaml
 
+from BodyComposition.tissue_backends.boa import (
+    BOA_BACKEND_ID,
+    BOA_NATIVE_COMPARTMENT_LABELS,
+)
+
 CONFIG_SCHEMA_VERSION = "1.0.0"
 
 VERTEBRAL_LABELS = {
@@ -56,6 +61,12 @@ TISSUE_COMPARTMENT_LABELS = {
     6: "HEART",
     7: "LUNG",
 }
+
+TISSUE_BACKEND_IDS = (
+    "bodycomposition_resenc_l_v1",
+    "bodycomposition_resenc_m_v1",
+    BOA_BACKEND_ID,
+)
 
 # ``tissue_labels`` contains only the default HU-filtered body-composition
 # tissues. Native bone, heart, and lung predictions remain available in the
@@ -281,10 +292,7 @@ def _validate_public(data: Mapping[str, Any]) -> None:
         raise ConfigError("Unknown vertebrae.backend.")
     if data["vertebrae"]["device"] not in {"auto", "cpu", "cuda"}:
         raise ConfigError("vertebrae.device must be auto, cpu, or cuda.")
-    if data["tissue"]["backend"] not in {
-        "bodycomposition_resenc_l_v1",
-        "bodycomposition_resenc_m_v1",
-    }:
+    if data["tissue"]["backend"] not in TISSUE_BACKEND_IDS:
         raise ConfigError("Unknown tissue.backend.")
     if data["body_surface"]["backend"] not in {
         "tissue_segmentation_envelope_v1",
@@ -562,6 +570,7 @@ class PipelineConfig:
                     "int-vertebrae": root / "Dataset601_VertebralBodies",
                     "spineps": root / "SPINEPS" / "spineps-veridah-ct-v1",
                     "int-bodycomposition": root / "Dataset611_BodyComposition",
+                    "boa-body-regions": root,
                     "totalsegmentator": root,
                 },
                 "cache": root / ".cache",
@@ -579,7 +588,11 @@ class PipelineConfig:
             "tissue": tissue,
             "measurements": measurements,
             "reporting": copy.deepcopy(value["reporting"]),
-            "LBL_TISSUE_COMPARTMENTS": copy.deepcopy(TISSUE_COMPARTMENT_LABELS),
+            "LBL_TISSUE_COMPARTMENTS": copy.deepcopy(
+                BOA_NATIVE_COMPARTMENT_LABELS
+                if value["tissue"]["backend"] == BOA_BACKEND_ID
+                else TISSUE_COMPARTMENT_LABELS
+            ),
             "LBL_TISSUE": copy.deepcopy(TISSUE_LABELS),
             "LBL_VERTEBRALBODIES": copy.deepcopy(VERTEBRAL_LABELS),
         }
@@ -660,10 +673,9 @@ def configuration_schema() -> dict[str, Any]:
         "vertebral_bodies_resenc_m",
     ]
     properties["vertebrae"]["properties"]["device"]["enum"] = ["auto", "cpu", "cuda"]
-    properties["tissue"]["properties"]["backend"]["enum"] = [
-        "bodycomposition_resenc_l_v1",
-        "bodycomposition_resenc_m_v1",
-    ]
+    properties["tissue"]["properties"]["backend"]["enum"] = list(
+        TISSUE_BACKEND_IDS
+    )
     properties["body_surface"]["properties"]["backend"]["enum"] = [
         "tissue_segmentation_envelope_v1",
         "totalsegmentator_body_task299_v1",

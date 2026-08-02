@@ -14,8 +14,10 @@ from BodyComposition.tissue import cleanup_tissue_mask, prepare_classification_i
 COMPARTMENT_NAME_ALIASES = {
     "sm": "sm",
     "skeletalmuscle": "sm",
+    "muscle": "sm",
     "bone": "bone",
     "sat": "sat",
+    "subcutaneoustissue": "sat",
     "avat": "avat",
     "tvat": "tvat",
     "vat": "vat",
@@ -27,6 +29,22 @@ COMPARTMENT_NAME_ALIASES = {
     "ipat": "ipat",
     "rpat": "rpat",
 }
+
+TISSUE_SOURCE_NAME_ALIASES = {
+    "abdominalcavity": "avat",
+    "thoraciccavity": "tvat",
+    "mediastinum": "tvat",
+}
+
+CORE_COMPARTMENT_NAMES = (
+    "sm",
+    "bone",
+    "sat",
+    "avat",
+    "tvat",
+    "heart",
+    "lung",
+)
 
 
 DERIVED_RATIO_DEFINITIONS = (
@@ -53,12 +71,8 @@ def _classification_settings(
             list(clip_range) if clip_range is not None else [-1024.0, 3071.0]
         ),
         "filter_median_kernel": list(settings.get("kernel_zyx", [1, 3, 3])),
-        "adaptive_median_min_kernel": list(
-            settings.get("minimum_kernel_zyx", [1, 3, 3])
-        ),
-        "adaptive_median_max_kernel": list(
-            settings.get("maximum_kernel_zyx", [1, 7, 7])
-        ),
+        "adaptive_median_min_kernel": list(settings.get("minimum_kernel_zyx", [1, 3, 3])),
+        "adaptive_median_max_kernel": list(settings.get("maximum_kernel_zyx", [1, 7, 7])),
         "anisotropic_diffusion": dict(
             settings.get(
                 "anisotropic_diffusion",
@@ -120,6 +134,13 @@ def canonical_compartment_name(name: str) -> str:
     return COMPARTMENT_NAME_ALIASES.get(normalized, normalized)
 
 
+def tissue_source_compartment_name(name: str) -> str:
+    """Resolve native regions that may support an HU-defined tissue mask."""
+
+    canonical = canonical_compartment_name(name)
+    return TISSUE_SOURCE_NAME_ALIASES.get(canonical, canonical)
+
+
 def iter_configured_tissue_masks(
     image_zyx: np.ndarray,
     compartment_labels_zyx: np.ndarray,
@@ -138,23 +159,15 @@ def iter_configured_tissue_masks(
     image = np.asarray(image_zyx)
     labels = np.asarray(compartment_labels_zyx)
     if image.shape != labels.shape or image.ndim != 3:
-        raise ValueError(
-            "image_zyx and compartment_labels_zyx must be aligned 3D arrays."
-        )
+        raise ValueError("image_zyx and compartment_labels_zyx must be aligned 3D arrays.")
     if not np.issubdtype(labels.dtype, np.integer):
         raise TypeError("Compartment labels must be integer-valued.")
 
     labels_by_name: dict[str, list[int]] = {}
     for native_label, name in compartment_label_schema.items():
-        if (
-            isinstance(native_label, bool)
-            or not isinstance(native_label, int)
-            or native_label <= 0
-        ):
+        if isinstance(native_label, bool) or not isinstance(native_label, int) or native_label <= 0:
             raise ValueError("Compartment label identifiers must be positive integers.")
-        labels_by_name.setdefault(canonical_compartment_name(name), []).append(
-            native_label
-        )
+        labels_by_name.setdefault(tissue_source_compartment_name(name), []).append(native_label)
 
     unknown_labels = sorted(
         int(label)
@@ -163,8 +176,7 @@ def iter_configured_tissue_masks(
     )
     if unknown_labels:
         raise ValueError(
-            "Compartment labels contain values outside the model-native schema: "
-            f"{unknown_labels}."
+            f"Compartment labels contain values outside the model-native schema: {unknown_labels}."
         )
 
     classification_cache: dict[str, np.ndarray] = {}
@@ -172,7 +184,7 @@ def iter_configured_tissue_masks(
         if not bool(definition["enabled"]):
             continue
         source_names = [
-            canonical_compartment_name(name) for name in definition["source_labels"]
+            tissue_source_compartment_name(name) for name in definition["source_labels"]
         ]
         source_labels = [
             native_label
@@ -197,10 +209,7 @@ def iter_configured_tissue_masks(
             )
             if cache_key not in classification_cache:
                 settings = _classification_settings(preprocessing)
-                if (
-                    settings["method"] == "curvature_anisotropic_diffusion"
-                    and spacing_xyz is None
-                ):
+                if settings["method"] == "curvature_anisotropic_diffusion" and spacing_xyz is None:
                     raise ValueError(
                         "spacing_xyz is required for anisotropic-diffusion "
                         f"definition {definition_name!r}."
@@ -216,8 +225,7 @@ def iter_configured_tissue_masks(
         if cleanup:
             if spacing_xyz is None:
                 raise ValueError(
-                    f"spacing_xyz is required for cleanup definition "
-                    f"{definition_name!r}."
+                    f"spacing_xyz is required for cleanup definition {definition_name!r}."
                 )
             cleanup_tissue_mask(
                 mask,

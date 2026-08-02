@@ -3,8 +3,9 @@
 The canonical pipeline writes one outcome-blind measurement bundle per case.
 Schema `3.4.0` preserves every acquired slice, compact native vertebral
 summaries, established case summaries, and a comparable fixed-millimetre
-longitudinal signature. Its second, identity-linked component stores fixed-bin
-analyzed-volume HU distributions for four native compartments. No
+longitudinal signature. Its second, identity-linked component stores four
+fixed native-compartment HU-distribution channels, with explicit missingness
+when a selected backend has no homologous compartment. No
 longitudinal curve is stretched and no unscanned anatomy is imputed.
 
 ## Authoritative files
@@ -17,7 +18,7 @@ longitudinal curve is stretched and no unscanned anatomy is imputed.
   vertebral-reference coordinate;
 - `tables/hu_distributions.parquet`: fixed 5-HU voxel histograms plus exact
   mean, standard deviation, median, and quartiles for SM, SAT, aVAT, and tVAT
-  over the analyzed volume; and
+  over the analyzed volume when the native source is available; and
 - `qc/qc.json`: provenance, validity, QC, and review status.
 
 `slices.parquet` remains the lossless longitudinal measurement source.
@@ -91,6 +92,14 @@ bin closed at 150 HU. Compartment membership comes from the unfiltered
 model-native labels, not the configured HU-restricted tissue definitions.
 Histogram values and exact linear-method quartiles come from the unchanged
 prepared CT voxels.
+
+The four rows remain present for a backend that lacks a homologous native
+compartment. Such rows contain no source label IDs, have
+`distribution_valid=false`, and use reason `missing_compartment`. They are not
+silently populated from a broader anatomical region. In particular, BOA's
+ABDOMINAL_CAVITY and THORACIC_CAVITY are not native aVAT/tVAT compartments;
+BOA can still produce separately named HU-filtered tissue measurements from
+those regions.
 
 The scope is always recorded as `analyzed_volume`, with the analyzed physical
 inferior and superior voxel-cell bounds and the number of contributing slices.

@@ -74,10 +74,11 @@ counts. A sacral maximum measured from a boundary-cropped but closed,
 nonfragmented trunk contour remains numeric and propagates to the ratios, but
 is marked FOV-cropped and ineligible as an exact anthropometric value.
 Routine cranial or caudal vertebral contact is retained as informational QC.
-It does not by itself request manual review, and observed measurements from a
-valid truncated vertebral territory remain available with explicit incomplete
-coverage. Material fragmentation above the configured 5% largest-component
-limit remains a warning.
+This includes L3 contact. It does not by itself request manual review or make
+scientific QC fail, and observed measurements from a valid truncated vertebral
+territory remain available with explicit incomplete coverage. Material
+fragmentation above the configured 5% largest-component limit remains a
+warning.
 
 ## Adjudication
 

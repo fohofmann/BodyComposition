@@ -36,6 +36,8 @@ class MasksInternalTissue(PipelineAction):
 
         self.LBL_COMPARTMENT = pipeline.config["LBL_TISSUE_COMPARTMENTS"]
         self.LBL_COMPARTMENT_R = {v: k for k, v in self.LBL_COMPARTMENT.items()}
+        self.LBL_TISSUE = pipeline.config["LBL_TISSUE"]
+        self.LBL_TISSUE_R = {v: k for k, v in self.LBL_TISSUE.items()}
 
     def __call__(self, memory):
         """Create the consensus label view for one case."""
@@ -84,7 +86,7 @@ class MasksInternalTissue(PipelineAction):
         if unknown_labels:
             raise ValueError(
                 "Model-native compartments contain labels outside the "
-                f"0-7 contract: {unknown_labels}."
+                f"configured schema: {unknown_labels}."
             )
         if self.config_tissue["save_compartment_mask"] and not input_label_tissue.path.exists():
             input_label_tissue.save_to_file()
@@ -118,13 +120,13 @@ class MasksInternalTissue(PipelineAction):
         raw = input_label_tissue.data
         output_np = np.zeros_like(raw, dtype=np.uint8)
         consensus_by_label = {
-            self.LBL_COMPARTMENT_R["SM"]: derived["skeletal_muscle_tissue_hu_m29_150"],
-            self.LBL_COMPARTMENT_R["SAT"]: derived["sat_tissue_hu_m190_m30"],
-            self.LBL_COMPARTMENT_R["aVAT"]: derived["avat_tissue_hu_m190_m30"],
-            self.LBL_COMPARTMENT_R["tVAT"]: derived["tvat_tissue_hu_m190_m30"],
+            self.LBL_TISSUE_R["SM"]: derived["skeletal_muscle_tissue_hu_m29_150"],
+            self.LBL_TISSUE_R["SAT"]: derived["sat_tissue_hu_m190_m30"],
+            self.LBL_TISSUE_R["aVAT"]: derived["avat_tissue_hu_m190_m30"],
+            self.LBL_TISSUE_R["tVAT"]: derived["tvat_tissue_hu_m190_m30"],
         }
         for label, consensus_mask in consensus_by_label.items():
-            output_np[(raw == label) & consensus_mask] = label
+            output_np[consensus_mask] = label
         output_mask.meta = input_label_tissue.meta
 
         output_mask.data = output_np

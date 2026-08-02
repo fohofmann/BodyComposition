@@ -196,11 +196,12 @@ def test_material_disconnected_fraction_requests_review_with_evidence():
     }
 
 
-def test_vertebral_scan_boundary_is_informational_unless_l3_is_truncated():
+@pytest.mark.parametrize("native_label", [21, 22])
+def test_vertebral_scan_boundary_is_informational_including_l3(native_label):
     shape = (8, 10, 10)
     geometry = _geometry(shape)
     vertebra = np.zeros(shape, dtype=np.uint8)
-    vertebra[0:2, 1:9, 1:9] = 21
+    vertebra[0:2, 1:9, 1:9] = native_label
     semantic = np.where(vertebra != 0, 49, 0).astype(np.uint8)
 
     result = adapt_spineps_outputs(semantic, vertebra, geometry)
@@ -211,6 +212,17 @@ def test_vertebral_scan_boundary_is_informational_unless_l3_is_truncated():
     )
 
     assert boundary.severity == QCSeverity.INFO
+    if native_label == 22:
+        l3_boundary = next(
+            flag
+            for flag in result.qc_flags
+            if flag.code == "l3_touches_fov_boundary"
+        )
+        assert l3_boundary.severity == QCSeverity.INFO
+        assert "measurements from the observed territory remain available" in (
+            l3_boundary.reason
+        )
+    assert result.execution_status == ExecutionStatus.SUCCEEDED
     assert result.qc_status == QCStatus.PASS
 
 

@@ -119,10 +119,35 @@ restored to the prepared CT grid. This mode is intended for L3 phenotyping,
 not full longitudinal signatures or waist/pelvic measures. See
 [Low-resource L3 analysis](docs/low-resource.md).
 
-In one containerized NVIDIA GB10 validation on the same public
-512-by-512-by-75 CT, the standard pipeline took 220 seconds and the
-low-resource pipeline 53 seconds. This approximately 4.2-fold difference is
-illustrative; runtime varies with CT coverage and hardware.
+An optional BOA Task 542 tissue backend can be synchronized from its original
+release and selected explicitly. This does not change the default pipeline:
+
+```bash
+uv run bodycomposition models sync --model boa_body_regions_task542_v1
+uv run bodycomposition analyze ./input/case-001.nii.gz \
+  --tissue-backend boa_body_regions_task542_v1
+```
+
+The BOA weights remain in the external model directory and are never copied
+into the package or container. Its native body-region labels and derived
+body-composition tissues have distinct documented semantics; see
+[Model setup and licensing](docs/models.md) and [Canonical labels](docs/labels.md).
+
+## Observed performance
+
+On an NVIDIA GB10 running one containerized GPU worker, the validated default
+pipeline processed a heterogeneous 100-case cohort in 10 hours and 1 minute:
+360.3 seconds per case on average, 327.2 seconds median, and 9.98 cases per
+hour. Observed peak host memory was 34.0 GiB and reported GPU-process memory was
+16.0 GiB, without material growth over the run. A same-scan comparison on one
+public 512-by-512-by-75 CT took 220.1 seconds with the default workflow and
+52.5 seconds with `--low-resource`.
+
+These are measurements, not minimum RAM or VRAM requirements. Scan coverage,
+hardware, storage, model caching, and analysis scope affect both runtime and
+memory. See [Performance and resource observations](docs/performance.md) for
+the evidence boundary and a benchmark table intended to receive later A100 and
+B200 measurements.
 
 For conversion without analysis, use the same validated reader:
 
@@ -244,7 +269,9 @@ separately. The canonical tables are:
   native-compartment and HU-filtered-tissue CSA/HU channels, vertebral
   anchoring, coverage, and alignment confidence; and
 - `tables/hu_distributions.parquet`: analyzed-volume 5-HU distributions and exact
-  attenuation summaries for native SM, SAT, aVAT, and tVAT compartments.
+  attenuation summaries for the native SM, SAT, aVAT, and tVAT channels that
+  the selected backend actually provides; unsupported native channels remain
+  explicit missing values rather than being inferred from a different region.
 
 Each table is also exported as a same-name `.csv` file by default for direct
 use in spreadsheet software, R, and simple scripts. CSV files have the same
@@ -299,6 +326,7 @@ and controlled hardware. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - [QC and manual review](docs/qc-review.md)
 - [PDF reporting](docs/reporting.md)
 - [Reproducible cohort execution](docs/reproducibility.md)
+- [Performance and resource observations](docs/performance.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Model/data cards and known limitations](docs/known-limitations.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

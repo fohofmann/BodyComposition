@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from BodyComposition.config import PipelineConfig
+from BodyComposition.tissue_backends.boa import BOA_BACKEND_ID
 
 
 class ModelAssetError(RuntimeError):
@@ -130,6 +131,7 @@ MODEL_IDS = (
     "spineps_veridah_ct_v1",
     "bodycomposition_resenc_l_v1",
     "bodycomposition_resenc_m_v1",
+    BOA_BACKEND_ID,
     "vertebral_bodies_resenc_l",
     "vertebral_bodies_resenc_m",
     "totalsegmentator_total_task297_landmarks_v1",
@@ -235,6 +237,10 @@ def model_asset(model_id: str) -> dict[str, Any]:
             },
             "validation_set_version": "spineps-veridah-adapter-validation-v1",
         }
+    if model_id == BOA_BACKEND_ID:
+        from BodyComposition.tissue_backends.boa_assets import model_asset_record
+
+        return model_asset_record()
     if model_id in {
         "totalsegmentator_total_task297_landmarks_v1",
         "totalsegmentator_body_task299_v1",
@@ -363,6 +369,18 @@ def verify_model(model_id: str, root: str | Path) -> ModelStatus:
             tuple(model_errors),
             checked,
             asset,
+        )
+    if model_id == BOA_BACKEND_ID:
+        from BodyComposition.tissue_backends.boa_assets import check_boa_model
+
+        report = check_boa_model(model_root)
+        return ModelStatus(
+            model_id,
+            report.ready,
+            report.model_directory,
+            tuple(report.errors),
+            dict(report.checked_files),
+            model_asset(model_id),
         )
     if model_id in {
         "totalsegmentator_total_task297_landmarks_v1",
@@ -509,6 +527,10 @@ def sync_model(model_id: str, root: str | Path) -> ModelStatus:
             from BodyComposition.vertebral.spineps_assets import sync_models
 
             sync_models(model_root / "SPINEPS" / "spineps-veridah-ct-v1")
+        elif model_id == BOA_BACKEND_ID:
+            from BodyComposition.tissue_backends.boa_assets import sync_boa_model
+
+            sync_boa_model(model_root)
         elif model_id in {
             "totalsegmentator_total_task297_landmarks_v1",
             "totalsegmentator_body_task299_v1",

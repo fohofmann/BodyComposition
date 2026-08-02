@@ -196,6 +196,55 @@ in the installed distributions. Copyright remains with their respective
 authors and contributors. This acknowledgment does not imply endorsement of
 BodyComposition by those projects.
 
+## BOA: Body and Organ Analysis Task 542
+
+The optional `boa_body_regions_task542_v1` backend uses BOA's released body-
+region model through a narrow adapter. Authoritative upstream sources are:
+
+- BOA v1.0.2 source commit
+  [`6e761702a738ba681e6f7a3a7c944b00b186c3a8`](https://github.com/UMEssen/Body-and-Organ-Analysis/tree/6e761702a738ba681e6f7a3a7c944b00b186c3a8);
+- the original
+  [`v1.0.0-weights`](https://github.com/UMEssen/Body-and-Organ-Analysis/releases/tag/v1.0.0-weights)
+  `Dataset542_BCA_inference.zip` asset; and
+- the TotalSegmentator compatibility source pinned inside that BOA release at
+  commit
+  [`dde221478d81221f0d9df558c29f8f29d8f8f3b7`](https://github.com/wasserth/TotalSegmentator/tree/dde221478d81221f0d9df558c29f8f29d8f8f3b7).
+
+The BOA repository root license, its `pyproject.toml`, and Task 542's
+`dataset.json` identify the source and model as Apache-2.0. BodyComposition
+does not redistribute the archive or extracted checkpoints in Git, wheels,
+source distributions, or containers. `bodycomposition models sync` downloads
+the exact archive from BOA's original release, verifies its pinned byte size
+and SHA-256 plus every required extracted file, and installs it atomically in
+the external model directory. Inference cannot download weights.
+
+BodyComposition does not install or vendor the complete BOA application. It
+calls the existing pinned upstream `nnunetv2==2.5.2` predictor. The small local
+compatibility boundary reproduces behavior from BOA v1.0.2
+`body_composition_analysis/tasks.py`,
+`body_composition_analysis/infer/infer.py`,
+`body_composition_analysis/body_regions/postprocess.py`, and its pinned
+TotalSegmentator `nnunet.py`, `alignment.py`, and `resampling.py`: RAS
+canonicalization, cubic 5-mm slice-thickness staging, nearest-neighbour label
+restoration, and largest-component cleanup. This boundary is needed because
+direct nnU-Net array preprocessing uses different anisotropic through-plane
+interpolation and the full BOA application permits hidden downloads and adds
+unrelated dependencies. Equivalence and exact prepared-domain restoration are
+covered by regression tests.
+
+Task 542's eleven native body-region names are preserved in the compartment
+mask. Any conversion from abdominal/thoracic regions to HU-filtered aVAT/tVAT
+is explicitly a BodyComposition adapter definition and is not attributed to
+BOA as a native label. Analyses using this backend should cite:
+
+> Haubold J, Baldini G, Parmar V, et al. BOA: A CT-Based Body and Organ
+> Analysis for Radiologists at the Point of Care. Investigative Radiology.
+> 2023. https://doi.org/10.1097/RLI.0000000000001040
+
+Copyright remains with the BOA and contributing upstream authors. The complete
+Apache License 2.0 is available in the cited repositories. This acknowledgment
+does not imply endorsement of BodyComposition by BOA or its authors.
+
 ## ReportLab, pypdf, and Bitstream Vera
 
 Optional PDF case reports are rendered with ReportLab and collated/validated

@@ -37,6 +37,7 @@ scientific configuration.
 | `spineps_veridah_ct_v1` | default vertebral-body segmentation and labeling | upstream `SPINEPS==2.0.0`; VERIDAH is its pinned `ct_labeling` model; `TPTBox==0.7.5` supplies VibeSeg Dataset100 crop inference; upstream release sync only |
 | `bodycomposition_resenc_l_v1` | default anatomical compartments | original `fhofmann/BodyCompositionCT-ResEncL` revision `b355aa7254f5307b6d18005dfbabae8c439d24fb`; CC-BY-4.0 weights |
 | `bodycomposition_resenc_m_v1` | smaller selectable tissue model | original `fhofmann/BodyCompositionCT-ResEncM` revision `9c60c8f59a99442b9b8cc1a45abf6c4d81690c0d`; CC-BY-4.0 weights |
+| `boa_body_regions_task542_v1` | optional BOA body-region tissue source | BOA v1.0.2 code commit `6e761702a738ba681e6f7a3a7c944b00b186c3a8`; original `v1.0.0-weights` Task 542 archive pinned by size and SHA-256; Apache-2.0 |
 | `vertebral_bodies_resenc_l` | selectable corpus-only vertebral model | immutable public Hugging Face revision; CC-BY-SA-4.0 weights |
 | `vertebral_bodies_resenc_m` | smaller selectable corpus-only vertebral model | immutable public Hugging Face revision; CC-BY-SA-4.0 weights |
 | `totalsegmentator_total_task297_landmarks_v1` | optional ribs/hips for mid-waist landmarks | TotalSegmentator task 297 from the exact official `v2.0.0-weights` archive; Apache-2.0; direct `nnUNetv2==2.5.2` inference |
@@ -53,6 +54,7 @@ BodyComposition does not use TotalSegmentator's separately licensed
 ├── SPINEPS/spineps-veridah-ct-v1/
 ├── Dataset611_BodyComposition/<trainer>/...
 ├── Dataset601_VertebralBodies/<trainer>/...
+├── Dataset542_BCA_inference/<trainer>/...
 ├── Dataset297_TotalSegmentator_total_3mm_1559subj/...
 └── Dataset299_body_1559subj/...
 ```
@@ -95,6 +97,39 @@ inference. It does not fetch training logs or evaluation artifacts.
 Changing either revision is a model release and validation event. Do not point
 the model manager at `main`, substitute a mirror, or update a digest merely to
 accept changed bytes.
+
+## Optional BOA Task 542 integration
+
+BOA is selected only with `--tissue-backend boa_body_regions_task542_v1` or
+the corresponding configuration/API option. The complete BOA application is
+not installed: it adds unrelated reporting/PACS dependencies, owns mutable
+download paths, and pins a different PyTorch stack. BodyComposition instead
+uses the already pinned upstream `nnUNetPredictor` with the official Task 542
+plans, trainer, five folds, and checkpoints.
+
+Model synchronization downloads
+`Dataset542_BCA_inference.zip` from BOA's original GitHub weight release. The
+1,150,464,739-byte archive is fixed by SHA-256
+`096d6cdb45524273026d30e3bd290e8fd10990dec02f0aa0669d214b71bf6d4f`;
+every required extracted file is also verified. Synchronization is explicit,
+atomic, and idempotent. Inference has no network path.
+
+The adapter reproduces BOA v1.0.2's model boundary: an RAS model-space copy,
+cubic resampling of slice thickness only to 5 mm, unchanged nnU-Net inference,
+nearest-neighbour restoration, and the upstream connected-component policy.
+The returned label image must match the orientation-prepared CT physical
+domain exactly. This narrow compatibility code is regression-tested against
+the pinned upstream behavior; no BOA, TotalSegmentator, or nnU-Net source is
+vendored.
+
+Task 542 predicts body regions, not the same seven compartments as the default
+ResEnc models. Native labels therefore retain BOA's names. The standard HU
+profile may derive SM and SAT tissue from the muscle and subcutaneous regions,
+aVAT tissue from the abdominal cavity, and tVAT tissue from the union of
+thoracic cavity and mediastinum. The latter is a versioned BodyComposition
+mapping, not an upstream BOA tVAT label. Whole-volume native-compartment HU
+distributions do not relabel BOA cavities as aVAT or tVAT; those two native
+histogram channels are explicitly unavailable for this backend.
 
 ## SPINEPS/TPTBox integration boundary
 

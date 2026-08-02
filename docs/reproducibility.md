@@ -70,8 +70,8 @@ registration without their anatomical assignment and coverage context.
 Use the three-bin `vertebrae.parquet` for compact anatomical summaries and
 `summaries.parquet` for prespecified established views. The default comparison
 signature consists of the frozen 100-by-20-mm translation-only grid in
-`signature.parquet` plus analyzed-volume native SM/SAT/aVAT/tVAT attenuation
-distributions in `hu_distributions.parquet`. Retain alignment
+`signature.parquet` plus the fixed native SM/SAT/aVAT/tVAT attenuation slots
+in `hu_distributions.parquet`. Retain backend-specific missing channels, alignment
 method/confidence, coverage, variants, histogram tails, and missingness in
 every cohort analysis. Alternative functional representations or added tissue
 profiles remain separate versioned analysis contracts.
