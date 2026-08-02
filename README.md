@@ -143,6 +143,15 @@ hour. Observed peak host memory was 34.0 GiB and reported GPU-process memory was
 public 512-by-512-by-75 CT took 220.1 seconds with the default workflow and
 52.5 seconds with `--low-resource`.
 
+On a 10-core Apple M1 Max with 64 GiB unified memory, using CPU inference on
+the same public CT, the exact current candidate took 4,163.1 seconds (69.4
+minutes) with the default workflow and 440.8 seconds (7.3 minutes) with
+`--low-resource`. Peak summed process-tree RSS was 52.0 GiB and 24.9 GiB,
+respectively; total used system memory increased by 24.3 GiB and 17.9 GiB from
+the start of each run. macOS did not expose a usable unique-set-size counter,
+so summed RSS can count shared pages more than once and the system delta can
+include other host activity.
+
 These are measurements, not minimum RAM or VRAM requirements. Scan coverage,
 hardware, storage, model caching, and analysis scope affect both runtime and
 memory. See [Performance and resource observations](docs/performance.md) for
