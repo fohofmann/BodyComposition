@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-ARG PYTHON_IMAGE=python:3.11.14-slim-bookworm@sha256:65a93d69fa75478d554f4ad27c85c1e69fa184956261b4301ebaf6dbb0a3543d
+ARG PYTHON_IMAGE=python:3.11.15-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.27@sha256:4d01caf3b22dfd11003455e2e68153da08c4ee1fa54fdbd166c6282d22693419
 
 FROM ${UV_IMAGE} AS uv
@@ -36,6 +36,12 @@ ARG LOCK_SHA256=unknown
 ARG SOURCE_SHA256=unknown
 ARG SOURCE_DATE_EPOCH=0
 ARG SOURCE_DIRTY=true
+
+# Runtime packages live exclusively in the frozen /opt environment. Remove the
+# base image's independent pip/setuptools bootstrap environment so it cannot
+# drift from the lock or add unused package-manager attack surface.
+RUN rm -rf /usr/local/lib/python3.11/site-packages \
+    /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.11
 
 LABEL org.opencontainers.image.title="BodyComposition" \
       org.opencontainers.image.version="${VERSION}" \

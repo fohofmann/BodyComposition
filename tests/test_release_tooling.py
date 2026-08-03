@@ -90,6 +90,11 @@ def test_container_definition_is_weight_free_pinned_and_non_root():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
     dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
     assert dockerfile.count("@sha256:") >= 2
+    assert (
+        "python:3.11.15-slim-bookworm@sha256:"
+        "b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba"
+        in dockerfile
+    )
     assert "USER 10001:10001" in dockerfile
     assert 'BODYCOMPOSITION_MODEL_ROOT=/models' in dockerfile
     assert 'HF_HUB_DISABLE_XET=1' in dockerfile
@@ -106,6 +111,7 @@ def test_container_definition_is_weight_free_pinned_and_non_root():
     assert "site-packages/spineps/models" in dockerfile
     assert 'org.bodycomposition.source-dirty="${SOURCE_DIRTY}"' in dockerfile
     assert 'org.bodycomposition.cuda-runtime="13.0"' in dockerfile
+    assert "rm -rf /usr/local/lib/python3.11/site-packages" in dockerfile
     assert "--reinstall-package BodyComposition" in dockerfile
     assert "*.pth" in dockerignore and "*.pt" in dockerignore
     assert "output/" in dockerignore
