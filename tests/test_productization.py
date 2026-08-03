@@ -957,6 +957,27 @@ def test_doctor_defaults_to_operational_gate_and_offers_release_gate(
     assert not release["release_ready"]
 
 
+def test_doctor_rejects_explicit_cuda_when_cuda_is_unavailable(
+    monkeypatch,
+    capsys,
+    tmp_path,
+):
+    import torch
+
+    ready_model = _model_status(tmp_path)
+    monkeypatch.setattr(cli, "verify_models", lambda config: (ready_model,))
+    monkeypatch.setattr(cli, "release_model_issues", lambda *args, **kwargs: ())
+    monkeypatch.setattr(cli, "source_state", lambda: SOURCE_CLEAN)
+    monkeypatch.setattr(cli, "package_lock_digest", lambda: "a" * 64)
+    monkeypatch.setattr(cli, "_distribution_has_notices", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    assert cli.main(["doctor", "-o", str(tmp_path), "--device", "cuda", "--json"]) == 3
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["operational_errors"] == ["cuda_unavailable"]
+    assert payload["torch"]["requested_device"] == "cuda"
+
+
 def test_cli_exposes_only_the_one_release_command_tree():
     help_text = cli.build_parser().format_help()
     for command in (

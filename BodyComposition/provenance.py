@@ -134,6 +134,13 @@ def source_state() -> dict[str, Any]:
     if commit in {"", "unknown"}:
         commit = None
     dirty = bool(status_raw and status_raw.strip())
+    if status_raw is None:
+        embedded_dirty = os.environ.get("BODYCOMPOSITION_SOURCE_DIRTY")
+        if embedded_dirty is not None:
+            normalized = embedded_dirty.strip().lower()
+            if normalized not in {"true", "false"}:
+                raise RuntimeError("BODYCOMPOSITION_SOURCE_DIRTY must be true or false.")
+            dirty = normalized == "true"
     tree_digest = os.environ.get("BODYCOMPOSITION_SOURCE_SHA256")
     if tree_digest in {"", "unknown"}:
         tree_digest = None

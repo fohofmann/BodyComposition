@@ -371,6 +371,7 @@ def _output_check(path: str | None) -> tuple[bool, str | None]:
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
     config = _config(args)
+    requested_device = config.normalized()["runtime"]["device"]
     source = source_state()
     reports = verify_models(config)
     release_issues = release_model_issues(
@@ -387,12 +388,14 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "version": torch.__version__,
             "cuda_available": torch.cuda.is_available(),
             "cuda_version": torch.version.cuda,
+            "requested_device": requested_device,
         }
     except ImportError:
         torch_info = {
             "version": None,
             "cuda_available": False,
             "cuda_version": None,
+            "requested_device": requested_device,
         }
     operational_errors = []
     if not all(report.ready for report in reports):
@@ -403,6 +406,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         operational_errors.append("package_lock_digest_unavailable")
     if not _distribution_has_notices():
         operational_errors.append("installed_license_notices_missing")
+    if requested_device == "cuda" and not torch_info["cuda_available"]:
+        operational_errors.append("cuda_unavailable")
     if source.get("source_dirty") and not config.allow_dirty:
         operational_errors.append("source_tree_dirty")
     release_errors = list(operational_errors)

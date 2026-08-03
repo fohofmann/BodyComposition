@@ -13,6 +13,7 @@ WORKDIR /src
 
 # Resolve the large, frozen runtime layer before copying frequently changing code.
 COPY pyproject.toml uv.lock README.md LICENSE THIRD_PARTY_NOTICES.md CITATION.cff CHANGELOG.md SECURITY.md CONTRIBUTING.md MANIFEST.in ./
+COPY scripts/sanitize_container_environment.py ./scripts/sanitize_container_environment.py
 RUN --mount=type=cache,target=/var/cache/uv \
     uv sync --frozen --no-dev --no-install-project --no-editable
 
@@ -22,18 +23,11 @@ RUN --mount=type=cache,target=/var/cache/uv \
     --reinstall-package BodyComposition
 
 # Some frozen dependencies bundle unused image-quality checkpoints and test
-# scans. Remove those assets in the builder so they never enter a runtime-image
-# layer, then make that policy a build-time invariant. SPINEPS 2.0.0 creates
-# its package-local fallback directory at import even when explicit model paths
-# are supplied, so provide that empty directory without making site-packages
-# writable.
+# scans. Remove only the known assets, then reject any unexpected model or
+# medical-image file. SPINEPS 2.0.0 creates its package-local fallback
+# directory at import even when explicit model paths are supplied.
 RUN mkdir -p /opt/bodycomposition/lib/python3.11/site-packages/spineps/models \
-    && find /opt/bodycomposition -type f \( -name '*.pt' -o -name '*.ckpt' -o -name '*.onnx' \) -delete \
-    && find /opt/bodycomposition -type f -path '*/torchmetrics/functional/image/lpips_models/*.pth' -delete \
-    && find /opt/bodycomposition -type f \( -name '*.nii' -o -name '*.nii.gz' -o -name '*.nrrd' -o -name '*.dcm' \) -delete \
-    && test -z "$(find /opt/bodycomposition -type f \( -name '*.pt' -o -name '*.ckpt' -o -name '*.onnx' \) -print -quit)" \
-    && test -z "$(find /opt/bodycomposition -type f -name '*.pth' -size +1024c -print -quit)" \
-    && test -z "$(find /opt/bodycomposition -type f \( -name '*.nii' -o -name '*.nii.gz' -o -name '*.nrrd' -o -name '*.dcm' \) -print -quit)"
+    && /opt/bodycomposition/bin/python scripts/sanitize_container_environment.py /opt/bodycomposition
 
 FROM ${PYTHON_IMAGE} AS runtime
 ARG VERSION=1.0.0rc1
@@ -41,6 +35,7 @@ ARG GIT_SHA=unknown
 ARG LOCK_SHA256=unknown
 ARG SOURCE_SHA256=unknown
 ARG SOURCE_DATE_EPOCH=0
+ARG SOURCE_DIRTY=true
 
 LABEL org.opencontainers.image.title="BodyComposition" \
       org.opencontainers.image.version="${VERSION}" \
@@ -52,6 +47,8 @@ LABEL org.opencontainers.image.title="BodyComposition" \
       org.bodycomposition.uv-lock-sha256="${LOCK_SHA256}" \
       org.bodycomposition.source-sha256="${SOURCE_SHA256}" \
       org.bodycomposition.source-date-epoch="${SOURCE_DATE_EPOCH}" \
+      org.bodycomposition.source-dirty="${SOURCE_DIRTY}" \
+      org.bodycomposition.cuda-runtime="13.0" \
       org.bodycomposition.model-weights="not-included"
 
 ENV PATH=/opt/bodycomposition/bin:/usr/local/bin:/usr/bin:/bin \
@@ -64,6 +61,7 @@ ENV PATH=/opt/bodycomposition/bin:/usr/local/bin:/usr/bin:/bin \
     BODYCOMPOSITION_UV_LOCK_SHA256=${LOCK_SHA256} \
     BODYCOMPOSITION_SOURCE_SHA256=${SOURCE_SHA256} \
     BODYCOMPOSITION_SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    BODYCOMPOSITION_SOURCE_DIRTY=${SOURCE_DIRTY} \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_DOWNLOAD_TIMEOUT=600 \
     XDG_CACHE_HOME=/tmp/bodycomposition-cache \

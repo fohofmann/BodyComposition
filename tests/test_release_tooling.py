@@ -13,7 +13,16 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import BodyComposition.provenance as provenance
+import scripts.build_container as build_container
+import scripts.container_checks as container_checks
 from BodyComposition.utils.digests import array_sha256
+from scripts.audit_container import (
+    _configuration_findings,
+    _contains_credential,
+    _forbidden_asset,
+    _scan_image_archive,
+)
 from scripts.audit_distribution import audit
 from scripts.generate_sbom import generate
 from scripts.release_checks import (
@@ -22,6 +31,7 @@ from scripts.release_checks import (
     _normalize_sdist,
     _prepare_release_gate,
 )
+from scripts.sanitize_container_environment import sanitize
 
 
 def _wheel(
@@ -89,20 +99,224 @@ def test_container_definition_is_weight_free_pinned_and_non_root():
     assert 'BODYCOMPOSITION_OUTPUT_ROOT=/output' in dockerfile
     assert 'VOLUME ["/input", "/output", "/models"]' in dockerfile
     assert "models sync" not in dockerfile
-    assert "-name '*.pt'" in dockerfile
-    assert "lpips_models/*.pth" in dockerfile
-    assert "-name '*.nii.gz'" in dockerfile
-    assert "-name '*.dcm'" in dockerfile
-    assert "-size +1024c" in dockerfile
-    assert dockerfile.index("lpips_models/*.pth") < dockerfile.index(
+    assert "scripts/sanitize_container_environment.py" in dockerfile
+    assert dockerfile.index("sanitize_container_environment.py") < dockerfile.index(
         "FROM ${PYTHON_IMAGE} AS runtime"
     )
     assert "site-packages/spineps/models" in dockerfile
-    assert "-name '*.onnx'" in dockerfile
+    assert 'org.bodycomposition.source-dirty="${SOURCE_DIRTY}"' in dockerfile
+    assert 'org.bodycomposition.cuda-runtime="13.0"' in dockerfile
     assert "--reinstall-package BodyComposition" in dockerfile
     assert "*.pth" in dockerignore and "*.pt" in dockerignore
     assert "output/" in dockerignore
     assert "dev/" in dockerignore
+
+
+def test_container_sanitizer_removes_only_known_assets_and_rejects_unknown(tmp_path):
+    environment = tmp_path / "environment"
+    site_packages = environment / "lib/python3.11/site-packages"
+    known_scan = site_packages / "TPTBox/tests/sample_ct/example.nii.gz"
+    known_weight = (
+        site_packages / "torchmetrics/functional/image/lpips_models/alex.pth"
+    )
+    ordinary_test = site_packages / "example/tests/keep.txt"
+    for path, payload in (
+        (known_scan, b"ct"),
+        (known_weight, b"weight"),
+        (ordinary_test, b"ordinary"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+    result = sanitize(environment)
+
+    assert result["passed"]
+    assert not known_scan.exists()
+    assert not known_weight.exists()
+    assert ordinary_test.read_bytes() == b"ordinary"
+
+    unexpected = site_packages / "new_dependency/tests/unexpected.dcm"
+    unexpected.parent.mkdir(parents=True)
+    unexpected.write_bytes(b"dicom")
+    with pytest.raises(RuntimeError, match="unexpected.dcm"):
+        sanitize(environment)
+
+
+def test_container_layer_policy_rejects_checkpoints_and_medical_images():
+    assert _forbidden_asset("models/checkpoint.pt", 1)
+    assert _forbidden_asset("fixtures/case.nii.gz", 1)
+    assert _forbidden_asset("package/model.pth", 1025)
+    assert not _forbidden_asset("package/typing.pth", 40)
+    assert not _forbidden_asset("package/model.py", 100_000)
+
+
+def test_container_credential_scan_uses_token_boundaries_and_text_only():
+    assert _contains_credential(b"HF_TOKEN=hf_" + (b"A" * 24))
+    assert _contains_credential(b"API_KEY=sk-proj-" + (b"A" * 40))
+    assert not _contains_credential(b"mask-image: linear-gradient(black, white)")
+    assert not _contains_credential(b"binary\0hf_" + (b"A" * 24))
+
+
+def test_container_layer_audit_supports_oci_blob_archives():
+    layer_buffer = io.BytesIO()
+    with tarfile.open(fileobj=layer_buffer, mode="w") as layer:
+        payload = b"weight"
+        member = tarfile.TarInfo("opt/package/checkpoint.pt")
+        member.size = len(payload)
+        layer.addfile(member, io.BytesIO(payload))
+        link = tarfile.TarInfo("opt/package/linked-model.pth")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "checkpoint.bin"
+        layer.addfile(link)
+
+    image_buffer = io.BytesIO()
+    with tarfile.open(fileobj=image_buffer, mode="w") as image:
+        metadata = b'{"schemaVersion": 2}'
+        metadata_member = tarfile.TarInfo("blobs/sha256/metadata")
+        metadata_member.size = len(metadata)
+        image.addfile(metadata_member, io.BytesIO(metadata))
+        layer_payload = layer_buffer.getvalue()
+        layer_member = tarfile.TarInfo("blobs/sha256/layer")
+        layer_member.size = len(layer_payload)
+        image.addfile(layer_member, io.BytesIO(layer_payload))
+    image_buffer.seek(0)
+
+    layers, files, size, findings = _scan_image_archive(image_buffer)
+
+    assert layers == 1
+    assert files == 1
+    assert size == len(b"weight")
+    assert {finding["path"] for finding in findings} == {
+        "opt/package/checkpoint.pt",
+        "opt/package/linked-model.pth",
+    }
+
+
+def test_container_configuration_policy_requires_non_root_external_mounts_and_labels():
+    labels = {
+        "org.opencontainers.image.title": "BodyComposition",
+        "org.opencontainers.image.licenses": "Apache-2.0",
+        "org.opencontainers.image.revision": "a" * 40,
+        "org.bodycomposition.uv-lock-sha256": "b" * 64,
+        "org.bodycomposition.source-sha256": "c" * 64,
+        "org.bodycomposition.source-dirty": "false",
+        "org.bodycomposition.cuda-runtime": "13.0",
+        "org.bodycomposition.model-weights": "not-included",
+    }
+    inspect = {
+        "Config": {
+            "User": "10001:10001",
+            "Volumes": {"/input": {}, "/models": {}, "/output": {}},
+            "Labels": labels,
+            "Env": ["BODYCOMPOSITION_MODEL_ROOT=/models"],
+        }
+    }
+    assert _configuration_findings(inspect) == []
+
+    inspect["Config"]["User"] = "root"
+    inspect["Config"]["Env"] = ["ACCESS_TOKEN=not-a-real-token"]
+    codes = {finding["code"] for finding in _configuration_findings(inspect)}
+    assert codes == {"unexpected_user", "sensitive_environment_name"}
+
+
+def test_container_build_request_is_explicit_reproducible_and_multi_platform(monkeypatch):
+    def fake_git(*arguments):
+        if arguments[:2] == ("rev-parse", "HEAD"):
+            return "a" * 40
+        if arguments[0] == "status":
+            return ""
+        if arguments[0] == "show":
+            return "1700000000"
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(build_container, "_git", fake_git)
+    monkeypatch.setattr(build_container, "source_context_sha256", lambda: "b" * 64)
+    monkeypatch.setattr(build_container, "_sha256", lambda path: "c" * 64)
+    args = SimpleNamespace(
+        allow_dirty=False,
+        platform="linux/amd64,linux/arm64",
+        push=True,
+        load=False,
+        tag=["registry.example/bodycomposition:test"],
+        metadata_file="dist/metadata.json",
+        receipt="dist/request.json",
+        no_pull=False,
+        no_cache=False,
+        no_attestations=False,
+    )
+
+    request = build_container.build_request(args)
+
+    command = request["command"]
+    assert request["platforms"] == ["linux/amd64", "linux/arm64"]
+    assert request["attestations"] is True
+    assert "SOURCE_DIRTY=false" in command
+    assert "SOURCE_SHA256=" + ("b" * 64) in command
+    assert "--provenance=mode=max" in command
+    assert "--sbom=true" in command
+
+
+def test_container_build_request_rejects_dirty_release_source(monkeypatch):
+    monkeypatch.setattr(build_container, "_git", lambda *arguments: " M Dockerfile")
+    args = SimpleNamespace(
+        allow_dirty=False,
+        platform="linux/amd64",
+        push=False,
+        load=True,
+        tag=None,
+        metadata_file="dist/metadata.json",
+        receipt="dist/request.json",
+        no_pull=True,
+        no_cache=False,
+        no_attestations=False,
+    )
+    with pytest.raises(RuntimeError, match="clean source tree"):
+        build_container.build_request(args)
+
+
+def test_container_checks_write_auditable_receipts(tmp_path, monkeypatch):
+    image_audit = {
+        "passed": True,
+        "image_id": "sha256:" + ("a" * 64),
+        "architecture": "amd64",
+        "os": "linux",
+        "size": 123,
+    }
+    monkeypatch.setattr(container_checks, "audit", lambda image: image_audit)
+
+    def fake_run(command):
+        if "version" in command:
+            return SimpleNamespace(returncode=0, stdout="Docker Scout 1.0\n", stderr="")
+        if "--output" in command:
+            output = Path(command[command.index("--output") + 1])
+            output.write_text("{}\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(container_checks, "_run", fake_run)
+
+    result = container_checks.check("bodycomposition:test", tmp_path)
+
+    assert result["passed"]
+    assert all(result["checks"].values())
+    assert set(result["outputs"]) == {"image_audit", "sbom", "vulnerabilities"}
+    assert (tmp_path / "container-checks.json").is_file()
+
+
+def test_installed_container_source_state_uses_embedded_dirty_label(monkeypatch):
+    monkeypatch.setattr(provenance, "_run_git", lambda *args: None)
+    monkeypatch.setenv("BODYCOMPOSITION_GIT_SHA", "a" * 40)
+    monkeypatch.setenv("BODYCOMPOSITION_SOURCE_SHA256", "b" * 64)
+    monkeypatch.setenv("BODYCOMPOSITION_SOURCE_DIRTY", "true")
+
+    state = provenance.source_state()
+
+    assert state["git_commit"] == "a" * 40
+    assert state["source_tree_sha256"] == "b" * 64
+    assert state["source_dirty"] is True
+
+    monkeypatch.setenv("BODYCOMPOSITION_SOURCE_DIRTY", "not-a-boolean")
+    with pytest.raises(RuntimeError, match="must be true or false"):
+        provenance.source_state()
 
 
 def test_measurement_support_uses_the_pinned_nnunet_engine_directly():
