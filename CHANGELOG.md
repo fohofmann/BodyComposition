@@ -32,7 +32,10 @@ This is a deliberate breaking release candidate.
   collision-safe whole-case claims, and early release of surplus workers;
 - external pinned model synchronization/verification;
 - non-root, weight-free, digest-pinned container definition; and
-- release audit, SBOM, vulnerability, clean-install, and CI tooling.
+- reproducible single- or multi-platform Buildx orchestration with source
+  provenance, strict final-layer asset auditing, OCI SBOM and vulnerability
+  receipts; and
+- release audit, Python dependency SBOM, clean-install, and CI tooling.
 
 ### Changed
 
@@ -74,6 +77,9 @@ This is a deliberate breaking release candidate.
   inference, interpolation, and multiclass decisions while resampling output
   logits in bounded channel groups, avoiding full-FOV target-grid memory
   spikes.
+- explicit CUDA selection now fails the preflight gate when the accelerator is
+  unavailable; the container records its CUDA 13.0 runtime requirement and
+  whether it was built from a dirty source context.
 
 ### Removed
 
@@ -87,6 +93,7 @@ This is a deliberate breaking release candidate.
 
 ### Remaining release validation
 
-- Rebuild the publication artifacts and container from the approved release
-  tag, and complete the deferred Linux x86-64 and scientific/cohort validation
-  gates before making platform-performance or clinical-validity claims.
+- Rebuild the publication artifacts and container from the approved clean
+  release commit. Linux x86-64 Singularity inference has been validated on
+  A100 and B200 accelerators; manual contour, anthropometric, and clinical-
+  validity studies remain separate post-publication work.

@@ -152,11 +152,18 @@ the start of each run. macOS did not expose a usable unique-set-size counter,
 so summed RSS can count shared pages more than once and the system delta can
 include other host activity.
 
+In Linux x86-64 Singularity runs of that public CT, five measured processes
+after one warm-up averaged 398.6 seconds for the default workflow and 110.6
+seconds for `--low-resource` on an NVIDIA A100-SXM4-40GB. The corresponding
+NVIDIA B200 averages were 329.6 and 96.4 seconds. Maximum observed GPU memory
+was 30.7/5.1 GiB on the A100 and 19.0/4.1 GiB on the B200 for default/low-
+resource, respectively. All result bundles passed inspection and the paired
+cross-GPU comparison.
+
 These are measurements, not minimum RAM or VRAM requirements. Scan coverage,
 hardware, storage, model caching, and analysis scope affect both runtime and
 memory. See [Performance and resource observations](docs/performance.md) for
-the evidence boundary and a benchmark table intended to receive later A100 and
-B200 measurements.
+the evidence boundary, variation across repetitions, and hardware details.
 
 For conversion without analysis, use the same validated reader:
 
@@ -231,18 +238,34 @@ The public API never exposes the pipeline's internal action-memory dictionary.
 
 ## Container
 
-Build the container locally:
+Build a provenance-labelled image for the current host architecture:
 
 ```bash
-LOCK_SHA256=$(shasum -a 256 uv.lock | cut -d' ' -f1)
-docker build --pull \
-  --build-arg GIT_SHA="$(git rev-parse HEAD)" \
-  --build-arg LOCK_SHA256="$LOCK_SHA256" \
-  -t bodycomposition:1.0.0rc1 .
+uv run python scripts/build_container.py \
+  --tag bodycomposition:1.0.0rc1
 ```
 
-The image runs as UID/GID `10001`, contains no weights, and expects writable
-mounts at `/models` and `/output`:
+The helper derives the package version, source revision, lock digest, canonical
+source-context digest, and source date from the checkout. It refuses a dirty
+release build. A registry build for both supported Linux architectures uses:
+
+```bash
+uv run python scripts/build_container.py \
+  --platform linux/amd64,linux/arm64 \
+  --tag registry.example.org/bodycomposition:1.0.0rc1 \
+  --push
+```
+
+The pushed manifest receives BuildKit provenance and SBOM attestations. Audit a
+locally loaded platform image and create CycloneDX plus vulnerability receipts
+before release:
+
+```bash
+uv run python scripts/container_checks.py bodycomposition:1.0.0rc1
+```
+
+The image runs as UID/GID `10001`, contains no weights or medical-image test
+assets, and expects writable mounts at `/models` and `/output`:
 
 ```bash
 mkdir -p models output
@@ -261,6 +284,10 @@ docker run --rm --gpus all \
 ```
 
 On Linux, ensure the mounted writable directories permit UID/GID `10001`.
+The frozen PyTorch runtime uses CUDA 13.0; NVIDIA driver branch R580 or newer is
+required for CUDA execution. `bodycomposition doctor --device cuda --json`
+fails before inference when CUDA is not visible. CPU execution remains
+available without NVIDIA runtime integration.
 Validated and pending platform targets are listed in
 [known limitations](docs/known-limitations.md).
 

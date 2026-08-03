@@ -47,6 +47,14 @@ The container removes torchmetrics' bundled optional DISTS image-metric
 checkpoint to enforce a strict no-model-weights image. BodyComposition does
 not use or expose that metric.
 
+The release image is built for Linux `amd64` and `arm64`. Its PyTorch wheels use
+CUDA 13.0, which requires NVIDIA driver branch R580 or newer. GPU readiness is
+validated at runtime rather than inferred from the host name. Native macOS and
+Windows containers are not release targets; the Python package can run on CPU
+where its frozen dependencies support the platform. Platform validation and
+performance observations are reported separately in
+[performance.md](performance.md).
+
 ## Body surface and circumference
 
 The default body/trunk envelope is derived from predicted compartments,

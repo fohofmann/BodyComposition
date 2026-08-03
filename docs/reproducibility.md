@@ -29,6 +29,14 @@ bodycomposition doctor --release --config cohort.yaml --output /shared/output --
 complete cache may be operational while an unresolved publication/license pin
 still blocks a distributable release.
 
+For a container release, build with `scripts/build_container.py` and retain its
+source/build metadata receipts. Run `scripts/container_checks.py IMAGE` on the
+loaded platform image. This independently checks the final OCI layers for
+model or medical-image assets, creates a CycloneDX image SBOM and a complete
+SARIF vulnerability report, and fails the release gate when a high or critical
+finding has a published fix. Registry attestations complement these local
+receipts; they do not replace them.
+
 ## Run and resume
 
 ```bash

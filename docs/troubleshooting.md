@@ -37,7 +37,11 @@ cannot produce `release_ready=true`.
 
 `--device cuda` fails if CUDA is not available. Use `--device auto` for CUDA →
 CPU selection. MPS is not a released inference target. The launcher, not
-BodyComposition, controls `CUDA_VISIBLE_DEVICES`.
+BodyComposition, controls `CUDA_VISIBLE_DEVICES`. The released container uses
+the frozen PyTorch CUDA 13.0 runtime and therefore requires NVIDIA driver branch
+R580 or newer. In Docker, expose the accelerator with the NVIDIA Container
+Toolkit; in Apptainer/Singularity, use `--nv`. Run `doctor --device cuda`
+inside the same container invocation and with the same mounts as inference.
 
 ## Accelerator out of memory
 
