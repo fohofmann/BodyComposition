@@ -3,10 +3,11 @@
 ## Reporting a vulnerability
 
 Do not open a public issue containing patient data, credentials, private paths,
-or an exploitable vulnerability. Contact the repository maintainer privately
-through the security-reporting channel configured on the repository. Include a
-minimal synthetic reproducer, affected version/commit, impact, and proposed
-embargo window. Do not attach clinical images.
+or an exploitable vulnerability. Use the repository's enabled
+[private vulnerability reporting](https://github.com/fohofmann/BodyComposition/security/advisories/new)
+channel to contact the maintainer. Include a minimal synthetic reproducer,
+affected version/commit, impact, and proposed embargo window. Do not attach
+clinical images.
 
 ## Supported versions
 

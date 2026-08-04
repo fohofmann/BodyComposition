@@ -9,11 +9,11 @@ bodycomposition doctor --low-resource --json
 bodycomposition analyze CT.nii.gz --low-resource
 ```
 
-It selects the ResEncM vertebral-body and tissue models, disables the optional
-full-volume landmark model, and unloads each model before the next stage. The
-orientation check and L3 localization still use the complete prepared CT. If
-a valid L3 cannot be identified, the case fails explicitly; another level or
-the full-CT tissue model is never selected silently.
+It selects the ResEncM vertebral-body and tissue models, keeps the optional
+full-volume landmark extension disabled, and unloads each model before the
+next stage. The orientation check and L3 localization still use the complete
+prepared CT. If a valid L3 cannot be identified, the case fails explicitly;
+another level or the full-CT tissue model is never selected silently.
 
 After localization, the tissue model receives the complete axial field of
 view and a z crop spanning the L3 territory plus 120 mm of context on each
@@ -51,30 +51,23 @@ value["analysis"]["l3"]["inference_context_mm"] = 100.0
 result = analyze_case("CT.nii.gz", config=PipelineConfig.model_validate(value))
 ```
 
-## Illustrative runtime
+## Historical observed runtime
 
-The following existing validation runs used the same public CT
-(`512 × 512 × 75`, 5-mm slice spacing), an NVIDIA GB10, CUDA, and isolated
-Docker containers:
+Complete-case measurements for the same public 512 × 512 × 75 CT show the
+expected within-platform reduction, but the workflows do not produce
+equivalent outputs:
 
-| Pipeline | Complete case time | Relative time |
+| Platform | Standard | Low-resource |
 | --- | ---: | ---: |
-| Standard defaults | 220.1 s | 1.00 |
-| `--low-resource` | 52.5 s | 0.24 |
+| Apple M1 Max CPU | 69.4 min | 7.3 min |
+| NVIDIA GB10 | 220.1 s | 52.5 s |
+| NVIDIA A100 40 GB | 398.6 s | 110.6 s |
+| NVIDIA B200 | 329.6 s | 96.4 s |
 
-For this case, the low-resource preset was approximately 4.2 times faster,
-reducing elapsed time by about 76%. The principal differences were:
-
-- vertebral localization: SPINEPS/VERIDAH took 97.2 s, compared with 33.3 s
-  for VertebralBodiesCT-ResEncM;
-- tissue segmentation: the five-fold ResEncL model took 30.0 s, compared with
-  11.9 s for the L3-cropped, single-model ResEncM run; and
-- the standard pipeline spent another 81.6 s on full-volume
-  TotalSegmentator landmarks, which the L3 preset does not require.
-
-This is an illustrative single-case measurement from adjacent development
-candidates, not a formal benchmark or performance guarantee. The advantage
-depends on scan length, slice spacing, hardware, model caching, and storage
-speed. More importantly, the outputs are not equivalent: the standard pipeline
-provides full longitudinal and anthropometric analysis, whereas the
-low-resource preset provides L3-focused tissue phenotyping.
+Scan length, storage, caching, and hardware affect runtime. The standard
+pipeline provides full longitudinal and anthropometric analysis; the
+low-resource preset provides L3-focused tissue phenotyping. Exact revisions,
+memory observations, repeated-run variation, and benchmark conditions are in
+[performance.md](performance.md). The platforms used different environments,
+so the rows must not be used as an accelerator ranking. Both workflows will be
+remeasured from the frozen current default before release.

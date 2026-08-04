@@ -198,9 +198,14 @@ The single case row contains deterministic views:
 - a whole-L3-territory view;
 - minimum observed valid trunk circumference across the available T10-to-L5
   search;
-- anatomical mid-waist circumference when rib and iliac landmarks are valid;
+- optional anatomical mid-waist circumference when task 297 rib and iliac
+  landmarks are explicitly enabled and valid;
 - maximum observed valid circumference in the bounded sacral territory; and
 - explicitly named waist-to-pelvic ratios.
+
+The standard anthropometric summary is the T10-to-L5 minimum, sacral maximum,
+and their ratio. It does not run task 297. The separate `ct_midwaist_*` fields
+remain unavailable unless the optional landmark extension is enabled.
 
 Numerical validity and scientific eligibility are separate. The minimum waist
 uses the observed bounded part of the T10-to-L5 range when either boundary

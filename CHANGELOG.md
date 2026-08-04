@@ -8,9 +8,14 @@ This is a deliberate breaking release candidate.
 
 - one strict typed configuration with generated defaults/schema;
 - one service shared by the Python API and CLI;
+- automatic single-case or deterministic cohort dispatch from one `analyze`
+  entry point, with explicit manifests retained for governed and scheduler
+  execution;
 - strict direct DICOM CT input and standalone transfer-ready NIfTI conversion
   with a hash-bound, privacy-safe technical sidecar through the shared
   SimpleITK/GDCM geometry and provenance boundary;
+- recursive DICOM cohort conversion with content-derived filenames, an
+  analysis-ready manifest, and a privacy-minimized conversion report;
 - content-addressed case identity, immutable manifests, artifact hashes,
   atomic promotion, deterministic resume, and ordered aggregate tables;
 - CTDeepRot orientation integrity with safe repair and mandatory review flags;
@@ -40,6 +45,8 @@ This is a deliberate breaking release candidate.
 ### Changed
 
 - Python 3.11 and `uv.lock` are the reproducible environment boundary.
+- the transitive `aiohttp` runtime is locked at 3.14.3, clearing the published
+  advisories affecting 3.14.1 without changing a pipeline API or model.
 - SimpleITK physical metadata/indices are explicitly `x-y-z`; arrays are
   explicitly `z-y-x`.
 - only vertebral-body/corpus masks feed downstream measurements and reports.
@@ -62,6 +69,9 @@ This is a deliberate breaking release candidate.
   routes dependency progress to stderr.
 - the default pipeline-execution budget is four hours so the automatic CPU
   fallback can complete the pinned model stack.
+- TotalSegmentator task 297 rib/iliac landmark inference is now an explicit
+  opt-in extension. Default anthropometry uses the observed T10–L5 minimum
+  waist, sacral pelvic maximum, and their ratio without that model.
 - the pinned VibeSeg CPU path is guarded against TPTBox's CUDA-only memory
   telemetry without changing upstream inference or CUDA execution.
 - CTDeepRot checkpoint loading requires the exact validated PyTorch/torchvision
@@ -86,14 +96,20 @@ This is a deliberate breaking release candidate.
 - named pipeline registry and the legacy Stanford/BOA/TotalSegmentator
   multi-stage pipeline variants;
 - working-directory global and named-pipeline YAML configuration;
-- old command collection, bulk DICOM-conversion helper, mutable-memory Python
-  API, and standalone measurement/report commands;
+- old command collection, legacy standalone bulk-conversion helper, mutable-
+  memory Python API, and standalone measurement/report commands;
 - nnU-Net v1 trainers and obsolete crop/postprocess/action layers; and
 - backward-compatibility aliases.
 
 ### Remaining release validation
 
-- Rebuild the publication artifacts and container from the approved clean
-  release commit. Linux x86-64 Singularity inference has been validated on
-  A100 and B200 accelerators; manual contour, anthropometric, and clinical-
-  validity studies remain separate post-publication work.
+- Rebuild the publication artifacts and container from the final approved
+  clean commit. Linux x86-64 Singularity inference has been validated on A100
+  and B200 accelerators.
+- Publish a reviewed software/container release explicitly. The current GitHub
+  workflow validates distributions but does not publish a registry image.
+- Repeat full and low-resource runtime and memory measurements from the frozen
+  current default after task 297 became optional; historical candidate timings
+  are not an accelerator ranking.
+- Manual contour, anthropometric, and clinical-validity studies remain
+  separate post-publication work.

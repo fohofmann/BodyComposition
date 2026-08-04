@@ -62,10 +62,19 @@ absent when `--no-csv` or `output.save_csv_tables=false` is selected.
 ```
 
 `input_path`, optional pseudonymous `case_id`, and optional DICOM
-`series_uid` are accepted. `series_uid` is needed only when the input contains
-multiple CT series. Relative paths resolve against the manifest directory.
+`series_uid` are accepted. `series_uid` is needed when one manifest case points
+at an input containing multiple CT series. Relative paths resolve against the
+manifest directory.
 Case IDs use 1–64 ASCII letters, digits, dot, underscore, or hyphen and must
 begin with a letter or digit.
+
+Directory-output DICOM conversion writes `bodycomposition-batch.json` using
+this schema and content-derived pseudonymous IDs. It also writes
+`bodycomposition-conversion.json`, validated by
+`dicom_conversion_batch.schema.json`, with counts, safe output filenames,
+content identities, and privacy-minimized failures. `analyze` discovers the
+generated batch manifest automatically; a governed run should review and
+freeze it before execution.
 
 ## Case manifest
 

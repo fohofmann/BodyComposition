@@ -11,11 +11,13 @@ validated clinical report.
 ## Input domain
 
 The release expects calibrated three-dimensional CT with meaningful physical
-metadata. It accepts NIfTI or one explicitly selected DICOM CT series.
+metadata. It accepts one NIfTI/DICOM CT or a directory of cases.
 SimpleITK/GDCM conversion preserves and validates the reader geometry, but it
 does not classify contrast phase or reconstruction, calibrate scanners,
-de-identify DICOM, or remove burned-in pixel annotations. When multiple CT
-series are present, the caller must supply the intended Series Instance UID.
+de-identify DICOM, or remove burned-in pixel annotations. Directory analysis
+processes every discovered CT series independently; it does not infer which
+phase or reconstruction a study intended. Use an explicit Series Instance UID
+when only one series should be processed.
 
 CTDeepRot estimates proper rotations from anatomy, not arbitrary affine
 corruption. Oblique, truncated, metal-affected, unusual-anatomy, pediatric,
@@ -47,11 +49,12 @@ The container removes torchmetrics' bundled optional DISTS image-metric
 checkpoint to enforce a strict no-model-weights image. BodyComposition does
 not use or expose that metric.
 
-The release image is built for Linux `amd64` and `arm64`. Its PyTorch wheels use
-CUDA 13.0, which requires NVIDIA driver branch R580 or newer. GPU readiness is
-validated at runtime rather than inferred from the host name. Native macOS and
-Windows containers are not release targets; the Python package can run on CPU
-where its frozen dependencies support the platform. Platform validation and
+The container definition targets Linux `amd64` and `arm64`. Its PyTorch wheels
+use CUDA 13.0, which requires NVIDIA driver branch R580 or newer. GPU readiness
+is validated at runtime rather than inferred from the host name. Native macOS
+and Windows containers are not release targets; the Python package can run on
+CPU where its frozen dependencies support the platform. The unreleased source
+does not yet publish a public image automatically. Platform validation and
 performance observations are reported separately in
 [performance.md](performance.md).
 

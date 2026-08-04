@@ -40,7 +40,7 @@ scientific configuration.
 | `boa_body_regions_task542_v1` | optional BOA body-region tissue source | BOA v1.0.2 code commit `6e761702a738ba681e6f7a3a7c944b00b186c3a8`; original `v1.0.0-weights` Task 542 archive pinned by size and SHA-256; Apache-2.0 |
 | `vertebral_bodies_resenc_l` | selectable corpus-only vertebral model | immutable public Hugging Face revision; CC-BY-SA-4.0 weights |
 | `vertebral_bodies_resenc_m` | smaller selectable corpus-only vertebral model | immutable public Hugging Face revision; CC-BY-SA-4.0 weights |
-| `totalsegmentator_total_task297_landmarks_v1` | optional ribs/hips for mid-waist landmarks | TotalSegmentator task 297 from the exact official `v2.0.0-weights` archive; Apache-2.0; direct `nnUNetv2==2.5.2` inference |
+| `totalsegmentator_total_task297_landmarks_v1` | optional ribs/hips support for the anatomical mid-waist extension; disabled by default | TotalSegmentator task 297 from the exact official `v2.0.0-weights` archive; Apache-2.0; direct `nnUNetv2==2.5.2` inference |
 | `totalsegmentator_body_task299_v1` | optional body/trunk support | TotalSegmentator task 299 from the exact official `v2.0.0-weights` archive; Apache-2.0; direct `nnUNetv2==2.5.2` inference |
 
 BodyComposition does not use TotalSegmentator's separately licensed
@@ -100,12 +100,21 @@ accept changed bytes.
 
 ## Optional BOA Task 542 integration
 
-BOA is selected only with `--tissue-backend boa_body_regions_task542_v1` or
-the corresponding configuration/API option. The complete BOA application is
-not installed: it adds unrelated reporting/PACS dependencies, owns mutable
-download paths, and pins a different PyTorch stack. BodyComposition instead
-uses the already pinned upstream `nnUNetPredictor` with the official Task 542
-plans, trainer, five folds, and checkpoints.
+BOA is selected with the short public name `--tissue-backend boa`. Synchronize
+and verify the corresponding complete pipeline before analysis:
+
+```bash
+bodycomposition models sync --tissue-backend boa
+bodycomposition doctor --tissue-backend boa --json
+bodycomposition analyze CT.nii.gz --tissue-backend boa --json
+```
+
+The stable internal and provenance identifier remains
+`boa_body_regions_task542_v1`. The complete BOA application is not installed:
+it adds unrelated reporting/PACS dependencies, owns mutable download paths,
+and pins a different PyTorch stack. BodyComposition instead uses the already
+pinned upstream `nnUNetPredictor` with the official Task 542 plans, trainer,
+five folds, and checkpoints.
 
 Model synchronization downloads
 `Dataset542_BCA_inference.zip` from BOA's original GitHub weight release. The

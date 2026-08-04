@@ -9,11 +9,12 @@ Do not construct a separate runner from internal action classes.
 - Process only the CTs and output locations explicitly placed in scope.
 - Never upload a patient scan, model output, or identifying metadata to an
   external service.
-- BodyComposition accepts one three-dimensional NIfTI CT or one DICOM CT
-  series. It does not deidentify DICOM, remove burned-in text, or determine
+- BodyComposition accepts one three-dimensional NIfTI/DICOM CT or a directory
+  of cases. It does not deidentify DICOM, remove burned-in text, or determine
   whether a scan may be used for a particular study.
-- If a DICOM directory contains more than one CT series, do not guess. Report
-  the available series and require an explicit Series Instance UID.
+- A directory input processes every recursively discovered CT series as an
+  independent case. Never choose one series by directory order, description,
+  or slice count. Use `--series` only when the user requested one exact series.
 - Omit `--case-id` unless the user supplied a path-safe pseudonym. Otherwise
   the pipeline derives a content-based identifier that does not expose the
   input filename.
@@ -41,7 +42,7 @@ uv run bodycomposition models sync
 Inference never downloads models. Do not find substitute weights, copy weights
 into the package or container, or silently select another backend.
 
-## Analyze one CT
+## Analyze CT input
 
 The standard workflow needs only an input:
 
@@ -53,6 +54,13 @@ One unambiguous DICOM CT series can be analyzed directly:
 
 ```bash
 uv run bodycomposition analyze /absolute/path/to/dicom-directory --json
+```
+
+The same command accepts a cohort root. It processes every discovered DICOM CT
+series, or uses the generated manifest in a pre-staged conversion directory:
+
+```bash
+uv run bodycomposition analyze /absolute/path/to/cohort --json
 ```
 
 Use `-o /absolute/path/to/output` only when another result root is wanted.
@@ -92,6 +100,19 @@ uv run bodycomposition analyze /absolute/path/to/ct.nii.gz --json
 The sidecar is found and verified automatically. Conversion does not perform
 orientation repair.
 
+To pre-stage every CT series below a nested cohort root, make the output a
+directory:
+
+```bash
+uv run bodycomposition convert \
+  /absolute/path/to/dicom-cohort \
+  /absolute/path/to/converted
+```
+
+Transfer the complete output directory, including
+`bodycomposition-batch.json`, then run `analyze` on that directory. Failed
+series remain visible in `bodycomposition-conversion.json`.
+
 ## Low-resource L3 analysis
 
 Use the low-resource preset only when the user explicitly requests an L3-only
@@ -112,8 +133,10 @@ cover L3 only; do not present it as a full longitudinal analysis.
 
 ## Batch and scheduler execution
 
-Use `bodycomposition batch` with an input manifest for an ordered collection.
-Do not write a private loop around internal pipeline objects.
+Use ordinary `analyze DIRECTORY` for a simple local collection. Use
+`bodycomposition batch` with an explicit input manifest when stable case IDs,
+reviewed ordering, resume identity, or scheduler workers are required. Do not
+write a private loop around internal pipeline objects.
 
 Independent scheduler tasks may run the same command with `--worker`. The
 filesystem queue assigns complete cases without overlap, and a surplus worker
@@ -156,19 +179,20 @@ missingness in downstream comparisons.
 ## Python API
 
 ```python
-from BodyComposition import analyze_case
+from BodyComposition import analyze
 
-result = analyze_case("/absolute/path/to/scan.nii.gz")
+result = analyze("/absolute/path/to/scan.nii.gz")
 if not result.succeeded:
-    raise RuntimeError(result.failure)
+    raise RuntimeError(result.as_dict())
 
 tissue_mask = result.output_path / "masks" / "tissue_labels.nii.gz"
 vertebral_bodies = result.output_path / "masks" / "vertebral_bodies.nii.gz"
 ```
 
-Use `analyze_batch` for an ordered collection. Advanced callers may pass
-`output_root`, `config`, `case_id`, `run_id`, and, for ambiguous DICOM input,
-`series_uid` explicitly.
+`analyze` returns a `CaseResult` for one resolved CT and a `BatchResult` for
+several. Use `analyze_case` for a strict one-case contract and `analyze_batch`
+for an explicit ordered collection. Advanced callers may pass `output_root`,
+`config`, `case_id`, `run_id`, and `series_uid` explicitly.
 
 ## Configuration and geometry
 

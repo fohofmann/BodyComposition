@@ -17,9 +17,9 @@ not implement separate pipelines.
 4. Segment anatomical compartments with the selected internal nnU-Net
    v2 model. In the explicit low-resource scope, localize L3 first and supply
    only an L3-centred z region to the ResEncM tissue model.
-5. Derive the body/trunk measurement support, optional TotalSegmentator
-   landmarks, per-slice measurements, three-bin native vertebral summaries,
-   established case summaries, and QC.
+5. Derive body/trunk measurement support, optional TotalSegmentator task 297
+   rib/iliac landmarks when explicitly enabled, per-slice measurements,
+   three-bin native vertebral summaries, established case summaries, and QC.
 6. Optionally create a one-page report from the already computed scientific
    artifacts.
 7. Validate schemas, inventory every artifact, write the case manifest, and
@@ -33,8 +33,9 @@ observable failed result. Reporting never reruns scientific inference.
 For DICOM input, the service first uses SimpleITK/GDCM to assemble the selected
 series and writes a pixel/geometry-verified temporary NIfTI in the attempt
 workspace. Conversion neither canonicalizes nor repairs orientation. The
-temporary file is not promoted into the result bundle; standalone conversion
-is available through `bodycomposition convert` and `convert_dicom`.
+temporary file is not promoted into the result bundle. `bodycomposition
+convert` and `convert_dicom` can pre-stage either one series or every CT series
+below a cohort directory.
 
 The orientation stage owns orientation. It produces one immutable prepared-image object with
 the image, transform, pixel digest, physical-domain provenance, orientation

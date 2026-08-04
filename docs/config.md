@@ -55,6 +55,10 @@ the authoritative reference.
 | `measurements` | HU-filtered tissue definitions, physical territories, fixed-mm and native-compartment HU signature components, landmarks, QC | canonical schema 3.4 |
 | `reporting` | derived one-page PDF | disabled by default; enabled default `spine_profile_v2`; optional `spine_overview_v1` |
 
+The CLI accepts the short tissue selectors `resencl`, `resencm`, and `boa` and
+records the corresponding stable identifier from the table above. Configuration
+files use the stable identifiers directly.
+
 No backend silently falls back to another. Changing a backend or a scientific
 threshold changes the scientific configuration digest and `analysis_id`.
 
@@ -70,6 +74,21 @@ The standard configuration remains SPINEPS/VERIDAH plus
 uses the ResEncM vertebral-body and tissue models; it cannot be combined with
 another tissue backend. BOA is an explicit alternative for full-CT tissue
 segmentation and never activates implicitly or as a fallback.
+
+Default anthropometry uses the observed minimum trunk circumference across
+T10–L5, the maximum across the sacral territory, and their ratio. These
+measurements do not require a separate landmark model. The anatomical
+rib-to-iliac mid-waist extension is optional and can be enabled explicitly:
+
+```yaml
+measurements:
+  landmarks:
+    enabled: true
+```
+
+Use the same configuration with `models sync`, `doctor`, and `analyze`; task
+297 is then synchronized, verified, and recorded in provenance. The
+`ct_midwaist_*` fields remain unavailable when the extension is not requested.
 
 ### Optional tissue definitions
 

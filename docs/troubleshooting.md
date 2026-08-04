@@ -58,13 +58,21 @@ choose a new run ID. Do not delete a run manifest to force reuse.
 
 ## DICOM input is ambiguous or unreadable
 
-One CT series is selected automatically. If multiple CT series are found, pass
-the intended Series Instance UID with `--series`; never choose by directory
-order or largest slice count. A standalone conversion attempt reports the
-available CT UIDs without writing a partial output:
+`analyze DIRECTORY` treats every recursively discovered CT series as a
+separate case; it never chooses by directory order or largest slice count. Add
+`--series UID` only when one exact series was requested. Likewise, directory-
+output conversion converts every CT series:
 
 ```bash
-bodycomposition convert /path/to/dicom /path/to/ct.nii.gz
+bodycomposition analyze /path/to/cohort
+bodycomposition convert /path/to/cohort /path/to/converted
+```
+
+A single-file conversion can represent only one series. If its input contains
+several CT series, the command reports the available UIDs and requires an
+explicit selection before writing:
+
+```bash
 bodycomposition convert /path/to/dicom /path/to/ct.nii.gz --series UID
 ```
 

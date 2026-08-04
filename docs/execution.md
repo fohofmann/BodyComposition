@@ -4,10 +4,20 @@ Every process runs the same complete case pipeline. The process does not spawn
 GPU workers and does not choose a physical GPU. CUDA visibility is owned by the
 launcher (for example Slurm, a container runtime, or `CUDA_VISIBLE_DEVICES`).
 
+For a simple single-process cohort, point the ordinary command at its
+directory:
+
+```bash
+bodycomposition analyze /input/cohort -o /output
+```
+
+Use the explicit manifest form below when several processes must share a
+reviewed case order and one collision-safe queue.
+
 ## Shared whole-case queue
 
-An ordered batch manifest can be submitted once or started by several identical
-processes:
+An ordered batch manifest can be submitted once or started by several
+identical processes:
 
 ```bash
 bodycomposition batch \
