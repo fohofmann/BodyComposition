@@ -49,7 +49,6 @@ EXPECTED_OUTPUTS = (
     "masks/vertebra_labels.nii.gz",
     "masks/tissue_compartments.nii.gz",
     "masks/tissue_labels.nii.gz",
-    "masks/totalsegmentator_landmarks.nii.gz",
     "masks/body_surface.nii.gz",
     "tables/slices.parquet",
     "tables/vertebrae.parquet",
@@ -376,6 +375,10 @@ def test_canonical_pipeline_on_pinned_public_ct(tmp_path):
     assert inspected.analysis_id == first["analysis_id"]
     manifest_text = inspected.manifest_path.read_text(encoding="utf-8")
     manifest_payload = json.loads(manifest_text)
+    assert not manifest_payload["provenance"]["configuration"]["measurements"][
+        "landmarks"
+    ]["enabled"]
+    assert not (bundle / "masks/totalsegmentator_landmarks.nii.gz").exists()
     assert not _contains_local_path(manifest_payload, public_ct)
     assert not _contains_local_path(manifest_payload, config.model_root)
     assert (
