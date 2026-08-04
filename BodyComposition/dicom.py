@@ -23,6 +23,8 @@ from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_d
 
 CONVERSION_METADATA_SCHEMA_VERSION = "1.0.0"
 CONVERSION_METADATA_TYPE = "bodycomposition-dicom-conversion"
+CONVERSION_BATCH_MANIFEST_NAME = "bodycomposition-batch.json"
+CONVERSION_BATCH_REPORT_NAME = "bodycomposition-conversion.json"
 
 
 class DicomInputError(ValueError):
@@ -58,6 +60,16 @@ class DicomSeriesInfo:
 
 
 @dataclass(frozen=True)
+class DicomSeriesSource:
+    """One locally discovered DICOM series and its containing directory."""
+
+    input_path: Path
+    series_instance_uid: str
+    modality: str
+    instance_count: int
+
+
+@dataclass(frozen=True)
 class DicomConversionResult:
     """Verified result of converting one selected DICOM CT series."""
 
@@ -70,9 +82,14 @@ class DicomConversionResult:
     series_instance_uid: str
     input_summary: Mapping[str, Any]
 
+    @property
+    def case_id(self) -> str:
+        return f"case-{self.input_summary['input_pixel_sha256'][:16]}"
+
     def as_dict(self) -> dict[str, Any]:
         dicom = dict(self.input_summary["dicom"])
         return {
+            "case_id": self.case_id,
             "output_path": self.output_path,
             "output_content_sha256": self.output_content_sha256,
             "output_byte_size": self.output_byte_size,
@@ -86,6 +103,55 @@ class DicomConversionResult:
             "input_pixel_sha256": self.input_summary["input_pixel_sha256"],
             "geometry": dict(self.input_summary["geometry"]),
             "dicom": dicom,
+        }
+
+
+@dataclass(frozen=True)
+class DicomConversionFailure:
+    """Privacy-safe failure for one discovered DICOM series."""
+
+    series_instance_uid_sha256: str
+    code: str
+    summary: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "series_instance_uid_sha256": self.series_instance_uid_sha256,
+            "code": self.code,
+            "summary": self.summary,
+        }
+
+
+@dataclass(frozen=True)
+class DicomConversionBatchResult:
+    """Result of converting every discovered CT series beneath one directory."""
+
+    output_path: Path
+    manifest_path: Path | None
+    report_path: Path
+    conversions: tuple[DicomConversionResult, ...]
+    failures: tuple[DicomConversionFailure, ...]
+    discovered_series_count: int
+
+    @property
+    def succeeded(self) -> bool:
+        return not self.failures and bool(self.conversions)
+
+    @property
+    def execution_status(self) -> str:
+        return "succeeded" if self.succeeded else "failed"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "execution_status": self.execution_status,
+            "output_path": self.output_path,
+            "manifest_path": self.manifest_path,
+            "report_path": self.report_path,
+            "discovered_series_count": self.discovered_series_count,
+            "converted_count": len(self.conversions),
+            "failed_count": len(self.failures),
+            "conversions": [value.as_dict() for value in self.conversions],
+            "failures": [value.as_dict() for value in self.failures],
         }
 
 
@@ -145,7 +211,7 @@ def _candidate_directories(source: Path) -> tuple[Path, ...]:
     return tuple(sorted(directories, key=lambda item: item.as_posix()))
 
 
-def _discover_candidates(source: str | Path) -> tuple[_DicomCandidate, ...]:
+def _scan_candidates(source: str | Path) -> tuple[_DicomCandidate, ...]:
     path = Path(source)
     if not path.exists():
         raise FileNotFoundError(f"Input CT not found: {path}.")
@@ -189,15 +255,34 @@ def _discover_candidates(source: str | Path) -> tuple[_DicomCandidate, ...]:
                 )
             by_uid[uid] = candidate
 
-    if not by_uid:
-        raise DicomInputError("No readable DICOM series was found at the input path.")
     return tuple(by_uid[key] for key in sorted(by_uid))
+
+
+def _discover_candidates(source: str | Path) -> tuple[_DicomCandidate, ...]:
+    candidates = _scan_candidates(source)
+    if not candidates:
+        raise DicomInputError("No readable DICOM series was found at the input path.")
+    return candidates
 
 
 def discover_dicom_series(source: str | Path) -> tuple[DicomSeriesInfo, ...]:
     """List DICOM series without returning patient, study, or path metadata."""
 
     return tuple(candidate.info for candidate in _discover_candidates(source))
+
+
+def discover_dicom_series_sources(source: str | Path) -> tuple[DicomSeriesSource, ...]:
+    """Return deterministic local sources for recursively discovered series."""
+
+    return tuple(
+        DicomSeriesSource(
+            input_path=candidate.files[0].parent,
+            series_instance_uid=candidate.info.series_instance_uid,
+            modality=candidate.info.modality,
+            instance_count=candidate.info.instance_count,
+        )
+        for candidate in _scan_candidates(source)
+    )
 
 
 def _select_candidate(
@@ -476,6 +561,12 @@ def _conversion_metadata_path(path: Path) -> Path:
     return path.with_name(f"{path.name[: -len(suffix)]}.bodycomposition.json")
 
 
+def conversion_metadata_path(path: str | Path) -> Path:
+    """Return the adjacent BodyComposition sidecar path for one NIfTI file."""
+
+    return _conversion_metadata_path(Path(path))
+
+
 def _conversion_metadata_payload(
     *,
     input_summary: Mapping[str, Any],
@@ -550,22 +641,14 @@ def enrich_nifti_summary_from_conversion_metadata(
     return summary
 
 
-def convert_dicom(
-    source: str | Path,
-    output_path: str | Path,
+def _write_conversion(
+    image: sitk.Image,
+    input_summary: Mapping[str, Any],
+    selected_uid: str,
+    destination: Path,
     *,
-    series_uid: str | None = None,
-    overwrite: bool = False,
+    overwrite: bool,
 ) -> DicomConversionResult:
-    """Convert one selected DICOM CT series to a verified NIfTI file.
-
-    Conversion preserves the SimpleITK/GDCM physical domain and does not
-    reorient the image. DICOM patient and study metadata are not copied into
-    the NIfTI output. A hash-bound JSON sidecar retains privacy-safe technical
-    provenance for automatic downstream use.
-    """
-
-    destination = Path(output_path)
     suffix = _nifti_suffix(destination)
     metadata_destination = _conversion_metadata_path(destination)
     if destination.exists() and not overwrite:
@@ -579,10 +662,6 @@ def convert_dicom(
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    image, input_summary, selected_uid = dicom_image_summary(
-        source,
-        series_uid=series_uid,
-    )
     for key in image.GetMetaDataKeys():
         image.EraseMetaData(key)
 
@@ -635,14 +714,284 @@ def convert_dicom(
     )
 
 
+def _existing_conversion(
+    destination: Path,
+    input_summary: Mapping[str, Any],
+    selected_uid: str,
+) -> DicomConversionResult:
+    metadata_path = _conversion_metadata_path(destination)
+    if not destination.is_file() or not metadata_path.is_file():
+        raise FileExistsError(
+            f"Conversion output is incomplete at {destination}; use overwrite=True to replace it."
+        )
+    image = sitk.ReadImage(str(destination))
+    summary = {
+        "source_reference": "content-addressed-local-input",
+        "source_content_sha256": file_sha256(destination),
+        "source_byte_size": destination.stat().st_size,
+        "input_pixel_sha256": image_pixel_sha256(image),
+        "input_format": "nifti",
+        "geometry": _geometry_summary(image),
+    }
+    enriched = enrich_nifti_summary_from_conversion_metadata(destination, summary)
+    if (
+        enriched.get("prestage", {}).get("source_content_sha256")
+        != input_summary["source_content_sha256"]
+        or enriched["input_pixel_sha256"] != input_summary["input_pixel_sha256"]
+    ):
+        raise FileExistsError(
+            f"Conversion output belongs to another CT at {destination}; "
+            "use overwrite=True to replace it."
+        )
+    return DicomConversionResult(
+        output_path=destination,
+        output_content_sha256=str(summary["source_content_sha256"]),
+        output_byte_size=destination.stat().st_size,
+        metadata_path=metadata_path,
+        metadata_content_sha256=file_sha256(metadata_path),
+        metadata_byte_size=metadata_path.stat().st_size,
+        series_instance_uid=selected_uid,
+        input_summary=input_summary,
+    )
+
+
+def _write_generated_json(
+    payload: Mapping[str, Any],
+    destination: Path,
+    *,
+    overwrite: bool,
+) -> Path:
+    text = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    if destination.is_file():
+        if destination.read_text(encoding="utf-8") == text:
+            return destination
+        if not overwrite:
+            raise FileExistsError(
+                f"Generated conversion manifest already exists at {destination}; "
+                "use overwrite=True to replace it."
+            )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.partial")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
+def _series_uid_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("ascii", errors="strict")).hexdigest()
+
+
+def _conversion_failure(source: DicomSeriesSource, error: Exception) -> DicomConversionFailure:
+    return DicomConversionFailure(
+        series_instance_uid_sha256=_series_uid_sha256(source.series_instance_uid),
+        code=type(error).__name__,
+        summary=str(
+            getattr(
+                error,
+                "public_summary",
+                "The selected DICOM CT series could not be converted.",
+            )
+        ),
+    )
+
+
+def _select_sources(
+    source: str | Path,
+    *,
+    series_uid: str | None,
+) -> tuple[DicomSeriesSource, ...]:
+    sources = tuple(
+        item for item in discover_dicom_series_sources(source) if item.modality == "CT"
+    )
+    if series_uid is not None:
+        requested = series_uid.strip()
+        if not requested:
+            raise DicomSeriesSelectionError("The requested Series Instance UID is empty.")
+        selected = tuple(item for item in sources if item.series_instance_uid == requested)
+        if not selected:
+            available = ", ".join(item.series_instance_uid for item in sources)
+            raise DicomSeriesSelectionError(
+                f"Series Instance UID {requested!r} was not found. Available CT series: "
+                f"{available or 'none'}."
+            )
+        return selected
+    if not sources:
+        raise DicomSeriesSelectionError("No CT series was found at the input path.")
+    return sources
+
+
+def _convert_dicom_directory(
+    source: str | Path,
+    destination: Path,
+    *,
+    series_uid: str | None,
+    overwrite: bool,
+) -> DicomConversionBatchResult:
+    if destination.exists() and not destination.is_dir():
+        raise ValueError("A multi-series conversion output must be a directory.")
+    destination.mkdir(parents=True, exist_ok=True)
+    sources = _select_sources(source, series_uid=series_uid)
+    conversions: list[DicomConversionResult] = []
+    failures: list[DicomConversionFailure] = []
+    seen_case_ids: set[str] = set()
+
+    for discovered in sources:
+        try:
+            image, input_summary, selected_uid = dicom_image_summary(
+                discovered.input_path,
+                series_uid=discovered.series_instance_uid,
+            )
+            case_id = f"case-{input_summary['input_pixel_sha256'][:16]}"
+            if case_id in seen_case_ids:
+                raise DicomInputError(
+                    "Two discovered CT series resolve to the same content-based case ID."
+                )
+            seen_case_ids.add(case_id)
+            output = destination / f"{case_id}.nii.gz"
+            conversion = (
+                _write_conversion(
+                    image,
+                    input_summary,
+                    selected_uid,
+                    output,
+                    overwrite=overwrite,
+                )
+                if overwrite or not output.exists()
+                else _existing_conversion(output, input_summary, selected_uid)
+            )
+            conversions.append(conversion)
+        except Exception as error:
+            failures.append(_conversion_failure(discovered, error))
+
+    manifest_path: Path | None = None
+    if conversions:
+        manifest_payload = {
+            "schema_version": "1.0.0",
+            "cases": [
+                {
+                    "case_id": value.case_id,
+                    "input_path": value.output_path.relative_to(destination).as_posix(),
+                }
+                for value in conversions
+            ],
+        }
+        validate_payload(manifest_payload, "batch_input.schema.json")
+        manifest_path = _write_generated_json(
+            manifest_payload,
+            destination / CONVERSION_BATCH_MANIFEST_NAME,
+            overwrite=overwrite,
+        )
+
+    report_payload = {
+        "schema_version": "1.0.0",
+        "report_type": "bodycomposition-dicom-conversion-batch",
+        "execution_status": "succeeded" if not failures and conversions else "failed",
+        "discovered_series_count": len(sources),
+        "converted_count": len(conversions),
+        "failed_count": len(failures),
+        "analysis_manifest": manifest_path.name if manifest_path is not None else None,
+        "cases": [
+            {
+                "case_id": value.case_id,
+                "status": "converted",
+                "series_instance_uid_sha256": value.input_summary["dicom"][
+                    "series_instance_uid_sha256"
+                ],
+                "nifti": value.output_path.relative_to(destination).as_posix(),
+                "metadata": value.metadata_path.relative_to(destination).as_posix(),
+                "failure": None,
+            }
+            for value in conversions
+        ]
+        + [
+            {
+                "case_id": None,
+                "status": "failed",
+                "series_instance_uid_sha256": value.series_instance_uid_sha256,
+                "nifti": None,
+                "metadata": None,
+                "failure": {"code": value.code, "summary": value.summary},
+            }
+            for value in failures
+        ],
+    }
+    validate_payload(report_payload, "dicom_conversion_batch.schema.json")
+    report_path = _write_generated_json(
+        report_payload,
+        destination / CONVERSION_BATCH_REPORT_NAME,
+        overwrite=overwrite,
+    )
+    return DicomConversionBatchResult(
+        output_path=destination,
+        manifest_path=manifest_path,
+        report_path=report_path,
+        conversions=tuple(conversions),
+        failures=tuple(failures),
+        discovered_series_count=len(sources),
+    )
+
+
+def convert_dicom(
+    source: str | Path,
+    output_path: str | Path,
+    *,
+    series_uid: str | None = None,
+    overwrite: bool = False,
+) -> DicomConversionResult | DicomConversionBatchResult:
+    """Convert one selected series or every CT series beneath a directory.
+
+    A NIfTI output path requests one series. A directory output converts every
+    discovered CT series and writes a ready-to-analyze batch manifest. Physical
+    orientation is preserved, patient/study metadata are omitted, and each
+    NIfTI receives a hash-bound technical sidecar.
+    """
+
+    destination = Path(output_path)
+    try:
+        _nifti_suffix(destination)
+    except ValueError:
+        if destination.exists() and not destination.is_dir():
+            raise
+        if not destination.exists() and destination.suffix:
+            raise
+        return _convert_dicom_directory(
+            source,
+            destination,
+            series_uid=series_uid,
+            overwrite=overwrite,
+        )
+
+    image, input_summary, selected_uid = dicom_image_summary(
+        source,
+        series_uid=series_uid,
+    )
+    return _write_conversion(
+        image,
+        input_summary,
+        selected_uid,
+        destination,
+        overwrite=overwrite,
+    )
+
+
 __all__ = [
+    "CONVERSION_BATCH_MANIFEST_NAME",
+    "CONVERSION_BATCH_REPORT_NAME",
+    "DicomConversionBatchResult",
+    "DicomConversionFailure",
     "DicomConversionResult",
     "DicomConversionMetadataError",
     "DicomInputError",
     "DicomSeriesInfo",
+    "DicomSeriesSource",
     "DicomSeriesSelectionError",
     "convert_dicom",
+    "conversion_metadata_path",
     "dicom_image_summary",
     "discover_dicom_series",
+    "discover_dicom_series_sources",
     "enrich_nifti_summary_from_conversion_metadata",
 ]

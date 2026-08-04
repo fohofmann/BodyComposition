@@ -338,7 +338,7 @@ def test_default_and_low_resource_model_choices_remain_fixed():
 
 def test_boa_is_selectable_from_cli_and_builds_the_boa_action():
     args = cli.build_parser().parse_args(
-        ["analyze", "CT.nii.gz", "--tissue-backend", BOA_BACKEND_ID]
+        ["analyze", "CT.nii.gz", "--tissue-backend", "boa"]
     )
     config = cli._config(args)
     pipeline = SimpleNamespace(
@@ -370,7 +370,7 @@ def test_boa_is_selectable_from_the_simple_python_api(monkeypatch):
 
     result = service_module.analyze_case(
         "CT.nii.gz",
-        tissue_backend=BOA_BACKEND_ID,
+        tissue_backend="boa",
     )
 
     assert result is expected
@@ -384,7 +384,7 @@ def test_low_resource_rejects_a_conflicting_tissue_backend_shortcut():
             "CT.nii.gz",
             "--low-resource",
             "--tissue-backend",
-            BOA_BACKEND_ID,
+            "boa",
         ]
     )
     with pytest.raises(ValueError, match="fixed ResEncM tissue backend"):

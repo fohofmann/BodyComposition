@@ -14,6 +14,7 @@ from BodyComposition.config import ConfigError, PipelineConfig
 from BodyComposition.model_manager import ModelAssetError, ModelStatus
 from BodyComposition.results import ExecutionStatus
 from BodyComposition.service import DirtySourceError
+from BodyComposition.tissue_backends.boa import BOA_BACKEND_ID
 
 
 def _status(tmp_path: Path, *, ready: bool = True) -> ModelStatus:
@@ -129,9 +130,21 @@ def test_model_cli_lists_verifies_and_synchronizes_selected_assets(
     assert cli.main(["models", "verify", "--json"]) == cli.EXIT_ENVIRONMENT
     assert not json.loads(capsys.readouterr().out)["ready"]
 
-    monkeypatch.setattr(cli, "sync_models", lambda *_args: (ready,))
-    assert cli.main(["models", "sync", "--json"]) == cli.EXIT_OK
+    synchronized = []
+
+    def sync(config, selected):
+        synchronized.append((config.tissue_backend, selected))
+        return (ready,)
+
+    monkeypatch.setattr(cli, "sync_models", sync)
+    assert (
+        cli.main(
+            ["models", "sync", "--tissue-backend", "boa", "--json"]
+        )
+        == cli.EXIT_OK
+    )
     assert json.loads(capsys.readouterr().out)["ready"]
+    assert synchronized == [(BOA_BACKEND_ID, None)]
 
 
 def test_config_cli_roundtrips_default_yaml(capsys, tmp_path):

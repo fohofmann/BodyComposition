@@ -28,7 +28,7 @@ from BodyComposition.model_manager import (
 )
 from BodyComposition.provenance import package_lock_digest
 from BodyComposition.reporting.contracts import CaseReportResult
-from BodyComposition.results import CaseResult, ExecutionStatus, QCStatus
+from BodyComposition.results import BatchResult, CaseResult, ExecutionStatus, QCStatus
 from BodyComposition.schema_validation import SchemaValidationError
 from BodyComposition.service import (
     CaseInput,
@@ -301,7 +301,6 @@ def test_model_inventory_and_required_defaults_are_explicit():
         "ctdeeprot_2d_v1",
         "spineps_veridah_ct_v1",
         "bodycomposition_resenc_l_v1",
-        "totalsegmentator_total_task297_landmarks_v1",
     )
 
 
@@ -785,6 +784,62 @@ def test_batch_manifest_is_explicit_ordered_and_strict(tmp_path):
     assert cases[1].series_uid == "1.2.826.0.1.3680043.10.999.1"
 
 
+def test_service_analyze_dispatches_a_generated_directory_manifest(tmp_path, monkeypatch):
+    converted = tmp_path / "converted"
+    converted.mkdir()
+    (converted / "bodycomposition-batch.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "cases": [
+                    {"case_id": "case-a", "input_path": "a.nii.gz"},
+                    {"case_id": "case-b", "input_path": "b.nii.gz"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    service = PipelineService(
+        _config(),
+        model_provider=lambda _config: (),
+        source_provider=lambda: SOURCE_CLEAN,
+    )
+    captured = {}
+
+    def fake_batch(inputs, output_root, *, run_id=None, worker_mode=False):
+        cases = tuple(CaseInput.model_validate(value) for value in inputs)
+        captured.update(cases=cases, output=output_root, run_id=run_id)
+        results = tuple(
+            CaseResult(
+                case_id=str(case.case_id),
+                run_id="run-auto",
+                analysis_id=str(index) * 64,
+                attempt_id=f"attempt-{index}",
+                execution_status=ExecutionStatus.SUCCEEDED,
+                qc_status=QCStatus.PASS,
+                output_path=tmp_path / str(case.case_id),
+                manifest_path=tmp_path / str(case.case_id) / "case_manifest.json",
+            )
+            for index, case in enumerate(cases, start=1)
+        )
+        return BatchResult(
+            run_id="run-auto",
+            output_path=tmp_path / "run",
+            manifest_path=tmp_path / "run/run_manifest.json",
+            cases=results,
+        )
+
+    monkeypatch.setattr(service, "analyze_batch", fake_batch)
+
+    result = service.analyze(converted, tmp_path / "output")
+
+    assert isinstance(result, BatchResult)
+    assert [case.case_id for case in captured["cases"]] == ["case-a", "case-b"]
+    assert captured["output"] == tmp_path / "output"
+    with pytest.raises(service_module.InputDiscoveryError, match="--case-id"):
+        service.analyze(converted, case_id="one-name")
+
+
 def test_cli_analyze_is_a_thin_json_adapter(monkeypatch, capsys, tmp_path):
     expected = CaseResult(
         case_id="case-1",
@@ -802,7 +857,7 @@ def test_cli_analyze_is_a_thin_json_adapter(monkeypatch, capsys, tmp_path):
         def __init__(self, config):
             calls["config"] = config
 
-        def analyze_case(self, input_path, output_root, **kwargs):
+        def analyze(self, input_path, output_root, **kwargs):
             calls.update({"input": input_path, "output": output_root, **kwargs})
             return expected
 
@@ -927,6 +982,33 @@ def test_python_convenience_api_needs_only_an_input(monkeypatch):
     assert calls == {
         "config": None,
         "input": "scan.nii.gz",
+        "output": service_module.DEFAULT_OUTPUT_ROOT,
+        "case_id": None,
+        "run_id": None,
+        "series_uid": None,
+    }
+
+
+def test_python_auto_analyze_api_dispatches_through_the_shared_service(monkeypatch):
+    expected = object()
+    calls = {}
+
+    class ServiceStub:
+        def __init__(self, config=None):
+            calls["config"] = config
+
+        def analyze(self, input_path, output_root, **kwargs):
+            calls.update({"input": input_path, "output": output_root, **kwargs})
+            return expected
+
+    monkeypatch.setattr(service_module, "PipelineService", ServiceStub)
+
+    result = service_module.analyze("inputs")
+
+    assert result is expected
+    assert calls == {
+        "config": None,
+        "input": "inputs",
         "output": service_module.DEFAULT_OUTPUT_ROOT,
         "case_id": None,
         "run_id": None,

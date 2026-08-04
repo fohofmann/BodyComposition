@@ -22,8 +22,20 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from BodyComposition.config import ConfigError, PipelineConfig, low_resource_config
-from BodyComposition.dicom import convert_dicom, dicom_report_patient_metadata
+from BodyComposition.config import (
+    ConfigError,
+    PipelineConfig,
+    low_resource_config,
+    resolve_tissue_backend,
+)
+from BodyComposition.dicom import (
+    CONVERSION_BATCH_MANIFEST_NAME,
+    DicomConversionResult,
+    conversion_metadata_path,
+    convert_dicom,
+    dicom_report_patient_metadata,
+    discover_dicom_series_sources,
+)
 from BodyComposition.execution import (
     CaseLease,
     ClaimLostError,
@@ -76,6 +88,12 @@ class ExistingRunError(RuntimeError):
 
 class InputChangedError(RuntimeError):
     """Raised when an input changes between preflight and execution."""
+
+
+class InputDiscoveryError(ValueError):
+    """Raised when a directory cannot be mapped safely to CT cases."""
+
+    public_summary = "The input directory could not be mapped safely to CT cases."
 
 
 def _validate_series_uid(value: str | None) -> str | None:
@@ -745,6 +763,123 @@ def load_batch_manifest(path: str | Path) -> tuple[CaseInput, ...]:
     return tuple(result)
 
 
+def _is_nifti_path(path: Path) -> bool:
+    lowered = path.name.lower()
+    return path.is_file() and (lowered.endswith(".nii") or lowered.endswith(".nii.gz"))
+
+
+def _directory_nifti_paths(root: Path) -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            (
+                path
+                for path in root.rglob("*")
+                if _is_nifti_path(path)
+                and not any(part.startswith(".") for part in path.relative_to(root).parts)
+            ),
+            key=lambda path: path.relative_to(root).as_posix(),
+        )
+    )
+
+
+def _auto_manifest_inputs(root: Path, manifest: Path) -> tuple[CaseInput, ...]:
+    cases = load_batch_manifest(manifest)
+    resolved_root = root.resolve()
+    for case in cases:
+        try:
+            case.input_path.resolve().relative_to(resolved_root)
+        except ValueError as error:
+            raise InputDiscoveryError(
+                f"Automatically discovered {CONVERSION_BATCH_MANIFEST_NAME} references "
+                "an input outside its directory."
+            ) from error
+    return cases
+
+
+def discover_case_inputs(
+    input_path: str | Path,
+    *,
+    series_uid: str | None = None,
+) -> tuple[CaseInput, ...]:
+    """Map one file or directory to deterministic CT case inputs.
+
+    Files remain single-case inputs. Directories prefer a conversion-generated
+    batch manifest, otherwise accept verified conversion sidecars or recursively
+    discovered DICOM CT series. Multiple arbitrary NIfTI files are rejected so
+    segmentation masks cannot be mistaken for source CTs.
+    """
+
+    source = Path(input_path)
+    if not source.exists():
+        raise FileNotFoundError(f"Input CT not found: {source}.")
+    if source.is_file():
+        if series_uid is not None and _is_nifti_path(source):
+            raise InputDiscoveryError(
+                "A DICOM Series Instance UID cannot be used with a NIfTI input."
+            )
+        return (CaseInput(source, series_uid=series_uid),)
+    if not source.is_dir():
+        raise InputDiscoveryError("The analysis input must be a file or directory.")
+
+    generated_manifest = source / CONVERSION_BATCH_MANIFEST_NAME
+    if generated_manifest.is_file():
+        if series_uid is not None:
+            raise InputDiscoveryError(
+                "--series cannot be combined with a converted cohort manifest."
+            )
+        return _auto_manifest_inputs(source, generated_manifest)
+
+    nifti_paths = _directory_nifti_paths(source)
+    dicom_sources = tuple(
+        item
+        for item in discover_dicom_series_sources(source)
+        if item.modality == "CT"
+    )
+    if nifti_paths and dicom_sources:
+        raise InputDiscoveryError(
+            "The input directory contains both NIfTI files and DICOM CT series. "
+            "Point analyze at one collection or use an explicit batch manifest."
+        )
+    if nifti_paths:
+        if series_uid is not None:
+            raise InputDiscoveryError(
+                "A DICOM Series Instance UID cannot be used with NIfTI inputs."
+            )
+        staged = tuple(
+            path for path in nifti_paths if conversion_metadata_path(path).is_file()
+        )
+        if len(nifti_paths) == 1:
+            return (CaseInput(nifti_paths[0]),)
+        if len(staged) != len(nifti_paths):
+            raise InputDiscoveryError(
+                "Multiple NIfTI files were found, but not every file has a matching "
+                "BodyComposition conversion sidecar. Point analyze at one CT or use "
+                "an explicit batch manifest so masks cannot be mistaken for inputs."
+            )
+        return tuple(CaseInput(path) for path in staged)
+
+    selected_uid = _validate_series_uid(series_uid)
+    if selected_uid is not None:
+        selected = tuple(
+            item for item in dicom_sources if item.series_instance_uid == selected_uid
+        )
+        if not selected:
+            available = ", ".join(item.series_instance_uid for item in dicom_sources)
+            raise InputDiscoveryError(
+                f"Series Instance UID {selected_uid!r} was not found. Available CT "
+                f"series: {available or 'none'}."
+            )
+        dicom_sources = selected
+    if not dicom_sources:
+        raise InputDiscoveryError(
+            "No NIfTI CT, converted NIfTI/sidecar pair, or DICOM CT series was found."
+        )
+    return tuple(
+        CaseInput(item.input_path, series_uid=item.series_instance_uid)
+        for item in dicom_sources
+    )
+
+
 class PipelineService:
     """The only supported orchestration implementation for API and CLI calls."""
 
@@ -793,6 +928,38 @@ class PipelineService:
                 timestamp=int(datetime.now(UTC).timestamp()),
             )
         return self._pipeline
+
+    def analyze(
+        self,
+        input_path: str | Path,
+        output_root: str | Path = DEFAULT_OUTPUT_ROOT,
+        *,
+        case_id: str | None = None,
+        run_id: str | None = None,
+        series_uid: str | None = None,
+    ) -> CaseResult | BatchResult:
+        """Analyze one CT or every safely discovered case in a directory."""
+
+        cases = discover_case_inputs(input_path, series_uid=series_uid)
+        if case_id is not None:
+            if len(cases) != 1:
+                raise InputDiscoveryError(
+                    "--case-id can be used only when analyze resolves exactly one CT. "
+                    "Use an explicit batch manifest to name multiple cases."
+                )
+            selected = cases[0]
+            cases = (
+                CaseInput(
+                    selected.input_path,
+                    case_id=case_id,
+                    series_uid=selected.series_uid,
+                ),
+            )
+        result = cast(
+            BatchResult,
+            self.analyze_batch(cases, output_root, run_id=run_id),
+        )
+        return result.cases[0] if len(cases) == 1 else result
 
     def analyze_case(
         self,
@@ -2018,6 +2185,10 @@ class PipelineService:
                     analysis_input,
                     series_uid=case.series_uid,
                 )
+                if not isinstance(conversion, DicomConversionResult):
+                    raise RuntimeError(
+                        "Internal DICOM staging unexpectedly returned a cohort result."
+                    )
                 if canonical_digest(conversion.input_summary) != canonical_digest(input_summary):
                     raise InputChangedError(
                         "The selected DICOM series changed after preflight; rerun the analysis."
@@ -2606,24 +2777,14 @@ def export_result_csv(
     )
 
 
-def analyze_case(
-    input_path: str | Path,
-    output_root: str | Path = DEFAULT_OUTPUT_ROOT,
+def _analysis_config(
+    config: PipelineConfig | Mapping[str, Any] | str | Path | None,
     *,
-    config: PipelineConfig | Mapping[str, Any] | str | Path | None = None,
-    case_id: str | None = None,
-    run_id: str | None = None,
-    series_uid: str | None = None,
-    low_resource: bool = False,
-    tissue_backend: str | None = None,
-) -> CaseResult:
-    """Analyze one NIfTI or DICOM CT using release defaults.
-
-    Only ``input_path`` is required. Results are written below
-    :data:`DEFAULT_OUTPUT_ROOT` unless ``output_root`` is provided. A DICOM
-    directory containing multiple CT series also requires ``series_uid``.
-    """
-
+    low_resource: bool,
+    tissue_backend: str | None,
+) -> PipelineConfig | Mapping[str, Any] | str | Path | None:
+    if tissue_backend is not None:
+        tissue_backend = resolve_tissue_backend(tissue_backend)
     selected_config = (
         low_resource_config(
             PipelineConfig.load(config)
@@ -2647,6 +2808,54 @@ def analyze_case(
         value = resolved.normalized()
         value["tissue"]["backend"] = tissue_backend
         selected_config = PipelineConfig.model_validate(value)
+    return selected_config
+
+
+def analyze(
+    input_path: str | Path,
+    output_root: str | Path = DEFAULT_OUTPUT_ROOT,
+    *,
+    config: PipelineConfig | Mapping[str, Any] | str | Path | None = None,
+    case_id: str | None = None,
+    run_id: str | None = None,
+    series_uid: str | None = None,
+    low_resource: bool = False,
+    tissue_backend: str | None = None,
+) -> CaseResult | BatchResult:
+    """Analyze one CT file or every safely discovered CT in a directory."""
+
+    selected_config = _analysis_config(
+        config,
+        low_resource=low_resource,
+        tissue_backend=tissue_backend,
+    )
+    return PipelineService(selected_config).analyze(
+        input_path,
+        output_root,
+        case_id=case_id,
+        run_id=run_id,
+        series_uid=series_uid,
+    )
+
+
+def analyze_case(
+    input_path: str | Path,
+    output_root: str | Path = DEFAULT_OUTPUT_ROOT,
+    *,
+    config: PipelineConfig | Mapping[str, Any] | str | Path | None = None,
+    case_id: str | None = None,
+    run_id: str | None = None,
+    series_uid: str | None = None,
+    low_resource: bool = False,
+    tissue_backend: str | None = None,
+) -> CaseResult:
+    """Analyze exactly one NIfTI or selected DICOM CT using release defaults."""
+
+    selected_config = _analysis_config(
+        config,
+        low_resource=low_resource,
+        tissue_backend=tissue_backend,
+    )
     return PipelineService(selected_config).analyze_case(
         input_path,
         output_root,
@@ -2667,29 +2876,11 @@ def analyze_batch(
 ) -> BatchResult:
     """Analyze an ordered collection using the same defaults as :func:`analyze_case`."""
 
-    selected_config = (
-        low_resource_config(
-            PipelineConfig.load(config)
-            if isinstance(config, (str, Path))
-            else config
-        )
-        if low_resource
-        else config
+    selected_config = _analysis_config(
+        config,
+        low_resource=low_resource,
+        tissue_backend=tissue_backend,
     )
-    if low_resource and tissue_backend not in {None, "bodycomposition_resenc_m_v1"}:
-        raise ConfigError(
-            "low_resource=True has a fixed ResEncM tissue backend and cannot be "
-            "combined with another tissue_backend."
-        )
-    if tissue_backend is not None and not low_resource:
-        resolved = (
-            PipelineConfig.load(selected_config)
-            if isinstance(selected_config, (str, Path))
-            else PipelineConfig.model_validate(selected_config)
-        )
-        value = resolved.normalized()
-        value["tissue"]["backend"] = tissue_backend
-        selected_config = PipelineConfig.model_validate(value)
     return cast(
         BatchResult,
         PipelineService(selected_config).analyze_batch(

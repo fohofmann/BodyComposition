@@ -68,6 +68,19 @@ TISSUE_BACKEND_IDS = (
     BOA_BACKEND_ID,
 )
 
+TISSUE_BACKEND_ALIASES = {
+    "resencl": "bodycomposition_resenc_l_v1",
+    "resencm": "bodycomposition_resenc_m_v1",
+    "boa": BOA_BACKEND_ID,
+}
+
+
+def resolve_tissue_backend(value: str) -> str:
+    """Resolve a short public selector to its provenance-stable backend ID."""
+
+    candidate = value.strip()
+    return TISSUE_BACKEND_ALIASES.get(candidate.lower(), candidate)
+
 # ``tissue_labels`` contains only the default HU-filtered body-composition
 # tissues. Native bone, heart, and lung predictions remain available in the
 # immutable compartment artifact.
@@ -181,7 +194,7 @@ def _default_mapping() -> dict[str, Any]:
             "tissue_profile_id": CONSENSUS_TISSUE_PROFILE_ID,
             "tissue_definitions": copy.deepcopy(CANONICAL_TISSUE_DEFINITIONS),
             "landmarks": {
-                "enabled": True,
+                "enabled": False,
                 "backend": "totalsegmentator_total_task297_landmarks_v1",
                 "minimum_voxels": 20,
                 "maximum_side_disagreement_mm": 30.0,

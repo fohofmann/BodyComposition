@@ -22,8 +22,9 @@ from BodyComposition.config import (
     ConfigError,
     PipelineConfig,
     low_resource_config,
+    resolve_tissue_backend,
 )
-from BodyComposition.dicom import convert_dicom
+from BodyComposition.dicom import DicomConversionBatchResult, convert_dicom
 from BodyComposition.model_manager import (
     MODEL_IDS,
     ModelAssetError,
@@ -98,6 +99,15 @@ def _machine_readable_stdout(enabled: bool) -> Iterator[None]:
         _JSON_OUTPUT_STREAM.reset(token)
 
 
+def _tissue_backend_argument(value: str) -> str:
+    backend = resolve_tissue_backend(value)
+    if backend not in TISSUE_BACKEND_IDS:
+        raise argparse.ArgumentTypeError(
+            "tissue backend must be boa, resencl, or resencm"
+        )
+    return backend
+
+
 def _config(args: argparse.Namespace) -> PipelineConfig:
     config = PipelineConfig.load(getattr(args, "config", None))
     low_resource = getattr(args, "low_resource", False)
@@ -141,7 +151,7 @@ def _report_result(value: Any) -> dict[str, Any]:
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
-    result = PipelineService(_config(args)).analyze_case(
+    result = PipelineService(_config(args)).analyze(
         args.input,
         args.output,
         case_id=args.case_id,
@@ -153,7 +163,12 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         json_output=args.json,
         human=f"{result.execution_status.value}: {result.manifest_path}",
     )
-    return EXIT_OK if result.succeeded else EXIT_EXECUTION
+    return (
+        EXIT_OK
+        if result.execution_status
+        in {ExecutionStatus.SUCCEEDED, ExecutionStatus.SKIPPED_IDENTICAL}
+        else EXIT_EXECUTION
+    )
 
 
 def _cmd_convert(args: argparse.Namespace) -> int:
@@ -163,6 +178,15 @@ def _cmd_convert(args: argparse.Namespace) -> int:
         series_uid=args.series_uid,
         overwrite=args.overwrite,
     )
+    if isinstance(result, DicomConversionBatchResult):
+        human = (
+            f"{result.execution_status}: converted {len(result.conversions)} of "
+            f"{result.discovered_series_count} CT series to {result.output_path}\n"
+            f"analysis manifest: {result.manifest_path}\n"
+            f"conversion report: {result.report_path}"
+        )
+        _emit(result.as_dict(), json_output=args.json, human=human)
+        return EXIT_OK if result.succeeded else EXIT_EXECUTION
     _emit(
         result.as_dict(),
         json_output=args.json,
@@ -498,8 +522,9 @@ def _config_flags(
     if tissue_backend:
         parser.add_argument(
             "--tissue-backend",
-            choices=TISSUE_BACKEND_IDS,
-            help="override the anatomical-compartment segmentation backend",
+            metavar="BACKEND",
+            type=_tissue_backend_argument,
+            help="select boa, resencl, or resencm (default: resencl)",
         )
     if csv_output:
         parser.add_argument(
@@ -532,10 +557,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     analyze = commands.add_parser(
         "analyze",
-        help="analyze one NIfTI or DICOM CT",
-        description="Run the complete validated pipeline for one 3-D NIfTI or DICOM CT.",
+        help="analyze one CT or a directory of cases",
+        description=(
+            "Run the validated pipeline for one NIfTI/DICOM CT or every safely "
+            "discovered case in a directory."
+        ),
     )
-    analyze.add_argument("input", metavar="CT", type=Path, help="NIfTI file or DICOM path")
+    analyze.add_argument(
+        "input",
+        metavar="INPUT",
+        type=Path,
+        help="NIfTI/DICOM CT, converted cohort, or DICOM cohort directory",
+    )
     analyze.add_argument(
         "-o",
         "--output",
@@ -543,12 +576,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help=f"result root (default: {DEFAULT_OUTPUT_ROOT})",
     )
-    analyze.add_argument("--case-id", help="optional pseudonymous case identifier")
+    analyze.add_argument(
+        "--case-id",
+        help="optional pseudonymous identifier when INPUT resolves to one CT",
+    )
     analyze.add_argument("--run-id", help="optional stable run identifier")
     analyze.add_argument(
         "--series",
         dest="series_uid",
-        help="DICOM Series Instance UID; required only when multiple CT series are present",
+        help="analyze only this DICOM Series Instance UID",
     )
     _config_flags(
         analyze,
@@ -562,20 +598,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     convert = commands.add_parser(
         "convert",
-        help="convert one DICOM CT series to NIfTI",
+        help="convert one DICOM CT or a directory of series",
         description=(
-            "Convert one DICOM CT series without changing its physical orientation. "
-            "An adjacent .bodycomposition.json sidecar preserves privacy-safe technical "
-            "metadata for automatic use by analyze. One CT series is selected automatically; "
-            "ambiguous inputs require --series."
+            "Convert one DICOM CT to a NIfTI file, or recursively convert every CT "
+            "series to an output directory. Cohort conversion writes adjacent technical "
+            "sidecars and a manifest that analyze discovers automatically."
         ),
     )
     convert.add_argument("input", metavar="DICOM", type=Path, help="DICOM file or directory")
-    convert.add_argument("output", metavar="NIFTI", type=Path, help="output .nii or .nii.gz")
+    convert.add_argument(
+        "output",
+        metavar="OUTPUT",
+        type=Path,
+        help="output .nii/.nii.gz for one series, or directory for all discovered series",
+    )
     convert.add_argument(
         "--series",
         dest="series_uid",
-        help="DICOM Series Instance UID; required only when multiple CT series are present",
+        help="convert only this DICOM Series Instance UID",
     )
     convert.add_argument(
         "--overwrite",
@@ -585,7 +625,10 @@ def build_parser() -> argparse.ArgumentParser:
     _leaf_json(convert)
     convert.set_defaults(handler=_cmd_convert)
 
-    batch = commands.add_parser("batch", help="analyze an ordered input manifest")
+    batch = commands.add_parser(
+        "batch",
+        help="advanced: analyze an explicit ordered manifest",
+    )
     batch.add_argument("manifest", metavar="MANIFEST", type=Path)
     batch.add_argument(
         "-o",
@@ -620,7 +663,7 @@ def build_parser() -> argparse.ArgumentParser:
     model_list.set_defaults(handler=_cmd_models_list)
     for name, handler in (("verify", _cmd_models_verify), ("sync", _cmd_models_sync)):
         child = model_commands.add_parser(name)
-        _config_flags(child, low_resource=True)
+        _config_flags(child, low_resource=True, tissue_backend=True)
         child.add_argument("-m", "--model", action="append", choices=MODEL_IDS)
         _leaf_json(child)
         child.set_defaults(handler=handler)

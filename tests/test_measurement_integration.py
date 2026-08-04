@@ -17,6 +17,7 @@ import SimpleITK as sitk
 import BodyComposition.service as service_module
 from BodyComposition.actions.measurement import (
     CreateBodySurface,
+    CreateMeasurementLandmarks,
     ExportMeasurementBundle,
     MeasureCanonicalBodyComposition,
     _scientific_measurement_configuration,
@@ -1280,11 +1281,9 @@ def test_canonical_pipeline_uses_full_prepared_domain_and_body_label_source(pipe
     assert names.index("MasksInternalTissue") < names.index("CreateBodySurface")
 
 
-def test_tissue_envelope_pipeline_can_run_without_totalsegmentator(
+def test_default_tissue_envelope_pipeline_omits_totalsegmentator(
     pipeline_stub,
 ):
-    pipeline_stub.config["measurements"]["landmarks"]["enabled"] = False
-
     actions = canonical_actions(pipeline_stub)
     names = [type(action).__name__ for action in actions]
 
@@ -1293,6 +1292,20 @@ def test_tissue_envelope_pipeline_can_run_without_totalsegmentator(
     assert "CreateMeasurementLandmarks" not in names
     assert "CreateBodySurface" in names
     assert "MeasureCanonicalBodyComposition" in names
+
+
+def test_landmark_extension_adds_task297_actions(pipeline_stub):
+    pipeline_stub.config["measurements"]["landmarks"]["enabled"] = True
+
+    actions = canonical_actions(pipeline_stub)
+    task297 = [
+        action
+        for action in actions
+        if isinstance(action, SegmTotalSegmentator) and action.task == "body_landmarks"
+    ]
+
+    assert len(task297) == 1
+    assert any(isinstance(action, CreateMeasurementLandmarks) for action in actions)
 
 
 def test_measurement_support_action_resolves_pinned_nnunet_directory(
@@ -1475,14 +1488,14 @@ def test_measurement_support_verifies_asset_before_predictor_initialization(
     assert events[2][0] == "initialize"
 
 
-def test_default_model_sync_omits_optional_body_model_but_keeps_landmarks():
+def test_default_model_sync_omits_optional_measurement_models():
     models = required_model_ids(PipelineConfig.load())
     assert "totalsegmentator_body_task299_v1" not in models
-    assert "totalsegmentator_total_task297_landmarks_v1" in models
+    assert "totalsegmentator_total_task297_landmarks_v1" not in models
 
 
 def test_configured_model_sync_respects_optional_measurement_support():
-    config = PipelineConfig.model_validate({"measurements": {"landmarks": {"enabled": False}}})
+    config = PipelineConfig.load()
     models = required_model_ids(config)
     assert "totalsegmentator_body_task299_v1" not in models
     assert "totalsegmentator_total_task297_landmarks_v1" not in models

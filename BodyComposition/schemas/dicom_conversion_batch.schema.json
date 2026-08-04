@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fohofmann/BodyComposition/schemas/dicom_conversion_batch.schema.json",
+  "title": "BodyComposition DICOM cohort conversion report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_type",
+    "execution_status",
+    "discovered_series_count",
+    "converted_count",
+    "failed_count",
+    "analysis_manifest",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "report_type": {"const": "bodycomposition-dicom-conversion-batch"},
+    "execution_status": {"enum": ["succeeded", "failed"]},
+    "discovered_series_count": {"type": "integer", "minimum": 1},
+    "converted_count": {"type": "integer", "minimum": 0},
+    "failed_count": {"type": "integer", "minimum": 0},
+    "analysis_manifest": {
+      "oneOf": [
+        {"const": "bodycomposition-batch.json"},
+        {"type": "null"}
+      ]
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "case_id",
+              "status",
+              "series_instance_uid_sha256",
+              "nifti",
+              "metadata",
+              "failure"
+            ],
+            "properties": {
+              "case_id": {
+                "type": "string",
+                "pattern": "^case-[a-f0-9]{16}$"
+              },
+              "status": {"const": "converted"},
+              "series_instance_uid_sha256": {"$ref": "#/$defs/sha256"},
+              "nifti": {"type": "string", "pattern": "^case-[a-f0-9]{16}\\.nii\\.gz$"},
+              "metadata": {
+                "type": "string",
+                "pattern": "^case-[a-f0-9]{16}\\.bodycomposition\\.json$"
+              },
+              "failure": {"type": "null"}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "case_id",
+              "status",
+              "series_instance_uid_sha256",
+              "nifti",
+              "metadata",
+              "failure"
+            ],
+            "properties": {
+              "case_id": {"type": "null"},
+              "status": {"const": "failed"},
+              "series_instance_uid_sha256": {"$ref": "#/$defs/sha256"},
+              "nifti": {"type": "null"},
+              "metadata": {"type": "null"},
+              "failure": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["code", "summary"],
+                "properties": {
+                  "code": {"type": "string", "minLength": 1},
+                  "summary": {"type": "string", "minLength": 1}
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

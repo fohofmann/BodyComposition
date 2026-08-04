@@ -206,7 +206,7 @@ def require_boa_model(weights_root: str | Path) -> BoaAssetReport:
     details = ", ".join(report.errors)
     raise FileNotFoundError(
         "Pinned BOA Task 542 model is not ready in the mounted model directory "
-        f"({details}). Run `bodycomposition models sync --model {BOA_BACKEND_ID}` "
+        f"({details}). Run `bodycomposition models sync --tissue-backend boa` "
         "before inference."
     )
 

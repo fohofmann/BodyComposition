@@ -9,17 +9,24 @@ import pytest
 import SimpleITK as sitk
 
 import BodyComposition.service as service_module
-from BodyComposition import cli, convert_dicom, discover_dicom_series
+from BodyComposition import (
+    cli,
+    convert_dicom,
+    discover_case_inputs,
+    discover_dicom_series,
+)
 from BodyComposition.config import PipelineConfig
 from BodyComposition.dicom import (
+    DicomConversionBatchResult,
     DicomConversionMetadataError,
+    DicomConversionResult,
     DicomSeriesSelectionError,
     dicom_report_patient_metadata,
 )
 from BodyComposition.model_manager import ModelStatus
 from BodyComposition.provenance import image_summary
 from BodyComposition.results import ExecutionStatus
-from BodyComposition.service import PipelineService
+from BodyComposition.service import InputDiscoveryError, PipelineService
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 
 
@@ -233,6 +240,179 @@ def test_standalone_cli_converts_one_dicom_series(tmp_path, capsys):
     assert payload["series_instance_uid"] == uid
     assert payload["input_format"] == "dicom"
     assert output.is_file()
+
+
+def test_nested_dicom_cohort_conversion_is_transfer_ready_and_idempotent(tmp_path):
+    source = tmp_path / "import"
+    uid_a = "1.2.826.0.1.3680043.10.999.231"
+    uid_b = "1.2.826.0.1.3680043.10.999.232"
+    _write_dicom_series(
+        source / "patient-one" / "DICOMS",
+        np.full((2, 3, 4), 21, dtype=np.int16),
+        series_uid=uid_a,
+    )
+    _write_dicom_series(
+        source / "year" / "patient-two" / "DICOM",
+        np.full((3, 3, 4), 42, dtype=np.int16),
+        series_uid=uid_b,
+    )
+    output = tmp_path / "converted"
+
+    result = convert_dicom(source, output)
+
+    assert isinstance(result, DicomConversionBatchResult)
+    assert result.succeeded
+    assert result.discovered_series_count == 2
+    assert len(result.conversions) == 2
+    assert result.failures == ()
+    assert result.manifest_path == output / "bodycomposition-batch.json"
+    assert result.report_path == output / "bodycomposition-conversion.json"
+    cases = discover_case_inputs(output)
+    assert len(cases) == 2
+    assert all(case.input_path.parent == output for case in cases)
+    assert [case.case_id for case in cases] == [
+        conversion.case_id for conversion in result.conversions
+    ]
+    assert all(case.series_uid is None for case in cases)
+    for conversion in result.conversions:
+        assert conversion.output_path.is_file()
+        assert conversion.metadata_path.is_file()
+
+    public_text = result.manifest_path.read_text(encoding="utf-8")
+    public_text += result.report_path.read_text(encoding="utf-8")
+    assert "patient-one" not in public_text
+    assert "patient-two" not in public_text
+    assert uid_a not in public_text
+    assert uid_b not in public_text
+
+    repeated = convert_dicom(source, output)
+    assert isinstance(repeated, DicomConversionBatchResult)
+    assert repeated.succeeded
+    assert [item.output_content_sha256 for item in repeated.conversions] == [
+        item.output_content_sha256 for item in result.conversions
+    ]
+
+
+def test_cli_converts_nested_dicom_cohort_to_directory(tmp_path, capsys):
+    source = tmp_path / "import"
+    for index in range(2):
+        _write_dicom_series(
+            source / f"case-{index}" / "DICOMS",
+            np.full((2, 3, 4), index + 1, dtype=np.int16),
+            series_uid=f"1.2.826.0.1.3680043.10.999.24{index}",
+        )
+
+    code = cli.main(["convert", str(source), str(tmp_path / "converted"), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == cli.EXIT_OK
+    assert payload["execution_status"] == "succeeded"
+    assert payload["converted_count"] == 2
+    assert payload["failed_count"] == 0
+    assert Path(payload["manifest_path"]).name == "bodycomposition-batch.json"
+
+
+def test_directory_analysis_discovers_dicom_series_and_rejects_unsafe_nifti_batch(
+    tmp_path,
+):
+    dicom_root = tmp_path / "dicom"
+    uid_a = "1.2.826.0.1.3680043.10.999.251"
+    uid_b = "1.2.826.0.1.3680043.10.999.252"
+    _write_dicom_series(
+        dicom_root / "patient-a" / "DICOMS",
+        np.full((2, 3, 4), 1, dtype=np.int16),
+        series_uid=uid_a,
+    )
+    _write_dicom_series(
+        dicom_root / "patient-b" / "DICOMS",
+        np.full((2, 3, 4), 2, dtype=np.int16),
+        series_uid=uid_b,
+    )
+
+    cases = discover_case_inputs(dicom_root)
+    assert [case.series_uid for case in cases] == [uid_a, uid_b]
+    assert len(discover_case_inputs(dicom_root, series_uid=uid_b)) == 1
+
+    nifti_root = tmp_path / "nifti"
+    nifti_root.mkdir()
+    sitk.WriteImage(sitk.Image((3, 4, 2), sitk.sitkInt16), str(nifti_root / "ct.nii.gz"))
+    sitk.WriteImage(sitk.Image((3, 4, 2), sitk.sitkUInt8), str(nifti_root / "mask.nii.gz"))
+    with pytest.raises(InputDiscoveryError, match="not every file has"):
+        discover_case_inputs(nifti_root)
+
+    with pytest.raises(InputDiscoveryError, match="cannot be used with a NIfTI"):
+        discover_case_inputs(nifti_root / "ct.nii.gz", series_uid=uid_a)
+
+
+def test_single_file_conversion_requires_a_series_for_ambiguous_dicom(tmp_path):
+    source = tmp_path / "dicom"
+    uid_a = "1.2.826.0.1.3680043.10.999.253"
+    uid_b = "1.2.826.0.1.3680043.10.999.254"
+    _write_dicom_series(
+        source / "series-a",
+        np.full((2, 3, 4), 1, dtype=np.int16),
+        series_uid=uid_a,
+    )
+    _write_dicom_series(
+        source / "series-b",
+        np.full((2, 3, 4), 2, dtype=np.int16),
+        series_uid=uid_b,
+    )
+
+    with pytest.raises(DicomSeriesSelectionError, match="Multiple CT series"):
+        convert_dicom(source, tmp_path / "ct.nii.gz")
+
+    selected = convert_dicom(
+        source,
+        tmp_path / "ct.nii.gz",
+        series_uid=uid_b,
+    )
+    assert isinstance(selected, DicomConversionResult)
+    assert selected.series_instance_uid == uid_b
+
+
+def test_cohort_conversion_records_case_identity_collisions_without_stopping(tmp_path):
+    source = tmp_path / "import"
+    pixels = np.full((2, 3, 4), 7, dtype=np.int16)
+    _write_dicom_series(
+        source / "first" / "DICOM",
+        pixels,
+        series_uid="1.2.826.0.1.3680043.10.999.261",
+    )
+    _write_dicom_series(
+        source / "second" / "DICOM",
+        pixels,
+        series_uid="1.2.826.0.1.3680043.10.999.262",
+    )
+
+    result = convert_dicom(source, tmp_path / "converted")
+
+    assert isinstance(result, DicomConversionBatchResult)
+    assert not result.succeeded
+    assert len(result.conversions) == 1
+    assert len(result.failures) == 1
+    assert result.failures[0].code == "DicomInputError"
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert report["execution_status"] == "failed"
+    assert report["converted_count"] == 1
+    assert report["failed_count"] == 1
+
+
+def test_automatic_conversion_manifest_cannot_escape_its_directory(tmp_path):
+    root = tmp_path / "converted"
+    root.mkdir()
+    (root / "bodycomposition-batch.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0.0",
+                "cases": [{"input_path": "../outside.nii.gz"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InputDiscoveryError, match="outside its directory"):
+        discover_case_inputs(root)
 
 
 def test_pipeline_accepts_dicom_without_persisting_the_temporary_conversion(

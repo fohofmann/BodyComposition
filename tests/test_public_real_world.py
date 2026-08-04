@@ -591,7 +591,6 @@ def test_boa_tissue_backend_on_pinned_public_ct(tmp_path):
         "ctdeeprot_2d_v1",
         "spineps_veridah_ct_v1",
         BOA_BACKEND_ID,
-        "totalsegmentator_total_task297_landmarks_v1",
     )
     assert all(report.ready for report in reports)
     runtime = _assert_cuda_available()
@@ -692,7 +691,6 @@ def test_boa_tissue_backend_on_pinned_public_ct(tmp_path):
         "ctdeeprot_2d_v1",
         "spineps_veridah_ct_v1",
         BOA_BACKEND_ID,
-        "totalsegmentator_total_task297_landmarks_v1",
     ]
     assert not _contains_local_path(manifest_payload, public_ct)
     assert not _contains_local_path(manifest_payload, config.model_root)
