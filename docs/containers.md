@@ -4,23 +4,23 @@ BodyComposition provides one weight-free, non-root image definition for Linux
 `amd64` and `arm64`. The same image supports CPU or an externally exposed
 NVIDIA GPU; the selected pipeline is controlled by the ordinary CLI.
 
-Version `1.0.0rc1` is unreleased. This checkout has CI and reproducible Buildx
-tooling, but no public image-publishing workflow.
+Version `1.0.0rc1` is a reviewed pre-release. Source CI and container
+publication are separate; the repository provides reproducible Buildx tooling
+but does not publish registry images from its ordinary CI workflow.
 
 ## Use a published image
 
-Once the reviewed release is announced, ordinary users only need the registry
-image:
+Ordinary users only need the published registry image:
 
 ```bash
 docker pull ghcr.io/fohofmann/bodycomposition:1.0.0rc1
 ```
 
-Do not assume that tag exists before release. The local build helper is for
-maintainers and users testing an unpublished checkout; it is not part of the
+Verify that the selected tag is available before deployment. The local build
+helper is for maintainers and users testing a checkout; it is not part of the
 normal installed workflow.
 
-## Build an unpublished checkout
+## Build a checkout locally
 
 Maintainers can build a clean checkout with:
 
@@ -94,9 +94,9 @@ uv run python scripts/build_container.py \
   --push
 ```
 
-Buildx adds provenance and SBOM attestations unless explicitly disabled. A
-future GitHub tag-triggered publishing workflow would create the public OCI
-manifest; no Dockerfile change is required for that workflow.
+Buildx adds provenance and SBOM attestations unless explicitly disabled.
+Registry publication may be performed manually or by a dedicated release
+workflow; no Dockerfile change is required.
 
 ## Apptainer and Slurm
 

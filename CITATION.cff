@@ -6,6 +6,7 @@ message: >-
 title: BodyComposition
 type: software
 version: 1.0.0rc1
+date-released: 2026-08-05
 authors:
   - family-names: Hofmann
     given-names: Felix

@@ -15,8 +15,8 @@ measurements are automated outputs, not dataset ground truth. See the
 [complete report](docs/assets/pipeline-report-example.png) and
 [asset attribution](docs/assets/README.md).*
 
-Version `1.0.0rc1` is an unreleased, breaking release candidate. Python 3.11
-and [uv](https://docs.astral.sh/uv/) are required.
+Version `1.0.0rc1` is a breaking pre-release. Python 3.11 and
+[uv](https://docs.astral.sh/uv/) are required.
 
 ## Quick start
 
@@ -131,16 +131,16 @@ and QC flags in downstream analyses.
 
 ## Containers and clusters
 
-The released Linux `amd64`/`arm64` image is intended to be the ordinary
-container entry point:
+The Linux `amd64`/`arm64` release image is the ordinary container entry point:
 
 ```bash
 docker pull ghcr.io/fohofmann/bodycomposition:1.0.0rc1
 ```
 
-That tag does not exist until the release is published. Mount model weights at
-`/models`, inputs read-only at `/input`, and results at `/output`; see
-[containers](docs/containers.md) and [parallel execution](docs/execution.md).
+Verify that the selected release tag is available before deployment. Mount
+model weights at `/models`, inputs read-only at `/input`, and results at
+`/output`; see [containers](docs/containers.md) and
+[parallel execution](docs/execution.md).
 
 ## Performance
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0rc1 — unreleased
+## 1.0.0rc1 — 2026-08-05
 
 This is a deliberate breaking release candidate.
 
@@ -101,13 +101,8 @@ This is a deliberate breaking release candidate.
 - nnU-Net v1 trainers and obsolete crop/postprocess/action layers; and
 - backward-compatibility aliases.
 
-### Remaining release validation
+### Post-release work
 
-- Rebuild the publication artifacts and container from the final approved
-  clean commit. Linux x86-64 Singularity inference has been validated on A100
-  and B200 accelerators.
-- Publish a reviewed software/container release explicitly. The current GitHub
-  workflow validates distributions but does not publish a registry image.
 - Repeat full and low-resource runtime and memory measurements from the frozen
   current default after task 297 became optional; historical candidate timings
   are not an accelerator ranking.

@@ -53,10 +53,10 @@ The container definition targets Linux `amd64` and `arm64`. Its PyTorch wheels
 use CUDA 13.0, which requires NVIDIA driver branch R580 or newer. GPU readiness
 is validated at runtime rather than inferred from the host name. Native macOS
 and Windows containers are not release targets; the Python package can run on
-CPU where its frozen dependencies support the platform. The unreleased source
-does not yet publish a public image automatically. Platform validation and
-performance observations are reported separately in
-[performance.md](performance.md).
+CPU where its frozen dependencies support the platform. Source CI does not
+publish a container automatically; registry images are separate release
+artifacts. Platform validation and performance observations are reported
+separately in [performance.md](performance.md).
 
 ## Body surface and circumference
 
