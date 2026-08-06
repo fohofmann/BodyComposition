@@ -28,6 +28,7 @@ SENSITIVE_ENV_NAME = re.compile(
 )
 REQUIRED_LABELS = {
     "org.opencontainers.image.title": "BodyComposition",
+    "org.opencontainers.image.description": "Validated CT body-composition research pipeline",
     "org.opencontainers.image.licenses": "Apache-2.0",
     "org.bodycomposition.model-weights": "not-included",
     "org.bodycomposition.cuda-runtime": "13.0",

@@ -201,6 +201,7 @@ def test_container_layer_audit_supports_oci_blob_archives():
 def test_container_configuration_policy_requires_non_root_external_mounts_and_labels():
     labels = {
         "org.opencontainers.image.title": "BodyComposition",
+        "org.opencontainers.image.description": "Validated CT body-composition research pipeline",
         "org.opencontainers.image.licenses": "Apache-2.0",
         "org.opencontainers.image.revision": "a" * 40,
         "org.bodycomposition.uv-lock-sha256": "b" * 64,
@@ -260,6 +261,12 @@ def test_container_build_request_is_explicit_reproducible_and_multi_platform(mon
     assert "SOURCE_SHA256=" + ("b" * 64) in command
     assert "--provenance=mode=max" in command
     assert "--sbom=true" in command
+    annotation = command[command.index("--annotation") + 1]
+    assert annotation == (
+        "index:org.opencontainers.image.description="
+        "Validated CT body-composition research pipeline"
+    )
+    assert request["oci_description"] == "Validated CT body-composition research pipeline"
 
 
 def test_container_build_request_rejects_dirty_release_source(monkeypatch):

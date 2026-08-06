@@ -12,6 +12,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+IMAGE_DESCRIPTION = "Validated CT body-composition research pipeline"
 CONTEXT_FILES = (
     ".dockerignore",
     "CHANGELOG.md",
@@ -155,6 +156,16 @@ def build_request(args: argparse.Namespace) -> dict[str, object]:
     for tag in tags:
         command.extend(("--tag", tag))
     if push:
+        annotation_target = (
+            "index" if len(platforms) > 1 or not args.no_attestations else "manifest"
+        )
+        command.extend(
+            (
+                "--annotation",
+                f"{annotation_target}:org.opencontainers.image.description="
+                f"{IMAGE_DESCRIPTION}",
+            )
+        )
         command.append("--push")
         if not args.no_attestations:
             command.extend(("--provenance=mode=max", "--sbom=true"))
@@ -175,6 +186,7 @@ def build_request(args: argparse.Namespace) -> dict[str, object]:
         "push": push,
         "load": load,
         "attestations": push and not args.no_attestations,
+        "oci_description": IMAGE_DESCRIPTION,
         "metadata_file": str(metadata_file),
         "receipt_file": str(receipt_file),
         "command": command,
