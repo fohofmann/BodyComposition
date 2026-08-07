@@ -73,8 +73,8 @@ def test_oblique_slice_geometry_uses_full_affine_and_projected_thickness():
     table = slice_geometry_table(geometry)
 
     assert table["in_plane_pixel_area_mm2"].iloc[0] == pytest.approx(0.91)
-    assert table["slice_thickness_normal_mm"].iloc[0] == pytest.approx(4.0)
-    assert table["slice_thickness_superior_mm"].iloc[0] == pytest.approx(4.0 * cosine)
+    assert table["slice_spacing_normal_mm"].iloc[0] == pytest.approx(4.0)
+    assert table["slice_spacing_superior_mm"].iloc[0] == pytest.approx(4.0 * cosine)
     assert np.diff(table["position_superior_mm"]).tolist() == pytest.approx(
         [4.0 * cosine, 4.0 * cosine]
     )
@@ -389,7 +389,7 @@ def test_exact_range_overlap_weights_area_volume_and_hu_with_variable_thickness(
             "slice_id": [0, 1, 2],
             "slice_slab_inferior_mm": [0.0, 2.0, 5.0],
             "slice_slab_superior_mm": [2.0, 5.0, 9.0],
-            "slice_thickness_normal_mm": [2.0, 3.0, 4.0],
+            "slice_spacing_normal_mm": [2.0, 3.0, 4.0],
             "normal_mm_per_superior_mm": [1.0, 1.0, 1.0],
             "sm_compartment_area_cm2": [10.0, 20.0, 30.0],
             "sm_body_compartment_area_cm2": [10.0, 20.0, 30.0],
@@ -429,7 +429,7 @@ def test_range_aggregation_honors_metric_specific_surface_and_tissue_validity():
             "slice_id": [0, 1],
             "slice_slab_inferior_mm": [0.0, 2.0],
             "slice_slab_superior_mm": [2.0, 4.0],
-            "slice_thickness_normal_mm": [2.0, 2.0],
+            "slice_spacing_normal_mm": [2.0, 2.0],
             "normal_mm_per_superior_mm": [1.0, 1.0],
             "body_area_cm2": [100.0, 90.0],
             "body_area_valid": [True, False],
@@ -469,7 +469,7 @@ def test_range_aggregation_retains_numeric_fov_cropped_trunk_observation():
             "slice_id": [0, 1],
             "slice_slab_inferior_mm": [0.0, 2.0],
             "slice_slab_superior_mm": [2.0, 4.0],
-            "slice_thickness_normal_mm": [2.0, 2.0],
+            "slice_spacing_normal_mm": [2.0, 2.0],
             "normal_mm_per_superior_mm": [1.0, 1.0],
             "trunk_circumference_cm": [90.0, 86.0],
             "trunk_contour_valid": [True, False],
@@ -494,7 +494,7 @@ def test_strict_pooled_hu_rejects_invalid_nonempty_slices_but_not_empty_tissue()
         "slice_id": [0, 1],
         "slice_slab_inferior_mm": [0.0, 2.0],
         "slice_slab_superior_mm": [2.0, 4.0],
-        "slice_thickness_normal_mm": [2.0, 2.0],
+        "slice_spacing_normal_mm": [2.0, 2.0],
         "normal_mm_per_superior_mm": [1.0, 1.0],
         "sm_compartment_area_cm2": [10.0, 20.0],
     }

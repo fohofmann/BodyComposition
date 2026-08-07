@@ -1,6 +1,6 @@
 # CT compartments and tissue definitions
 
-This document defines the tissue contract for measurement schema `3.4.0`.
+This document defines the tissue contract for measurement schema `3.5.0`.
 The default is intentionally small: preserve the model-native anatomical
 compartments, measure their raw CT attenuation, and add only the conventional
 muscle and adipose HU filters needed for broad clinical comparability.

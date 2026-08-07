@@ -106,8 +106,8 @@ def slice_geometry_table(geometry: ImageGeometry) -> pd.DataFrame:
             "slice_normal_lps_x": float(slice_normal_lps[0]),
             "slice_normal_lps_y": float(slice_normal_lps[1]),
             "slice_normal_lps_z": float(slice_normal_lps[2]),
-            "slice_thickness_normal_mm": float(geometry.spacing_xyz[2]),
-            "slice_thickness_superior_mm": superior_thickness_mm,
+            "slice_spacing_normal_mm": float(geometry.spacing_xyz[2]),
+            "slice_spacing_superior_mm": superior_thickness_mm,
             "slice_slab_inferior_mm": position_superior_mm - superior_thickness_mm / 2.0,
             "slice_slab_superior_mm": position_superior_mm + superior_thickness_mm / 2.0,
             "normal_mm_per_superior_mm": float(geometry.spacing_xyz[2])

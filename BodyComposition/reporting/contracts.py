@@ -34,6 +34,7 @@ TECHNICAL_METADATA_FIELDS = frozenset(
         "runtime_hardware",
         "scanner_manufacturer",
         "scanner_model",
+        "dicom_slice_thickness_mm",
     }
 )
 PATIENT_METADATA_FIELDS = frozenset(

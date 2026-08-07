@@ -735,6 +735,7 @@ def _report_technical_metadata(
         "runtime_hardware": clean(hardware),
         "scanner_manufacturer": clean(dicom.get("scanner_manufacturer")),
         "scanner_model": clean(dicom.get("scanner_model")),
+        "dicom_slice_thickness_mm": clean(dicom.get("slice_thickness_mm")),
     }
 
 

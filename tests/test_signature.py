@@ -56,7 +56,7 @@ def _signature_slices(position_offset_mm: float) -> pd.DataFrame:
             "slice_id": np.arange(4),
             "slice_slab_inferior_mm": centres - 5.0,
             "slice_slab_superior_mm": centres + 5.0,
-            "slice_thickness_normal_mm": np.full(4, 10.0),
+            "slice_spacing_normal_mm": np.full(4, 10.0),
             "normal_mm_per_superior_mm": np.ones(4),
             "trunk_area_cm2": np.full(4, 100.0),
             "trunk_area_valid": np.ones(4, dtype=bool),

@@ -1739,11 +1739,16 @@ def _technical_metadata_items(
         metadata.get("runtime_hardware"),
     )
     slices = case.measurement_bundle.slices
-    thickness = pd.to_numeric(slices["slice_thickness_normal_mm"], errors="coerce")
-    thickness = thickness[np.isfinite(thickness)]
-    thickness_text = (
-        f"{float(thickness.median()):.2f} mm" if not thickness.empty else "Not recorded"
+    slice_spacing = pd.to_numeric(slices["slice_spacing_normal_mm"], errors="coerce")
+    slice_spacing = slice_spacing[np.isfinite(slice_spacing)]
+    slice_text = (
+        f"slice spacing {float(slice_spacing.median()):.2f} mm"
+        if not slice_spacing.empty
+        else "slice spacing not recorded"
     )
+    dicom_thickness = metadata.get("dicom_slice_thickness_mm")
+    if dicom_thickness:
+        slice_text = f"DICOM thickness {dicom_thickness} mm"
     spacing = case.prepared_image.GetSpacing()
     input_text = (
         f"{str(metadata.get('input_format') or 'unknown').upper()} "
@@ -1756,7 +1761,7 @@ def _technical_metadata_items(
         ("pipeline", (f"BodyComposition {pipeline_version}",)),
         ("runtime", runtime),
         ("scanner", (scanner,)),
-        ("slice", (thickness_text,)),
+        ("slice", (slice_text,)),
         ("models", _model_lines(case)),
     )
 

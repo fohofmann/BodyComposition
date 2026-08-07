@@ -133,7 +133,7 @@ bodycomposition results review-queue output/runs/<run-id> --json
 
 `slices.parquet`, `vertebrae.parquet`, `summaries.parquet`,
 `signature.parquet`, and `hu_distributions.parquet` use measurement schema
-`3.4.0`; their fields and units are
+`3.5.0`; their fields and units are
 documented in [measurements.md](measurements.md). The signature is a
 two-component, identity-linked view: `signature.parquet` preserves
 translation-only fixed-millimetre anatomy, physical scale, coverage, and null

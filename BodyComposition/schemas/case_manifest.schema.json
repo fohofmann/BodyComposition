@@ -73,7 +73,7 @@
           "additionalProperties": false,
           "required": [
             "series_instance_uid_sha256", "instance_count", "modality",
-            "scanner_manufacturer", "scanner_model",
+            "scanner_manufacturer", "scanner_model", "slice_thickness_mm",
             "image_orientation_patient_complete", "image_position_patient_complete",
             "conversion_backend", "conversion_backend_version"
           ],
@@ -83,6 +83,7 @@
             "modality": {"const": "CT"},
             "scanner_manufacturer": {"type": ["string", "null"], "maxLength": 80},
             "scanner_model": {"type": ["string", "null"], "maxLength": 80},
+            "slice_thickness_mm": {"type": ["number", "null"], "exclusiveMinimum": 0},
             "image_orientation_patient_complete": {"type": "boolean"},
             "image_position_patient_complete": {"type": "boolean"},
             "conversion_backend": {"type": "string", "minLength": 1},
@@ -98,7 +99,7 @@
             "sidecar_content_sha256"
           ],
           "properties": {
-            "schema_version": {"const": "1.0.0"},
+            "schema_version": {"const": "1.1.0"},
             "sidecar_type": {"const": "bodycomposition-dicom-conversion"},
             "source_format": {"const": "dicom"},
             "source_content_sha256": {"$ref": "#/$defs/sha256"},

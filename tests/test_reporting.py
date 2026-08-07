@@ -183,6 +183,7 @@ def _report_case(config, case_id="case-001", *, orientation=None):
             "runtime_hardware": "NVIDIA A100-SXM4-80GB",
             "scanner_manufacturer": "Research Test Imaging",
             "scanner_model": "Synthetic CT 1.0",
+            "dicom_slice_thickness_mm": "1.25",
         },
     )
 
@@ -946,6 +947,7 @@ def test_each_layout_is_one_page_a4_embedded_and_text_extractable(base_config, t
     assert "torch 2.13.0" in technical_text
     assert "NVIDIA A100-SXM4-80GB" in technical_text
     assert "Research Test Imaging Synthetic CT 1.0" in technical_text
+    assert "DICOM thickness 1.25 mm" in technical_text
     assert all(
         model in technical_text for model in ("ctdeeprot_2d_v1", "synthetic_body_only", "synthetic")
     )

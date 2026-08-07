@@ -54,7 +54,8 @@
         "runtime_backend": {"type": ["string", "null"], "maxLength": 160},
         "runtime_hardware": {"type": ["string", "null"], "maxLength": 160},
         "scanner_manufacturer": {"type": ["string", "null"], "maxLength": 160},
-        "scanner_model": {"type": ["string", "null"], "maxLength": 160}
+        "scanner_model": {"type": ["string", "null"], "maxLength": 160},
+        "dicom_slice_thickness_mm": {"type": ["string", "null"], "maxLength": 160}
       }
     }
   },

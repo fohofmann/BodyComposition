@@ -37,6 +37,7 @@ def _write_dicom_series(
     series_uid: str,
     modality: str = "CT",
     spacing_xyz: tuple[float, float, float] = (0.8, 0.9, 2.5),
+    slice_thickness_mm: float | None = None,
     origin_lps_xyz: tuple[float, float, float] = (10.0, 20.0, -30.0),
     direction_lps: tuple[float, ...] = (
         1.0,
@@ -74,7 +75,9 @@ def _write_dicom_series(
             "0010|0020": "MRN-123456",
             "0010|0030": "19841203",
             "0010|0040": "F",
-            "0018|0050": str(spacing_xyz[2]),
+            "0018|0050": str(
+                spacing_xyz[2] if slice_thickness_mm is None else slice_thickness_mm
+            ),
             "0020|000d": study_uid,
             "0020|000e": series_uid,
             "0020|0013": str(index + 1),
@@ -103,6 +106,7 @@ def test_dicom_conversion_preserves_pixels_geometry_and_excludes_identifiers(tmp
         array,
         series_uid=uid,
         direction_lps=direction,
+        slice_thickness_mm=1.25,
     )
 
     series = discover_dicom_series(source)
@@ -139,6 +143,8 @@ def test_dicom_conversion_preserves_pixels_geometry_and_excludes_identifiers(tmp
     assert summary["dicom"]["image_position_patient_complete"]
     assert summary["dicom"]["scanner_manufacturer"] == "Research Test Imaging"
     assert summary["dicom"]["scanner_model"] == "Synthetic CT 1.0"
+    assert summary["dicom"]["slice_thickness_mm"] == pytest.approx(1.25)
+    assert summary["geometry"]["spacing_xyz"][2] == pytest.approx(2.5)
     assert dicom_report_patient_metadata(source) == {
         "patient_name": "Patient Identifying",
         "date_of_birth": "1984-12-03",

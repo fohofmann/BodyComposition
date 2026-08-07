@@ -89,10 +89,12 @@ bodycomposition analyze ./converted
 ```
 
 If the sidecar is present, `analyze` validates its NIfTI byte size, file hash,
-pixel hash, and geometry before accepting its metadata. A missing sidecar does
-not prevent analysis of an otherwise valid NIfTI, but the original DICOM
-technical provenance is then unavailable. A present but stale or modified
-sidecar is an input error rather than silently ignored.
+pixel hash, and geometry before accepting its metadata. When all source
+instances declare one consistent positive DICOM `SliceThickness (0018,0050)`,
+the sidecar retains it separately from the NIfTI slice-centre spacing. A
+missing sidecar does not prevent analysis of an otherwise valid NIfTI, but the
+original DICOM technical provenance is then unavailable. A present but stale
+or modified sidecar is an input error rather than silently ignored.
 
 An output ending in `.nii` or `.nii.gz` requests one conversion; a directory
 output requests cohort conversion. When a file output is combined with a
@@ -142,9 +144,10 @@ pre-staged NIfTI analysis preserves this uncertainty handling.
 ## Privacy boundary
 
 The NIfTI writer receives pixels and physical geometry without DICOM patient or
-study tags. The sidecar contains scanner manufacturer/model, hashed Series UID,
-instance count, metadata-completeness flags, converter identity, source
-content hash, and geometry binding. It excludes patient and study identifiers,
+study tags. The sidecar contains scanner manufacturer/model, DICOM slice
+thickness when consistently declared, hashed Series UID, instance count,
+metadata-completeness flags, converter identity, source content hash, and
+geometry binding. It excludes patient and study identifiers,
 accession, dates, descriptions, free-text fields, source paths, and the raw
 Series UID. Case manifests follow the same boundary. This reduces accidental
 identifier propagation, but it is not de-identification:

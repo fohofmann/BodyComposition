@@ -391,7 +391,7 @@ def aggregate_physical_range(
         "slice_id",
         "slice_slab_inferior_mm",
         "slice_slab_superior_mm",
-        "slice_thickness_normal_mm",
+        "slice_spacing_normal_mm",
         "normal_mm_per_superior_mm",
     }
     missing = sorted(required - set(slices.columns))
@@ -591,12 +591,12 @@ def aggregate_physical_range(
             metric_valid and np.any(fov_cropped_observed)
         )
 
-    slice_thickness_normal_mm = slices["slice_thickness_normal_mm"].to_numpy(dtype=float)
+    slice_spacing_normal_mm = slices["slice_spacing_normal_mm"].to_numpy(dtype=float)
     overlap_fraction = np.divide(
         normal_overlap_mm,
-        slice_thickness_normal_mm,
+        slice_spacing_normal_mm,
         out=np.zeros_like(normal_overlap_mm),
-        where=slice_thickness_normal_mm > 0,
+        where=slice_spacing_normal_mm > 0,
     )
     for column in [column for column in slices if column.endswith(HU_SUFFIX)]:
         prefix = column.removesuffix(HU_SUFFIX)

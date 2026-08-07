@@ -187,7 +187,8 @@ def _validate_slice_geometry(case: CaseReportInput, geometry: ImageGeometry) -> 
         "slice_normal_lps_z",
         "slice_slab_inferior_mm",
         "slice_slab_superior_mm",
-        "slice_thickness_normal_mm",
+        "slice_spacing_normal_mm",
+        "slice_spacing_superior_mm",
         "normal_mm_per_superior_mm",
         "in_plane_pixel_area_mm2",
     )

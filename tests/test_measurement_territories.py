@@ -83,7 +83,7 @@ def make_slice_table(lower_edges, upper_edges, *, area=None, hu=None):
             "slice_normal_lps_z": np.ones(len(lower)),
             "slice_slab_inferior_mm": lower,
             "slice_slab_superior_mm": upper,
-            "slice_thickness_normal_mm": thickness,
+            "slice_spacing_normal_mm": thickness,
             "normal_mm_per_superior_mm": np.ones(len(lower)),
             "trunk_contour_valid": np.ones(len(lower), dtype=bool),
             "trunk_contour_reason": np.full(len(lower), None, dtype=object),
@@ -309,7 +309,7 @@ def test_oblique_bin_volume_reconstruction_uses_integration_length():
         area=np.linspace(10.0, 30.0, 25),
     )
     slices["normal_mm_per_superior_mm"] = 1.25
-    slices["slice_thickness_normal_mm"] *= 1.25
+    slices["slice_spacing_normal_mm"] *= 1.25
 
     table = build_vertebra_table(slices, extents, territories, IDENTITY)
     l3 = table.loc[table["vertebral_level"].eq("L3")]

@@ -1,7 +1,7 @@
 # Canonical physical measurements
 
 The canonical pipeline writes one outcome-blind measurement bundle per case.
-Schema `3.4.0` preserves every acquired slice, compact native vertebral
+Schema `3.5.0` preserves every acquired slice, compact native vertebral
 summaries, established case summaries, and a comparable fixed-millimetre
 longitudinal signature. Its second, identity-linked component stores four
 fixed native-compartment HU-distribution channels, with explicit missingness
@@ -44,6 +44,12 @@ one validated case bundle into a separate directory.
   `position_superior_mm`, independently of storage order.
 - Areas are cm², volumes are cm³, lengths are millimetres unless a name ends
   in `_cm`, and attenuation is HU.
+- `slice_spacing_normal_mm` is the distance between acquired slice centres
+  along the image slice axis; `slice_spacing_superior_mm` is its projection
+  onto the patient superior axis. These are the sampling distances used for
+  physical integration, not acquisition slice thickness. When DICOM
+  `SliceThickness (0018,0050)` is available and consistent, it is preserved
+  separately in input provenance and report metadata.
 
 For one binary label on an acquired plane:
 

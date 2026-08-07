@@ -21,7 +21,7 @@ from BodyComposition.provenance import file_sha256, image_pixel_sha256
 from BodyComposition.schema_validation import validate_payload
 from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
 
-CONVERSION_METADATA_SCHEMA_VERSION = "1.0.0"
+CONVERSION_METADATA_SCHEMA_VERSION = "1.1.0"
 CONVERSION_METADATA_TYPE = "bodycomposition-dicom-conversion"
 CONVERSION_BATCH_MANIFEST_NAME = "bodycomposition-batch.json"
 CONVERSION_BATCH_REPORT_NAME = "bodycomposition-conversion.json"
@@ -187,6 +187,30 @@ def _equipment_metadata(reader: Any, key: str, instance_count: int) -> str | Non
     text = re.sub(r"[^A-Za-z0-9 ._+()-]", " ", text)
     text = " ".join(text.split())
     return text[:80] or None
+
+
+def _consistent_positive_float_metadata(
+    reader: Any,
+    key: str,
+    instance_count: int,
+) -> float | None:
+    """Return one finite positive numeric DICOM value when all instances agree."""
+
+    values: list[float] = []
+    for index in range(instance_count):
+        raw = _metadata(reader, key, index=index)
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            return None
+        if not np.isfinite(value) or value <= 0:
+            return None
+        values.append(value)
+    if not np.allclose(values, values[0], rtol=0.0, atol=1e-6):
+        return None
+    return float(values[0])
 
 
 def _read_modality(path: Path) -> str:
@@ -537,6 +561,9 @@ def dicom_image_summary(
             ),
             "scanner_model": _equipment_metadata(
                 reader, "0008|1090", candidate.info.instance_count
+            ),
+            "slice_thickness_mm": _consistent_positive_float_metadata(
+                reader, "0018|0050", candidate.info.instance_count
             ),
             "image_orientation_patient_complete": orientation_complete,
             "image_position_patient_complete": position_complete,

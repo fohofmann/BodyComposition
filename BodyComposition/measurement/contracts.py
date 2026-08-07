@@ -14,7 +14,7 @@ import pyarrow as pa
 from BodyComposition.utils.geometry import ImageGeometry
 from BodyComposition.vertebral.contracts import QCFlag, QCStatus
 
-MEASUREMENT_SCHEMA_VERSION = "3.4.0"
+MEASUREMENT_SCHEMA_VERSION = "3.5.0"
 VERTEBRAL_TERRITORY_SCHEMA_VERSION = "native-physical-territories-v2-bins3"
 BINS_PER_VERTEBRAL_TERRITORY = 3
 SIGNATURE_SCHEMA_VERSION = "vertebral-reference-fixed-mm-v2"
@@ -64,7 +64,8 @@ SLICE_REQUIRED_COLUMNS = {
     "slice_normal_lps_z",
     "slice_slab_inferior_mm",
     "slice_slab_superior_mm",
-    "slice_thickness_normal_mm",
+    "slice_spacing_normal_mm",
+    "slice_spacing_superior_mm",
     "normal_mm_per_superior_mm",
     "in_plane_pixel_area_mm2",
     "full_coverage_tolerance",
