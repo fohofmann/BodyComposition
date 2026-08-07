@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import os
+import signal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,13 +42,27 @@ def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_pat
         def __init__(self, config):
             calls["config"] = config
 
-        def analyze_batch(self, cases, output, *, run_id, worker_mode):
+        def analyze_batch(
+            self,
+            cases,
+            output,
+            *,
+            run_id,
+            worker_mode,
+            drain_requested=None,
+            drain_reason="requested",
+        ):
             calls.update(
                 cases=cases,
                 output=output,
                 run_id=run_id,
                 worker_mode=worker_mode,
+                drain_requested=drain_requested,
+                drain_reason=drain_reason,
             )
+            if worker_mode:
+                os.kill(os.getpid(), signal.SIGTERM)
+                calls["drain_seen"] = drain_requested()
             return result
 
     monkeypatch.setattr(cli, "load_batch_manifest", lambda path: ("a", "b"))
@@ -82,10 +98,23 @@ def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_pat
     assert cli.main(["batch", "cases.json", "--worker", "--json"]) == cli.EXIT_OK
     capsys.readouterr()
     assert calls["worker_mode"] is True
+    assert callable(calls["drain_requested"])
+    assert calls["drain_reason"] == "sigterm"
+    assert calls["drain_seen"] is True
 
     result.execution_status = ExecutionStatus.FAILED
     assert cli.main(["batch", "cases.json", "--json"]) == cli.EXIT_EXECUTION
     capsys.readouterr()
+
+
+def test_worker_sigterm_handler_requests_drain_and_restores_previous_handler():
+    previous = signal.getsignal(signal.SIGTERM)
+
+    with cli._worker_sigterm_drain(True) as requested:
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert requested.is_set()
+
+    assert signal.getsignal(signal.SIGTERM) is previous
 
 
 def test_model_cli_lists_verifies_and_synchronizes_selected_assets(

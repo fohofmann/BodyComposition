@@ -7,7 +7,9 @@ import importlib.metadata
 import json
 import logging
 import os
+import signal
 import sys
+import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, redirect_stdout, suppress
 from contextvars import ContextVar
@@ -97,6 +99,27 @@ def _machine_readable_stdout(enabled: bool) -> Iterator[None]:
             yield
     finally:
         _JSON_OUTPUT_STREAM.reset(token)
+
+
+@contextmanager
+def _worker_sigterm_drain(enabled: bool) -> Iterator[threading.Event]:
+    """Translate SIGTERM into a process-local request to stop claiming cases."""
+
+    requested = threading.Event()
+    if not enabled or threading.current_thread() is not threading.main_thread():
+        yield requested
+        return
+
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def request_drain(_signum: int, _frame: Any) -> None:
+        requested.set()
+
+    signal.signal(signal.SIGTERM, request_drain)
+    try:
+        yield requested
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _tissue_backend_argument(value: str) -> str:
@@ -197,12 +220,21 @@ def _cmd_convert(args: argparse.Namespace) -> int:
 
 def _cmd_batch(args: argparse.Namespace) -> int:
     cases = load_batch_manifest(args.manifest)
-    result = PipelineService(_config(args)).analyze_batch(
-        cases,
-        args.output,
-        run_id=args.run_id,
-        worker_mode=args.worker,
-    )
+    with _worker_sigterm_drain(args.worker) as drain_requested:
+        options: dict[str, Any] = {
+            "run_id": args.run_id,
+            "worker_mode": args.worker,
+        }
+        if args.worker:
+            options.update(
+                drain_requested=drain_requested.is_set,
+                drain_reason="sigterm",
+            )
+        result = PipelineService(_config(args)).analyze_batch(
+            cases,
+            args.output,
+            **options,
+        )
     human = (
         f"worker drained; shared run continues: {result.output_path}"
         if result.execution_status == ExecutionStatus.RUNNING
@@ -643,7 +675,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "scheduler worker mode: exit successfully when all unfinished cases "
-            "are already owned by other workers"
+            "are already owned by other workers; SIGTERM finishes the current "
+            "case and then drains"
         ),
     )
     _config_flags(

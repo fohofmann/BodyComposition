@@ -143,6 +143,8 @@ filesystem queue assigns complete cases without overlap, and a surplus worker
 exits when every remaining case is owned by another live worker. The scheduler
 controls array size, CPU, memory, time, and visible GPU resources. See
 [docs/execution.md](docs/execution.md) for the generic Slurm example.
+For scheduled workers, request `SIGTERM` sufficiently before the hard time
+limit. The CLI finishes the active case and then stops claiming new work.
 
 ## Outputs
 

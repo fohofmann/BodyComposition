@@ -984,7 +984,13 @@ class PipelineService:
         *,
         run_id: str | None = None,
         worker_mode: bool = False,
+        drain_requested: Callable[[], bool] | None = None,
+        drain_reason: str = "requested",
     ) -> BatchResult | BatchWorkerResult:
+        if drain_requested is not None and not worker_mode:
+            raise ValueError("A worker drain callback requires worker_mode=True.")
+        if worker_mode:
+            validate_public_id(drain_reason, name="drain_reason")
         cases = tuple(CaseInput.model_validate(value) for value in inputs)
         if not cases:
             raise ValueError("analyze_batch requires at least one explicit input.")
@@ -1105,22 +1111,29 @@ class PipelineService:
             started_at=worker_started_at,
             plan_sha256=canonical_digest(plan),
         )
-        results, _, queue_terminal, active_case_count = self._drain_shared_queue(
-            prepared=prepared,
-            run_id=selected_run_id,
-            run_root=run_root,
-            state=state,
-            started_at=started_at,
-            worker_mode=worker_mode,
+        results, _, queue_terminal, active_case_count, worker_drain_reason = (
+            self._drain_shared_queue(
+                prepared=prepared,
+                run_id=selected_run_id,
+                run_root=run_root,
+                state=state,
+                started_at=started_at,
+                worker_mode=worker_mode,
+                drain_requested=drain_requested,
+                drain_reason=drain_reason,
+            )
         )
         if not queue_terminal:
             self._release_executor()
+            if worker_drain_reason is None:
+                raise RuntimeError("A non-terminal worker exit requires a drain reason.")
             return BatchWorkerResult(
                 run_id=selected_run_id,
                 output_path=run_root,
                 cases=tuple(results),
                 planned_case_count=len(prepared),
                 active_case_count=active_case_count,
+                drain_reason=worker_drain_reason,
             )
 
         with state.coordination_guard("run-finalize"):
@@ -1860,7 +1873,9 @@ class PipelineService:
         state: SharedExecutionState,
         started_at: str,
         worker_mode: bool,
-    ) -> tuple[list[CaseResult], dict[str, Any] | None, bool, int]:
+        drain_requested: Callable[[], bool] | None,
+        drain_reason: str,
+    ) -> tuple[list[CaseResult], dict[str, Any] | None, bool, int, str | None]:
         """Claim complete cases, optionally leaving when only live claims remain."""
 
         results: dict[str, CaseResult] = {}
@@ -1880,11 +1895,32 @@ class PipelineService:
             if refreshed is not None:
                 latest_reporting = refreshed
 
+        def should_drain() -> bool:
+            return bool(worker_mode and drain_requested is not None and drain_requested())
+
+        def active_unfinished_count() -> int:
+            return sum(
+                state.active_claim_record(item.case_id) is not None
+                and not state.active_claim_is_stale(item.case_id)
+                for item in prepared
+                if item.case_id not in results
+            )
+
+        def collect_shared_results() -> None:
+            for item in prepared:
+                if item.case_id in results:
+                    continue
+                shared = self._shared_result(item=item, run_root=run_root, state=state)
+                if shared is not None:
+                    remember(shared)
+
         while len(results) < len(prepared):
             made_progress = False
             for item in prepared:
                 if item.case_id in results:
                     continue
+                if should_drain():
+                    break
                 shared = self._shared_result(item=item, run_root=run_root, state=state)
                 if shared is not None:
                     remember(shared)
@@ -1926,6 +1962,8 @@ class PipelineService:
                     continue
                 made_progress = True
                 with lease:
+                    if should_drain():
+                        continue
                     # Another worker may complete the case between the scan and claim.
                     shared = self._shared_result(item=item, run_root=run_root, state=state)
                     if shared is not None:
@@ -1936,6 +1974,9 @@ class PipelineService:
                                 reused_outputs=True,
                             )
                         remember(shared)
+                        continue
+
+                    if should_drain():
                         continue
 
                     lease.set_stage("input_validation")
@@ -1960,6 +2001,8 @@ class PipelineService:
                         continue
 
                     low_memory_mode, hardware_profile = self._ensure_runtime_strategy(state)
+                    if should_drain():
+                        continue
                     try:
                         result = self._execute_case(
                             case=item.case,
@@ -2047,13 +2090,23 @@ class PipelineService:
 
             if len(results) == len(prepared):
                 break
-            if not made_progress:
-                active_case_count = sum(
-                    state.active_claim_record(item.case_id) is not None
-                    and not state.active_claim_is_stale(item.case_id)
-                    for item in prepared
-                    if item.case_id not in results
+            if should_drain():
+                collect_shared_results()
+                if len(results) == len(prepared):
+                    break
+                return (
+                    [
+                        results[item.case_id]
+                        for item in prepared
+                        if item.case_id in results
+                    ],
+                    latest_reporting,
+                    False,
+                    active_unfinished_count(),
+                    drain_reason,
                 )
+            if not made_progress:
+                active_case_count = active_unfinished_count()
                 if worker_mode and active_case_count:
                     return (
                         [
@@ -2064,6 +2117,7 @@ class PipelineService:
                         latest_reporting,
                         False,
                         active_case_count,
+                        "other_workers_active",
                     )
                 sleep(state.policy.poll_seconds)
 
@@ -2072,6 +2126,7 @@ class PipelineService:
             latest_reporting,
             True,
             0,
+            None,
         )
 
     @staticmethod

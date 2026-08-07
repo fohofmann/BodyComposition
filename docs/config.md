@@ -121,7 +121,9 @@ fields.
 the same batch command multiple times against the same shared output. Scheduler
 workers should add `--worker` so surplus processes release their allocation
 when only live claims remain. Each process claims whole cases and owns one
-externally assigned accelerator.
+externally assigned accelerator. In this mode, `SIGTERM` drains the local
+worker after its current case instead of starting another; configure the
+scheduler's advance-signal interval with enough time for one complete case.
 
 `runtime.timeout_seconds` is the pipeline-execution budget, starting when the
 model stages begin and checked between those stages. Preflight and DICOM

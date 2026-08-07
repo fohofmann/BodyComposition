@@ -212,13 +212,14 @@ class BatchResult:
 
 @dataclass(frozen=True)
 class BatchWorkerResult:
-    """Successful scheduler-worker exit while the shared run continues."""
+    """Successful scheduler-worker drain while the shared run continues."""
 
     run_id: str
     output_path: Path
     cases: tuple[CaseResult, ...]
     planned_case_count: int
     active_case_count: int
+    drain_reason: str
     schema_version: str = RUN_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -231,10 +232,11 @@ class BatchWorkerResult:
             raise ValueError("A worker result requires a positive planned case count.")
         if len(self.cases) >= self.planned_case_count:
             raise ValueError("A drained worker result must leave at least one case unfinished.")
-        if self.active_case_count <= 0:
-            raise ValueError("A drained worker result requires at least one active case.")
+        if self.active_case_count < 0:
+            raise ValueError("A drained worker result cannot have a negative active count.")
         if self.active_case_count > self.planned_case_count - len(self.cases):
             raise ValueError("Active case count exceeds the unfinished case count.")
+        validate_public_id(self.drain_reason, name="drain_reason")
 
     @property
     def execution_status(self) -> ExecutionStatus:
@@ -254,6 +256,7 @@ class BatchWorkerResult:
             "run_id": self.run_id,
             "execution_status": self.execution_status.value,
             "worker_status": "drained",
+            "drain_reason": self.drain_reason,
             "output_path": str(self.output_path),
             "manifest_path": None,
             "planned_case_count": self.planned_case_count,

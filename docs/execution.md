@@ -89,6 +89,7 @@ sbatch \
   --gpus-per-task=1 \
   --cpus-per-task=8 \
   --mem=48G \
+  --signal=TERM@1800 \
   bodycomposition-array.sh \
   /shared/input/cohort.json \
   /shared/output
@@ -99,6 +100,16 @@ array element per case. The optional percent suffix limits simultaneous tasks;
 omit it when Slurm should admit as many workers as the allocation permits.
 Partition, account, time limit, container invocation, and mount directives are
 site-specific and deliberately remain outside the application.
+
+The example asks Slurm to deliver `SIGTERM` 30 minutes before the allocation
+ends. In `--worker` mode, that signal is a process-local drain request: an
+active case is allowed to finish and publish its complete case bundle, then
+the worker exits without claiming another case. An idle worker exits directly.
+It does not cancel unstarted cases or stop other workers. Choose a lead time
+longer than the slowest expected case plus export/report finalization; a later
+hard kill can still interrupt an unfinished case, which the existing stale-
+claim recovery handles on the next identical invocation. Slurm signal syntax
+and timing remain scheduler settings, not pipeline configuration.
 
 Slurm controls the CUDA device visible to each task. The pipeline uses that
 visible device as `cuda` and never maps Slurm task IDs to physical GPU IDs.

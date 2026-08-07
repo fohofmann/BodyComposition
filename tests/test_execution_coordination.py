@@ -610,6 +610,89 @@ def test_scheduler_worker_exits_when_only_live_claims_remain(tmp_path):
     assert CountingPipeline.calls == 2
 
 
+
+def test_scheduler_sigterm_drain_finishes_current_case_without_claiming_another(
+    tmp_path,
+):
+    requested = threading.Event()
+
+    class DrainAfterCurrentCasePipeline:
+        calls: list[str] = []
+
+        def __init__(self, config, timestamp):
+            self.device = "cpu"
+
+        def __call__(self, memory):
+            case_id = str(memory["id"])
+            type(self).calls.append(case_id)
+            (Path(memory["workspace"]) / "done.txt").write_text(
+                "ok",
+                encoding="utf-8",
+            )
+            requested.set()
+
+    cases = (
+        CaseInput(_write_ct(tmp_path / "one.nii.gz", 1), "one"),
+        CaseInput(_write_ct(tmp_path / "two.nii.gz", 2), "two"),
+    )
+    output = tmp_path / "output"
+    run_id = "sigterm-drain-run"
+
+    drained = _service(tmp_path, DrainAfterCurrentCasePipeline).analyze_batch(
+        cases,
+        output,
+        run_id=run_id,
+        worker_mode=True,
+        drain_requested=requested.is_set,
+        drain_reason="sigterm",
+    )
+
+    assert isinstance(drained, BatchWorkerResult)
+    assert [case.case_id for case in drained.cases] == ["one"]
+    assert DrainAfterCurrentCasePipeline.calls == ["one"]
+    assert drained.drain_reason == "sigterm"
+    assert drained.active_case_count == 0
+    assert drained.remaining_case_count == 1
+    assert drained.as_dict()["drain_reason"] == "sigterm"
+    assert not (drained.output_path / "run_manifest.json").exists()
+
+    completed = _service(tmp_path, DrainAfterCurrentCasePipeline).analyze_batch(
+        cases,
+        output,
+        run_id=run_id,
+        worker_mode=True,
+    )
+
+    assert isinstance(completed, BatchResult)
+    assert completed.execution_status == ExecutionStatus.SUCCEEDED
+    assert [case.case_id for case in completed.cases] == ["one", "two"]
+    assert DrainAfterCurrentCasePipeline.calls == ["one", "two"]
+
+
+def test_scheduler_sigterm_before_first_claim_starts_no_case(tmp_path):
+    CountingPipeline.calls = 0
+    requested = threading.Event()
+    requested.set()
+    cases = (
+        CaseInput(_write_ct(tmp_path / "one.nii.gz", 1), "one"),
+        CaseInput(_write_ct(tmp_path / "two.nii.gz", 2), "two"),
+    )
+
+    drained = _service(tmp_path, CountingPipeline).analyze_batch(
+        cases,
+        tmp_path / "output",
+        run_id="sigterm-before-claim-run",
+        worker_mode=True,
+        drain_requested=requested.is_set,
+        drain_reason="sigterm",
+    )
+
+    assert isinstance(drained, BatchWorkerResult)
+    assert drained.cases == ()
+    assert drained.active_case_count == 0
+    assert drained.remaining_case_count == 2
+    assert CountingPipeline.calls == 0
+
 def test_shared_preflight_cache_invalidates_when_input_changes(tmp_path, monkeypatch):
     CountingPipeline.calls = 0
     source = _write_ct(tmp_path / "case.nii.gz", 1)
