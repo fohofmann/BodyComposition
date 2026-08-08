@@ -7,9 +7,11 @@
 - measurement schema 3.5.0 names through-plane sampling distances
   `slice_spacing_normal_mm` and `slice_spacing_superior_mm`; consistent DICOM
   `SliceThickness (0018,0050)` is preserved separately in conversion
-  provenance and report metadata; and
+  provenance and report metadata;
 - scheduler workers treat `SIGTERM` as a local drain request: finish and
-  publish the active case, then exit without claiming another case.
+  publish the active case, then exit without claiming another case; and
+- the minimum supported `pypdf` version is 6.15.0, including upstream fixes
+  for crafted-PDF resource exhaustion.
 
 ## 1.0.0rc1 — 2026-08-05
 
