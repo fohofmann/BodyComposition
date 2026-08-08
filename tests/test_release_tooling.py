@@ -356,7 +356,7 @@ def test_ci_and_release_gate_pin_tools_and_run_supply_chain_checks():
     release = Path("scripts/release_checks.py").read_text(encoding="utf-8")
     assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in workflow
     assert "astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244" in workflow
-    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in workflow
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
     assert "scripts/release_checks.py" in workflow
     assert "--no-hashes" not in workflow
     assert "--no-hashes" not in release
