@@ -11,8 +11,40 @@ directory:
 bodycomposition analyze /input/cohort -o /output
 ```
 
-Use the explicit manifest form below when several processes must share a
-reviewed case order and one collision-safe queue.
+Without `--update`, the cases and queue-compatible configuration produce a
+deterministic immutable run ID. Repeating the same command reuses that run;
+changing the input produces another run without renaming files as `_v2` or
+modifying the earlier result.
+
+## Incremental directory refresh
+
+For an input directory that grows between runs, add `--update`:
+
+```bash
+bodycomposition analyze /input/cohort \
+  -o /output \
+  --update
+```
+
+The first invocation creates the run. On later invocations, the completed
+generation is moved to `/output/superseded/current/`. Cases with the
+same analysis identity are promoted without model inference; newly discovered
+cases and cases whose image, geometry, or preserved DICOM study metadata
+changed run through the complete pipeline. The active result remains
+`/output/runs/current/`.
+
+Update mode uses the internal `current` lineage when `--run-id` is omitted. An
+explicit run ID is an advanced option for keeping several named lineages in one
+output root. Updating is allowed only after the current generation completed
+and only with the same queue-compatible configuration. An active or incomplete
+generation is never replaced. A DICOM Study Instance UID is stored only as a
+hash and supplies stable automatic case identity. For generic NIfTI inputs,
+assign stable pseudonymous case IDs in a batch manifest if changed files must
+remain the same logical case. Keep the input collection unchanged while any
+local or scheduler worker is active.
+
+Use the explicit manifest form below when the processes must share a reviewed,
+frozen case order rather than discover the current directory contents.
 
 ## Shared whole-case queue
 
@@ -26,14 +58,15 @@ bodycomposition batch \
   --device auto
 ```
 
-When `--run-id` is omitted, the ordered cases and queue-compatible configuration
-produce a deterministic run ID. Compatible workers therefore join the same
-queue without a worker index, shard number, or model assignment. Workers may
-use different devices, CPU-thread limits, case timeouts, model-cache paths,
-vertebral runtime devices, and logging levels. Scientific settings, requested
-output artifacts, reporting, determinism, and fail-fast behavior must remain
-identical. If an explicit run ID is used, every worker must receive the same
-value and the same queue-compatible configuration.
+Without `--update`, omitting `--run-id` derives a deterministic ID from the
+ordered cases and queue-compatible configuration. With `--update`, omitting it
+uses `current`. Compatible workers therefore join the same queue without a
+worker index, shard number, or model assignment. Workers may use different
+devices, CPU-thread limits, case timeouts, model-cache paths, vertebral runtime
+devices, and logging levels. Scientific settings, requested output artifacts,
+reporting, determinism, and fail-fast behavior must remain identical. If an
+explicit run ID is used, every worker must receive the same value and the same
+queue-compatible configuration.
 
 Each process atomically claims one complete patient, runs all stages, commits an
 attempt bundle atomically, and then looks for another patient. Models remain
@@ -67,7 +100,23 @@ references even when they finish concurrently.
 
 ## Slurm array
 
-The example script contains only the worker command:
+The worker command may point directly at a cohort directory that grows between
+submissions. Every array task receives the same arguments:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+srun bodycomposition analyze \
+  "$1" \
+  -o "$2" \
+  --update \
+  --worker \
+  --device auto
+```
+
+This is the convenient form for adding studies between submissions. For a
+governed frozen cohort, keep using the reviewed manifest form:
 
 ```bash
 #!/bin/bash
@@ -91,7 +140,7 @@ sbatch \
   --mem=48G \
   --signal=TERM@1800 \
   bodycomposition-array.sh \
-  /shared/input/cohort.json \
+  /shared/input/cohort \
   /shared/output
 ```
 

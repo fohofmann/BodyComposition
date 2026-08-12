@@ -6,8 +6,9 @@ not implement separate pipelines.
 
 ## Stage sequence
 
-1. Validate one explicit three-dimensional NIfTI CT or one selected DICOM CT
-   series and calculate content, pixel, and physical-geometry identities.
+1. Validate one explicit three-dimensional NIfTI CT or select one complete
+   axial stack from a DICOM study, then calculate content, pixel, and
+   physical-geometry identities.
 2. Assess orientation with pinned CTDeepRot. Preserve trustworthy metadata;
    apply only a supported lossless proper-rotation repair when anatomy and
    metadata disagree; retain uncertainty and review provenance.
@@ -30,12 +31,13 @@ observable failed result. Reporting never reruns scientific inference.
 
 ## Prepared-image boundary
 
-For DICOM input, the service first uses SimpleITK/GDCM to assemble the selected
-series and writes a pixel/geometry-verified temporary NIfTI in the attempt
+For DICOM input, the service first uses SimpleITK/GDCM to geometry-audit every
+CT series/acquisition in one study, select the best eligible complete axial
+stack, and write a pixel/geometry-verified temporary NIfTI in the attempt
 workspace. Conversion neither canonicalizes nor repairs orientation. The
 temporary file is not promoted into the result bundle. `bodycomposition
-convert` and `convert_dicom` can pre-stage either one series or every CT series
-below a cohort directory.
+convert` and `convert_dicom` can pre-stage either one automatically selected
+study stack or one selected stack per study below a cohort directory.
 
 The orientation stage owns orientation. It produces one immutable prepared-image object with
 the image, transform, pixel digest, physical-domain provenance, orientation
@@ -81,6 +83,13 @@ Case work occurs in an attempt directory on the same filesystem. A successful
 bundle is renamed atomically to its content-addressed destination only after
 the manifest and artifact inventory are complete. Failed or cancelled bundles
 are retained under `failed/`; partial work is never presented as success.
+
+The opt-in `--update` mode advances the implicit `current` lineage—or an
+advanced explicit run ID—only after its current generation is complete. The
+prior run is moved atomically to `superseded/`; identical case artifacts are
+hard-linked (or copied when links are unavailable), and only added or changed
+analysis identities enter model inference. The same generation lock and
+whole-case claims are used by local execution and Slurm workers.
 
 A recognized accelerator OOM records the failure and enables a simple
 low-memory strategy on the next compatible invocation using equivalent

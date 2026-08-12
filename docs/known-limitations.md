@@ -14,10 +14,16 @@ The release expects calibrated three-dimensional CT with meaningful physical
 metadata. It accepts one NIfTI/DICOM CT or a directory of cases.
 SimpleITK/GDCM conversion preserves and validates the reader geometry, but it
 does not classify contrast phase or reconstruction, calibrate scanners,
-de-identify DICOM, or remove burned-in pixel annotations. Directory analysis
-processes every discovered CT series independently; it does not infer which
-phase or reconstruction a study intended. Use an explicit Series Instance UID
-when only one series should be processed.
+de-identify DICOM, remove burned-in pixel annotations, or classify contrast
+phase. Directory analysis selects one eligible axial stack per DICOM study by
+coverage and physical sampling; that geometry-based choice does not establish
+which clinical phase or reconstruction was intended. Review the selection audit
+or use an explicit Series Instance UID when a protocol-specific series is
+required.
+
+Direct DICOM input is limited to classic single-frame CT series. Single-file
+Enhanced CT multi-frame objects must first be converted to a validated NIfTI
+that preserves calibrated HU and physical geometry.
 
 CTDeepRot estimates proper rotations from anatomy, not arbitrary affine
 corruption. Oblique, truncated, metal-affected, unusual-anatomy, pediatric,

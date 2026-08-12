@@ -29,7 +29,7 @@ uv sync --frozen
 uv run bodycomposition models sync
 uv run bodycomposition doctor --json
 
-# One CT file, one DICOM series, or a converted/DICOM cohort directory
+# One CT file, one DICOM study, or a converted/DICOM cohort directory
 uv run bodycomposition analyze /absolute/path/to/CT.nii.gz --json
 ```
 
@@ -66,13 +66,15 @@ Model weights remain outside Git, packages, and containers. See
 | Goal | Command or next step |
 | --- | --- |
 | Analyze one CT or a directory of cases | `uv run bodycomposition analyze INPUT --json` |
-| Analyze only one DICOM series | add `--series SERIES_INSTANCE_UID` |
+| Analyze one DICOM study | point `analyze` at its directory; the best complete axial stack is selected automatically |
+| Override with one reviewed DICOM series | add `--series SERIES_INSTANCE_UID` |
 | Convert DICOM for transfer | `uv run bodycomposition convert /path/to/dicom CT.nii.gz` and transfer the adjacent sidecar too |
 | Convert a DICOM cohort for transfer | `uv run bodycomposition convert /path/to/import /path/to/converted` |
 | Run L3-only on limited hardware | synchronize and analyze with `--low-resource` |
 | Use the optional BOA tissue backend | run `models sync --tissue-backend boa`, then analyze with `--tissue-backend boa` |
 | Enable PDF reports | generate a configuration and set `reporting.enabled: true` |
 | Run a governed or scheduler cohort | `uv run bodycomposition batch cohort.json` |
+| Refresh a growing input directory | add `--update`; add `--worker` to every Slurm task |
 | Omit CSV mirrors | add `--no-csv`; Parquet remains canonical |
 
 Detailed commands and constraints are in the [DICOM](docs/dicom.md),

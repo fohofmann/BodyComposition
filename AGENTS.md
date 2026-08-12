@@ -12,9 +12,20 @@ Do not construct a separate runner from internal action classes.
 - BodyComposition accepts one three-dimensional NIfTI/DICOM CT or a directory
   of cases. It does not deidentify DICOM, remove burned-in text, or determine
   whether a scan may be used for a particular study.
-- A directory input processes every recursively discovered CT series as an
-  independent case. Never choose one series by directory order, description,
-  or slice count. Use `--series` only when the user requested one exact series.
+- A one-study DICOM directory automatically selects the best eligible axial
+  stack. Eligibility requires multiple planes, axial orientation, complete
+  positions, uniform spacing, consistent in-plane geometry, and consistent
+  declared slice thickness when present, plus one finite, consistent HU rescale
+  transform. Eligible stacks rank by anatomical coverage, then finer slice
+  spacing, then retained plane count; exact quality ties fail closed. Tagged
+  localizers/scouts, secondary captures, and
+  non-monochrome accessory images may be excluded, but tags alone never select
+  the retained stack. Never choose by directory order, description, or raw file count.
+  Automatic alternatives, exclusions, and minor header normalizations remain a
+  manual-review finding. Use `--series` only for an explicitly adjudicated override; an
+  `--acquisition-number` override additionally requires that exact series UID.
+- Single-file Enhanced CT multi-frame objects are not supported. Use only a
+  validated NIfTI conversion that preserves calibrated HU and physical geometry.
 - Omit `--case-id` unless the user supplied a path-safe pseudonym. Otherwise
   the pipeline derives a content-based identifier that does not expose the
   input filename.
@@ -50,14 +61,15 @@ The standard workflow needs only an input:
 uv run bodycomposition analyze /absolute/path/to/scan.nii.gz --json
 ```
 
-One unambiguous DICOM CT series can be analyzed directly:
+One DICOM study can be analyzed directly, including when it contains multiple
+reconstructions:
 
 ```bash
 uv run bodycomposition analyze /absolute/path/to/dicom-directory --json
 ```
 
-The same command accepts a cohort root. It processes every discovered DICOM CT
-series, or uses the generated manifest in a pre-staged conversion directory:
+The same command accepts a cohort root. It processes safely discovered DICOM CT
+inputs, or uses the generated manifest in a pre-staged conversion directory:
 
 ```bash
 uv run bodycomposition analyze /absolute/path/to/cohort --json
@@ -98,10 +110,13 @@ uv run bodycomposition analyze /absolute/path/to/ct.nii.gz --json
 ```
 
 The sidecar is found and verified automatically. Conversion does not perform
-orientation repair.
+anatomical orientation repair. Axial-stack validation, best-series/acquisition
+selection, accessory-image exclusion, and tightly bounded numeric header
+normalization happen automatically and are recorded; no additional option is
+required. Exact ties and unsafe geometry still fail closed.
 
-To pre-stage every CT series below a nested cohort root, make the output a
-directory:
+To pre-stage one selected CT stack per study below a nested cohort root, make
+the output a directory:
 
 ```bash
 uv run bodycomposition convert \
@@ -111,7 +126,7 @@ uv run bodycomposition convert \
 
 Transfer the complete output directory, including
 `bodycomposition-batch.json`, then run `analyze` on that directory. Failed
-series remain visible in `bodycomposition-conversion.json`.
+study groups remain visible in `bodycomposition-conversion.json`.
 
 ## Low-resource L3 analysis
 
@@ -133,15 +148,33 @@ cover L3 only; do not present it as a full longitudinal analysis.
 
 ## Batch and scheduler execution
 
-Use ordinary `analyze DIRECTORY` for a simple local collection. Use
-`bodycomposition batch` with an explicit input manifest when stable case IDs,
-reviewed ordering, resume identity, or scheduler workers are required. Do not
-write a private loop around internal pipeline objects.
+Use ordinary `analyze DIRECTORY` for a simple immutable collection. To refresh
+a collection that grows between runs, add one flag:
 
-Independent scheduler tasks may run the same command with `--worker`. The
-filesystem queue assigns complete cases without overlap, and a surplus worker
-exits when every remaining case is owned by another live worker. The scheduler
-controls array size, CPU, memory, time, and visible GPU resources. See
+```bash
+uv run bodycomposition analyze /absolute/path/to/cohort \
+  -o /absolute/path/to/output \
+  --update --json
+```
+
+Without `--run-id`, update mode uses the `current` lineage. The previous
+completed generation is retained below `superseded/current/`; unchanged cases
+are reused, while added cases and cases with changed image or preserved DICOM
+metadata are processed. Use an explicit `--run-id` only when several named
+lineages intentionally share one output root. Do not change the input directory
+while a run is active. Generic NIfTI inputs need stable manifest case IDs when
+changed files must replace the same logical case.
+
+Use `bodycomposition batch` with an explicit input manifest when stable case
+IDs and a reviewed order are required. Do not write a private loop around
+internal pipeline objects.
+
+Independent scheduler tasks may run either `analyze DIRECTORY` or `batch
+MANIFEST` with `--worker`. Add `--update` to every task only when refreshing a
+growing cohort; no run ID is needed for the standard case. The filesystem queue
+assigns complete cases without overlap, and a surplus worker exits when every
+remaining case is owned by another live worker. The scheduler controls array
+size, CPU, memory, time, and visible GPU resources. See
 [docs/execution.md](docs/execution.md) for the generic Slurm example.
 For scheduled workers, request `SIGTERM` sufficiently before the hard time
 limit. The CLI finishes the active case and then stops claiming new work.
@@ -194,7 +227,7 @@ vertebral_bodies = result.output_path / "masks" / "vertebral_bodies.nii.gz"
 `analyze` returns a `CaseResult` for one resolved CT and a `BatchResult` for
 several. Use `analyze_case` for a strict one-case contract and `analyze_batch`
 for an explicit ordered collection. Advanced callers may pass `output_root`,
-`config`, `case_id`, `run_id`, and `series_uid` explicitly.
+`config`, `case_id`, `run_id`, `series_uid`, and `update` explicitly.
 
 ## Configuration and geometry
 

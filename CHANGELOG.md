@@ -9,7 +9,16 @@
   `SliceThickness (0018,0050)` is preserved separately in conversion
   provenance and report metadata;
 - scheduler workers treat `SIGTERM` as a local drain request: finish and
-  publish the active case, then exit without claiming another case; and
+  publish the active case, then exit without claiming another case;
+- local and Slurm directory runs can use `--update` without a run ID to advance
+  the implicit `current` lineage, retain the previous generation, reuse
+  unchanged case bundles, and process only added or source-changed studies;
+- DICOM studies use the hashed Study Instance UID as stable automatic case
+  identity when available, and the analysis identity now includes source CT
+  content plus preserved DICOM study metadata;
+- classic CT eligibility now requires a finite, consistent HU rescale transform,
+  and unsupported single-file Enhanced CT input fails with an explicit message;
+  and
 - the minimum supported `pypdf` version is 6.15.0, including upstream fixes
   for crafted-PDF resource exhaustion.
 

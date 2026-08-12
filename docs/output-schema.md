@@ -1,13 +1,14 @@
 # Output and manifest schema
 
-Every run is an immutable ordered plan identified by its resolved cases and
-configuration. The canonical layout is:
+Every completed run generation is an immutable ordered plan identified by its
+resolved cases and configuration. The canonical layout is:
 
 ```text
 <output>/
 ├── .bodycomposition/
 │   ├── preflight/<request-digest>.json        # shared path-free input summaries
 │   └── execution/<run-id>/                    # shared worker state
+├── superseded/<run-id>/<generation>/          # prior update-mode generations
 └── runs/<run-id>/
     ├── normalized_config.yaml                 # queue-compatible config projection
     ├── run_manifest.json
@@ -61,15 +62,19 @@ absent when `--no-csv` or `output.save_csv_tables=false` is selected.
 }
 ```
 
-`input_path`, optional pseudonymous `case_id`, and optional DICOM
-`series_uid` are accepted. `series_uid` is needed when one manifest case points
-at an input containing multiple CT series. Relative paths resolve against the
-manifest directory.
+`input_path`, optional pseudonymous `case_id`, and optional DICOM `series_uid`
+or `study_uid` are accepted; the two selectors are mutually exclusive. A
+one-study directory may contain several CT series;
+the ordinary pipeline geometry-audits them and selects the best eligible axial
+stack. Use `series_uid` only for an explicit, reviewed override. Relative paths
+resolve against the manifest directory.
 Case IDs use 1–64 ASCII letters, digits, dot, underscore, or hyphen and must
 begin with a letter or digit.
 
 Directory-output DICOM conversion writes `bodycomposition-batch.json` using
-this schema and content-derived pseudonymous IDs. It also writes
+this schema. Its pseudonymous case ID derives from the hashed Study Instance
+UID when available, so a changed reconstruction of the same study keeps its
+logical case identity; inputs without that UID fall back to pixel content. It also writes
 `bodycomposition-conversion.json`, validated by
 `dicom_conversion_batch.schema.json`, with counts, safe output filenames,
 content identities, and privacy-minimized failures. `analyze` discovers the
@@ -81,11 +86,15 @@ freeze it before execution.
 `case_manifest.schema.json` records terminal execution and QC status,
 content-based input identity, scientific status, flags, path-free provenance,
 artifact byte sizes/hashes, timing, and a sanitized failure object. Input
-format is `nifti`, `dicom`, or `unreadable_or_missing`. DICOM provenance adds a
-hashed Series Instance UID, instance count, CT modality, orientation/position
-metadata-completeness flags, and converter identity/version. It does not
-record the source file path, hostname, username, raw DICOM identifiers, or
-model cache path.
+format is `nifti`, `dicom`, or `unreadable_or_missing`. DICOM provenance adds
+hashed series/study/frame/SOP identities; retained/discovered/excluded instance
+counts; the complete stack-selection audit and quality metrics; scan dates;
+scanner, series/protocol, contrast, exposure, and reconstruction metadata;
+geometry-completeness flags; DICOM instance-creation date; conversion timestamp;
+and converter identity/version. It does not record the source file path,
+hostname, username, patient name/ID, birth date, accession, raw DICOM
+identifiers, or model cache path. Technical description/protocol fields can be
+free text and must still be treated as sensitive.
 
 A NIfTI created by `bodycomposition convert` can carry the same safe DICOM
 provenance through its adjacent `.bodycomposition.json` sidecar. The manifest
@@ -107,7 +116,11 @@ be treated as immutable after publication.
 `run_manifest.schema.json` preserves the requested case order and links each
 case to one manifest. It records configuration identity, terminal status,
 counts, and aggregate paths. Reusing a `run_id` with another ordered plan or
-configuration is rejected.
+configuration is rejected by default. With `--update`, the implicit `current`
+lineage—or an advanced explicit run ID—may advance to a new input plan only
+when the queue-compatible configuration is unchanged. The old complete run
+moves to `superseded/`, and the active `runs/<run-id>` manifest references only
+the current case versions.
 
 The aggregate tables never silently drop failures:
 

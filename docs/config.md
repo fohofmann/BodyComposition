@@ -187,10 +187,11 @@ fail-fast behavior.
 log/output toggles, CPU allocation, and device selection, but retains
 determinism because it may affect numerical output.
 
-`analysis_id` additionally covers input pixels and physical geometry, source
-revision/tree digest, and verified model assets. A successful case resumes
-only when that identity is identical. Patient position in a scanner or a local
-file name is not used as an identity shortcut.
+`analysis_id` additionally covers input pixels, physical geometry, source CT
+content, preserved DICOM study metadata, source revision/tree digest, and
+verified model assets. A successful case resumes only when that identity is
+identical. The operational conversion timestamp and local file name are not
+used as identity shortcuts.
 
 ## Tissue sensitivity profiles
 

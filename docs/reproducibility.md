@@ -57,6 +57,13 @@ cases are reused only by identical `analysis_id`. A reused `run_id` with a
 different plan fails. Failed cases remain visible; after fixing their cause,
 start a new governed run rather than mutating the old result.
 
+For an operational input folder that deliberately grows over time, `--update`
+advances the implicit `current` lineage. Each completed prior generation is
+retained under `superseded/`; unchanged case bundles are reused and added or
+changed cases are analyzed. An explicit `--run-id` is needed only for multiple
+named lineages in one output root. Do not use this mutable-current workflow as
+the definition of a frozen research cohort.
+
 CSV mirrors are included by default for convenient downstream use. Add
 `--no-csv` before the first run only when the governed archive will retain and
 consume the canonical Parquet representation directly. Because output

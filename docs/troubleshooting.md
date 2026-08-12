@@ -56,30 +56,52 @@ device.
 A `run_id` is immutable. Use the original ordered cases and configuration, or
 choose a new run ID. Do not delete a run manifest to force reuse.
 
+For a deliberately growing operational directory, rerun with `--update`. This
+uses the implicit `current` lineage unless an advanced `--run-id` is supplied.
+It works only after the current generation completed and only when the
+queue-compatible configuration is unchanged. If the message reports an active
+or incomplete generation, wait for it to finish or resume the exact original
+plan; the pipeline will not replace live Slurm work.
+
 ## DICOM input is ambiguous or unreadable
 
-`analyze DIRECTORY` treats every recursively discovered CT series as a
-separate case; it never chooses by directory order or largest slice count. Add
-`--series UID` only when one exact series was requested. Likewise, directory-
-output conversion converts every CT series:
+For a directory containing one patient/study, `analyze` and a file-output
+`convert` command automatically evaluate every CT series/acquisition and retain
+the best eligible axial stack. Eligibility requires complete, uniform geometry;
+ranking uses anatomical coverage, then finer slice spacing, then retained plane
+count. It never uses directory order, description, phase labels, or raw file
+count. Exact quality ties fail closed. Add `--series UID` only for an explicitly
+reviewed override.
+
+A cohort root containing multiple studies is resolved into separate cases.
+Directory-output conversion selects one stack per recursively discovered study
+and records failures in its batch report:
 
 ```bash
 bodycomposition analyze /path/to/cohort
 bodycomposition convert /path/to/cohort /path/to/converted
 ```
 
-A single-file conversion can represent only one series. If its input contains
-several CT series, the command reports the available UIDs and requires an
-explicit selection before writing:
+A file-output conversion represents one selected study stack. Multiple
+patients/studies, or eligible stacks with identical quality metrics, require an
+exact Series Instance UID. An Acquisition Number override must be paired with
+that UID:
 
 ```bash
 bodycomposition convert /path/to/dicom /path/to/ct.nii.gz --series UID
+bodycomposition convert /path/to/dicom /path/to/ct.nii.gz \
+  --series UID --acquisition-number 2
 ```
 
-No CT series means GDCM found no consistently declared CT input. Verify the
-export is complete and readable. A Series Instance UID split across multiple
-directories is rejected; consolidate that series without renaming or changing
-its instances. Conversion does not repair metadata, de-identify DICOM, or
+No eligible CT stack means GDCM found no consistently declared CT input, or all
+candidates were non-axial, duplicated, gapped, nonuniform, or inconsistent in
+their in-plane geometry, pixel spacing, declared thickness, or HU rescale
+transform. Verify the export is complete and readable. A Series Instance UID
+split across multiple directories is rejected; consolidate that series without
+renaming or changing its instances. Single-file Enhanced CT multi-frame input
+is not supported; convert it to a validated NIfTI first. Conversion may
+normalize only tightly bounded numeric header rounding and records that
+decision; it does not repair material inconsistencies, de-identify DICOM, or
 remove burned-in annotations.
 
 ## Artifact digest changed
