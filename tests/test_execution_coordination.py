@@ -164,10 +164,7 @@ def test_run_clock_is_initialized_once_for_every_compatible_worker(tmp_path):
         == started_at
     )
     runtime = json.loads(
-        (
-            tmp_path
-            / ".bodycomposition/execution/run-1/runtime/run.json"
-        ).read_text(encoding="utf-8")
+        (tmp_path / ".bodycomposition/execution/run-1/runtime/run.json").read_text(encoding="utf-8")
     )
     assert runtime["started_at"] == started_at
     assert runtime["plan_sha256"] == "a" * 64
@@ -352,9 +349,7 @@ def test_oom_strategy_is_scoped_to_equivalent_hardware(tmp_path):
     assert result.execution_status == ExecutionStatus.SUCCEEDED
     assert not StrategyProbePipeline.instances[-1].low_memory
     assert result.provenance["execution"]["strategy"] == "persistent_models"
-    assert result.provenance["execution"]["hardware_profile_id"] == hardware_profile_id(
-        B200
-    )
+    assert result.provenance["execution"]["hardware_profile_id"] == hardware_profile_id(B200)
 
 
 class ParallelPipeline:
@@ -398,17 +393,11 @@ class MultiprocessReportingPipeline:
 
     def __init__(self, config, timestamp):
         self.device = "cpu"
-        self.settings = ReportingSettings.from_mapping(
-            config.normalized()["reporting"]
-        )
+        self.settings = ReportingSettings.from_mapping(config.normalized()["reporting"])
 
     def __call__(self, memory):
         lease = memory["tmp/case_lease"]
-        rendezvous = (
-            lease.state.root
-            / "runtime"
-            / "multiprocess-reporting-test"
-        )
+        rendezvous = lease.state.root / "runtime" / "multiprocess-reporting-test"
         rendezvous.mkdir(parents=True, exist_ok=True)
         (rendezvous / lease.state.worker_id).write_text("ready", encoding="utf-8")
         deadline = time.monotonic() + 20.0
@@ -561,9 +550,7 @@ def test_identical_workers_split_whole_cases_and_exit_when_complete(tmp_path, mo
     assert summary_calls == len(cases)
     assert all(len(result.cases) == 2 for result in results)
     assert all(result.execution_status == ExecutionStatus.SUCCEEDED for result in results)
-    preflight_files = tuple(
-        (output / ".bodycomposition/preflight").glob("*.json")
-    )
+    preflight_files = tuple((output / ".bodycomposition/preflight").glob("*.json"))
     assert len(preflight_files) == 1
     assert str(tmp_path) not in preflight_files[0].read_text(encoding="utf-8")
 
@@ -608,7 +595,6 @@ def test_scheduler_worker_exits_when_only_live_claims_remain(tmp_path):
     assert [case.case_id for case in completed.cases] == ["one", "two"]
     assert completed.manifest_path.is_file()
     assert CountingPipeline.calls == 2
-
 
 
 def test_scheduler_sigterm_drain_finishes_current_case_without_claiming_another(
@@ -693,6 +679,7 @@ def test_scheduler_sigterm_before_first_claim_starts_no_case(tmp_path):
     assert drained.remaining_case_count == 2
     assert CountingPipeline.calls == 0
 
+
 def test_shared_preflight_cache_invalidates_when_input_changes(tmp_path, monkeypatch):
     CountingPipeline.calls = 0
     source = _write_ct(tmp_path / "case.nii.gz", 1)
@@ -724,6 +711,121 @@ def test_shared_preflight_cache_invalidates_when_input_changes(tmp_path, monkeyp
     assert first.run_id != second.run_id
     assert summary_calls == 2
     assert len(tuple((output / ".bodycomposition/preflight").glob("*.json"))) == 2
+
+
+def test_update_reuses_unchanged_cases_and_advances_implicit_current_run(tmp_path):
+    CountingPipeline.calls = 0
+    first_path = _write_ct(tmp_path / "one.nii.gz", 1)
+    changed_path = _write_ct(tmp_path / "two.nii.gz", 2)
+    output = tmp_path / "output"
+    service = _service(tmp_path, CountingPipeline)
+
+    first = service.analyze_batch(
+        [CaseInput(first_path, "one"), CaseInput(changed_path, "two")],
+        output,
+        update=True,
+    )
+    assert first.run_id == "current"
+    first_analysis = {case.case_id: case.analysis_id for case in first.cases}
+    assert CountingPipeline.calls == 2
+
+    _write_ct(changed_path, 20)
+    added_path = _write_ct(tmp_path / "three.nii.gz", 3)
+    second = service.analyze_batch(
+        [
+            CaseInput(first_path, "one"),
+            CaseInput(changed_path, "two"),
+            CaseInput(added_path, "three"),
+        ],
+        output,
+        update=True,
+    )
+
+    assert CountingPipeline.calls == 4
+    assert [case.execution_status for case in second.cases] == [
+        ExecutionStatus.SKIPPED_IDENTICAL,
+        ExecutionStatus.SUCCEEDED,
+        ExecutionStatus.SUCCEEDED,
+    ]
+    assert second.cases[0].analysis_id == first_analysis["one"]
+    assert second.cases[1].analysis_id != first_analysis["two"]
+    reused_manifest = json.loads(second.cases[0].manifest_path.read_text(encoding="utf-8"))
+    assert reused_manifest["provenance"]["execution"]["reused_outputs"] is True
+    assert reused_manifest["provenance"]["execution"]["strategy"] == "reused_identical_case_bundle"
+    archived = tuple((output / "superseded/current").iterdir())
+    assert len(archived) == 1
+    assert (archived[0] / "run_manifest.json").is_file()
+    current = json.loads(second.manifest_path.read_text(encoding="utf-8"))
+    assert [case["case_id"] for case in current["cases"]] == [
+        "one",
+        "two",
+        "three",
+    ]
+
+
+def test_update_supports_an_explicit_named_lineage(tmp_path):
+    source = _write_ct(tmp_path / "case.nii.gz", 1)
+    output = tmp_path / "output"
+    service = _service(tmp_path, CountingPipeline)
+
+    first = service.analyze_case(
+        source,
+        output,
+        case_id="case",
+        run_id="named-cohort",
+        update=True,
+    )
+    _write_ct(source, 2)
+    second = service.analyze_case(
+        source,
+        output,
+        case_id="case",
+        run_id="named-cohort",
+        update=True,
+    )
+
+    assert first.run_id == second.run_id == "named-cohort"
+    assert len(tuple((output / "superseded/named-cohort").iterdir())) == 1
+
+
+def test_update_is_collision_safe_for_shared_workers_without_run_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("BODYCOMPOSITION_POLL_SECONDS", "0.01")
+    first_path = _write_ct(tmp_path / "one.nii.gz", 1)
+    changed_path = _write_ct(tmp_path / "two.nii.gz", 2)
+    added_path = tmp_path / "three.nii.gz"
+    output = tmp_path / "output"
+    cases = [CaseInput(first_path, "one"), CaseInput(changed_path, "two")]
+    _service(tmp_path, CountingPipeline).analyze_batch(
+        cases,
+        output,
+        update=True,
+    )
+
+    _write_ct(changed_path, 20)
+    _write_ct(added_path, 3)
+    updated = [
+        CaseInput(first_path, "one"),
+        CaseInput(changed_path, "two"),
+        CaseInput(added_path, "three"),
+    ]
+    ParallelPipeline.calls = {}
+    ParallelPipeline.barrier = threading.Barrier(2)
+
+    def run_worker():
+        return _service(tmp_path, ParallelPipeline).analyze_batch(
+            updated,
+            output,
+            update=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: run_worker(), range(2)))
+
+    assert ParallelPipeline.calls == {"two": 1, "three": 1}
+    assert all(isinstance(result, BatchResult) for result in results)
+    assert all(result.execution_status == ExecutionStatus.SUCCEEDED for result in results)
+    assert all(result.run_id == "current" for result in results)
+    assert len(tuple((output / "superseded/current").iterdir())) == 1
 
 
 def test_process_workers_publish_one_complete_transactional_report(tmp_path):
@@ -765,10 +867,9 @@ def test_process_workers_publish_one_complete_transactional_report(tmp_path):
     run_manifest_path = run_root / "run_manifest.json"
     run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
     run_clock = json.loads(
-        (
-            output
-            / f".bodycomposition/execution/{run_id}/runtime/run.json"
-        ).read_text(encoding="utf-8")
+        (output / f".bodycomposition/execution/{run_id}/runtime/run.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert run_manifest["started_at"] == run_clock["started_at"]
     elapsed = (
@@ -776,17 +877,12 @@ def test_process_workers_publish_one_complete_transactional_report(tmp_path):
         - datetime.fromisoformat(run_manifest["started_at"])
     ).total_seconds()
     assert run_manifest["duration_seconds"] == pytest.approx(elapsed)
-    assert [item["case_id"] for item in run_manifest["cases"]] == [
-        item.case_id for item in cases
-    ]
+    assert [item["case_id"] for item in run_manifest["cases"]] == [item.case_id for item in cases]
 
     worker_ids = {
-        json.loads(
-            (
-                run_root
-                / str(item["manifest"])
-            ).read_text(encoding="utf-8")
-        )["provenance"]["execution"]["worker_id"]
+        json.loads((run_root / str(item["manifest"])).read_text(encoding="utf-8"))["provenance"][
+            "execution"
+        ]["worker_id"]
         for item in run_manifest["cases"]
     }
     assert len(worker_ids) == 2
@@ -833,9 +929,7 @@ def test_auto_device_uses_only_the_released_backend(cuda, expected):
 
 def test_public_configuration_rejects_unvalidated_mps_inference():
     with pytest.raises(ValueError, match="runtime.device"):
-        PipelineConfig.model_validate(
-            {"runtime": {"device": "mps", "allow_dirty": True}}
-        )
+        PipelineConfig.model_validate({"runtime": {"device": "mps", "allow_dirty": True}})
 
 
 def test_low_memory_pipeline_releases_each_stage_model():

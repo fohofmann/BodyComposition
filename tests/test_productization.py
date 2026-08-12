@@ -26,7 +26,7 @@ from BodyComposition.model_manager import (
     sync_models,
     verify_model,
 )
-from BodyComposition.provenance import package_lock_digest
+from BodyComposition.provenance import analysis_identity, package_lock_digest
 from BodyComposition.reporting.contracts import CaseReportResult
 from BodyComposition.results import BatchResult, CaseResult, ExecutionStatus, QCStatus
 from BodyComposition.schema_validation import SchemaValidationError
@@ -111,6 +111,69 @@ def test_elapsed_run_period_uses_latest_terminal_timestamp():
         "2026-07-29T08:00:00+00:00",
         ["2026-07-29T07:59:00+00:00"],
     ) == (None, None)
+
+
+def test_analysis_identity_changes_with_preserved_dicom_metadata(tmp_path):
+    summary = {
+        "source_content_sha256": "1" * 64,
+        "source_byte_size": 100,
+        "input_pixel_sha256": "2" * 64,
+        "geometry": {"size_xyz": [2, 2, 2]},
+        "dicom": {
+            "study_instance_uid_sha256": "3" * 64,
+            "series_description": "portal venous",
+        },
+        "prestage": {
+            "source_content_sha256": "1" * 64,
+            "source_byte_size": 100,
+            "sidecar_content_sha256": "4" * 64,
+            "conversion_created_at": "2026-08-12T08:00:00+00:00",
+        },
+    }
+    model = (_model_status(tmp_path),)
+    first, first_provenance = analysis_identity(
+        input_summary=summary,
+        config=_config(),
+        source=SOURCE_CLEAN,
+        models=model,
+    )
+    updated = json.loads(json.dumps(summary))
+    updated["dicom"]["series_description"] = "delayed phase"
+    second, second_provenance = analysis_identity(
+        input_summary=updated,
+        config=_config(),
+        source=SOURCE_CLEAN,
+        models=model,
+    )
+    operational_only = json.loads(json.dumps(summary))
+    operational_only["prestage"]["conversion_created_at"] = "2026-08-12T09:00:00+00:00"
+    third, _ = analysis_identity(
+        input_summary=operational_only,
+        config=_config(),
+        source=SOURCE_CLEAN,
+        models=model,
+    )
+
+    assert first != second
+    assert (
+        first_provenance["identity_payload"]["input_source_sha256"]
+        != second_provenance["identity_payload"]["input_source_sha256"]
+    )
+    assert third == first
+
+
+def test_default_dicom_case_id_is_stable_for_one_study():
+    first = {
+        "input_pixel_sha256": "1" * 64,
+        "dicom": {"study_instance_uid_sha256": "a" * 64},
+    }
+    changed_pixels = {
+        "input_pixel_sha256": "2" * 64,
+        "dicom": {"study_instance_uid_sha256": "a" * 64},
+    }
+
+    assert service_module._safe_case_id(None, first) == "case-aaaaaaaaaaaaaaaa"
+    assert service_module._safe_case_id(None, changed_pixels) == ("case-aaaaaaaaaaaaaaaa")
 
 
 class SuccessfulPipeline:
@@ -395,7 +458,7 @@ def test_model_sync_preflights_unresolved_assets_before_any_download(
 
 def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     SuccessfulPipeline.instances = 0
-    source = _write_ct(tmp_path / "MRN-123_DOB-1970.nii.gz")
+    source = _write_ct(tmp_path / "SYNTHETIC-MRN-123_SYNTHETIC-DOB-1970.nii.gz")
     service = _service(tmp_path)
     first = service.analyze_case(
         source,
@@ -412,7 +475,7 @@ def test_service_atomic_resume_aggregate_and_manifest_privacy(tmp_path):
     assert (first.output_path / "tables/slices.parquet").is_file()
     assert not any((tmp_path / "outputs/runs/cohort-1/.attempts").glob("*"))
     manifest_text = first.manifest_path.read_text(encoding="utf-8")
-    assert "MRN-123" not in manifest_text
+    assert "SYNTHETIC-MRN-123" not in manifest_text
     assert str(tmp_path) not in manifest_text
     assert "<mounted-model-cache>" in manifest_text
     run = inspect_result(tmp_path / "outputs/runs/cohort-1")
@@ -501,7 +564,7 @@ def test_qc_evidence_json_normalization_is_strict_and_private(tmp_path):
     assert normalized["observed"] == {"24": 2}
     assert normalized["thresholds"] == {"values": [1.5, 2.5]}
 
-    sensitive_path = tmp_path / "MRN-123"
+    sensitive_path = tmp_path / "SYNTHETIC-MRN-123"
     with pytest.raises(TypeError) as unsupported:
         service_module._normalise_flag(
             {"observed": {"source": sensitive_path}},
@@ -806,9 +869,26 @@ def test_service_analyze_dispatches_a_generated_directory_manifest(tmp_path, mon
     )
     captured = {}
 
-    def fake_batch(inputs, output_root, *, run_id=None, worker_mode=False):
+    def fake_batch(
+        inputs,
+        output_root,
+        *,
+        run_id=None,
+        update=False,
+        worker_mode=False,
+        drain_requested=None,
+        drain_reason="requested",
+    ):
         cases = tuple(CaseInput.model_validate(value) for value in inputs)
-        captured.update(cases=cases, output=output_root, run_id=run_id)
+        captured.update(
+            cases=cases,
+            output=output_root,
+            run_id=run_id,
+            update=update,
+            worker_mode=worker_mode,
+            drain_requested=drain_requested,
+            drain_reason=drain_reason,
+        )
         results = tuple(
             CaseResult(
                 case_id=str(case.case_id),
@@ -897,6 +977,25 @@ def test_cli_analyze_is_a_thin_json_adapter(monkeypatch, capsys, tmp_path):
     capsys.readouterr()
     assert not calls["config"].normalized()["output"]["save_csv_tables"]
 
+    assert (
+        cli.main(
+            [
+                "analyze",
+                str(tmp_path / "cohort"),
+                "--update",
+                "--worker",
+                "--json",
+            ]
+        )
+        == cli.EXIT_OK
+    )
+    capsys.readouterr()
+    assert calls["run_id"] is None
+    assert calls["update"] is True
+    assert calls["worker_mode"] is True
+    assert callable(calls["drain_requested"])
+    assert calls["drain_reason"] == "sigterm"
+
 
 def test_cli_common_paths_use_positional_inputs_and_safe_defaults():
     case = cli.build_parser().parse_args(["analyze", "scan.nii.gz"])
@@ -909,14 +1008,18 @@ def test_cli_common_paths_use_positional_inputs_and_safe_defaults():
     assert case.device is None
     assert case.case_id is None
     assert case.series_uid is None
+    assert not case.worker
+    assert not case.update
     assert not case.no_csv
     assert batch.manifest == Path("cohort.json")
     assert batch.output == service_module.DEFAULT_OUTPUT_ROOT
     assert not batch.worker
+    assert not batch.update
     assert not batch.no_csv
     assert convert.input == Path("dicom")
     assert convert.output == Path("scan.nii.gz")
     assert convert.series_uid is None
+    assert convert.acquisition_number is None
     assert not convert.overwrite
 
 
@@ -962,6 +1065,41 @@ def test_cli_convert_is_a_thin_adapter(monkeypatch, capsys, tmp_path):
     }
 
 
+def test_cli_convert_forwards_explicit_acquisition_override(monkeypatch, tmp_path):
+    calls = {}
+    output = tmp_path / "ct.nii.gz"
+
+    def fake_convert(input_path, output_path, **kwargs):
+        calls.update({"input": input_path, "output": output_path, **kwargs})
+        return SimpleNamespace(
+            output_path=output,
+            metadata_path=tmp_path / "ct.bodycomposition.json",
+            as_dict=lambda: {},
+        )
+
+    monkeypatch.setattr(cli, "convert_dicom", fake_convert)
+    code = cli.main(
+        [
+            "convert",
+            str(tmp_path / "dicom"),
+            str(output),
+            "--series",
+            "1.2.3",
+            "--acquisition-number",
+            "2",
+        ]
+    )
+
+    assert code == 0
+    assert calls == {
+        "input": tmp_path / "dicom",
+        "output": output,
+        "series_uid": "1.2.3",
+        "acquisition_number": "2",
+        "overwrite": False,
+    }
+
+
 def test_python_convenience_api_needs_only_an_input(monkeypatch):
     expected = object()
     calls = {}
@@ -986,6 +1124,7 @@ def test_python_convenience_api_needs_only_an_input(monkeypatch):
         "case_id": None,
         "run_id": None,
         "series_uid": None,
+        "update": False,
     }
 
 
@@ -1013,6 +1152,7 @@ def test_python_auto_analyze_api_dispatches_through_the_shared_service(monkeypat
         "case_id": None,
         "run_id": None,
         "series_uid": None,
+        "update": False,
     }
 
 
@@ -1144,11 +1284,7 @@ def test_reporting_enabled_batch_collates_current_run_order(
     ]
     assert [summary["included_case_count"] for summary in cover_summaries] == [1, 2, 2]
     assert all(
-        summary["paths"]["input_directories"] == [tmp_path.name]
-        for summary in cover_summaries
+        summary["paths"]["input_directories"] == [tmp_path.name] for summary in cover_summaries
     )
-    assert all(
-        summary["paths"]["output_directory"] == "report-run"
-        for summary in cover_summaries
-    )
+    assert all(summary["paths"]["output_directory"] == "report-run" for summary in cover_summaries)
     assert len(calls) == 5

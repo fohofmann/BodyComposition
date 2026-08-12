@@ -58,6 +58,7 @@ def image_summary(
     path: str | Path,
     *,
     series_uid: str | None = None,
+    study_uid: str | None = None,
 ) -> tuple[sitk.Image, dict[str, Any]]:
     """Read one NIfTI CT or one unambiguous DICOM CT series."""
 
@@ -68,11 +69,15 @@ def image_summary(
     if not (source.is_file() and suffix in {".nii", ".nii.gz"}):
         from BodyComposition.dicom import dicom_image_summary
 
-        image, summary, _ = dicom_image_summary(source, series_uid=series_uid)
+        image, summary, _ = dicom_image_summary(
+            source,
+            series_uid=series_uid,
+            study_uid=study_uid,
+        )
         return image, summary
 
-    if series_uid is not None:
-        raise ValueError("A DICOM Series Instance UID cannot be used with a NIfTI input.")
+    if series_uid is not None or study_uid is not None:
+        raise ValueError("A DICOM UID selector cannot be used with a NIfTI input.")
     image = sitk.ReadImage(str(source))
     geometry = ImageGeometry.from_sitk(image)
     geometry.validate()
@@ -146,7 +151,9 @@ def source_state() -> dict[str, Any]:
         tree_digest = None
     if status_raw is not None:
         digest = hashlib.sha256(status_raw)
-        diff = _run_git(root, "diff", "--binary", "HEAD", "--", "BodyComposition", "pyproject.toml", "uv.lock")
+        diff = _run_git(
+            root, "diff", "--binary", "HEAD", "--", "BodyComposition", "pyproject.toml", "uv.lock"
+        )
         if diff:
             digest.update(diff)
         for line in status_raw.decode("utf-8", errors="replace").splitlines():
@@ -155,8 +162,7 @@ def source_state() -> dict[str, Any]:
             relative = line[3:]
             candidate = root / relative
             if candidate.is_file() and (
-                relative.startswith("BodyComposition/")
-                or relative in {"pyproject.toml", "uv.lock"}
+                relative.startswith("BodyComposition/") or relative in {"pyproject.toml", "uv.lock"}
             ):
                 digest.update(relative.encode("utf-8"))
                 digest.update(candidate.read_bytes())
@@ -213,7 +219,14 @@ def runtime_provenance(*, device: str) -> dict[str, Any]:
             }
         )
     except ImportError:
-        value.update({"torch_version": None, "cuda_version": None, "device_type": "unavailable", "gpu_name": None})
+        value.update(
+            {
+                "torch_version": None,
+                "cuda_version": None,
+                "device_type": "unavailable",
+                "gpu_name": None,
+            }
+        )
     return value
 
 
@@ -233,9 +246,26 @@ def analysis_identity(
     models: Sequence[ModelStatus],
 ) -> tuple[str, dict[str, Any]]:
     model_digest = model_bundle_digest(models)
+    prestage = input_summary.get("prestage")
+    source_content_sha256 = input_summary.get("source_content_sha256")
+    source_byte_size = input_summary.get("source_byte_size")
+    if isinstance(prestage, Mapping):
+        source_content_sha256 = prestage.get(
+            "source_content_sha256",
+            source_content_sha256,
+        )
+        source_byte_size = prestage.get("source_byte_size", source_byte_size)
+    input_source_sha256 = canonical_digest(
+        {
+            "source_content_sha256": source_content_sha256,
+            "source_byte_size": source_byte_size,
+            "dicom": input_summary.get("dicom"),
+        }
+    )
     payload = {
         "input_pixel_sha256": input_summary["input_pixel_sha256"],
         "input_geometry_sha256": canonical_digest(input_summary["geometry"]),
+        "input_source_sha256": input_source_sha256,
         "scientific_configuration_sha256": config.scientific_digest(),
         "code": {
             "package_version": source.get("package_version"),

@@ -35,6 +35,7 @@ from BodyComposition.dicom import (
     convert_dicom,
     dicom_report_patient_metadata,
     discover_dicom_series_sources,
+    discover_dicom_study_sources,
 )
 from BodyComposition.execution import (
     CaseLease,
@@ -76,6 +77,7 @@ from BodyComposition.schema_validation import resolve_bundle_path, validate_payl
 from BodyComposition.utils.nifti import NiftiDataContainer
 
 DEFAULT_OUTPUT_ROOT = Path(os.environ.get("BODYCOMPOSITION_OUTPUT_ROOT", "output")).expanduser()
+IMPLICIT_UPDATE_RUN_ID = "current"
 
 
 class DirtySourceError(RuntimeError):
@@ -83,7 +85,7 @@ class DirtySourceError(RuntimeError):
 
 
 class ExistingRunError(RuntimeError):
-    """Raised when an explicit run ID refers to a different immutable plan."""
+    """Raised when an existing run cannot safely accept the requested plan."""
 
 
 class InputChangedError(RuntimeError):
@@ -96,7 +98,7 @@ class InputDiscoveryError(ValueError):
     public_summary = "The input directory could not be mapped safely to CT cases."
 
 
-def _validate_series_uid(value: str | None) -> str | None:
+def _validate_dicom_uid(value: str | None, *, name: str) -> str | None:
     if value is None:
         return None
     result = str(value).strip()
@@ -105,8 +107,16 @@ def _validate_series_uid(value: str | None) -> str | None:
         or len(result) > 64
         or any(not component.isdigit() for component in result.split("."))
     ):
-        raise ValueError("series_uid must be a valid DICOM Series Instance UID.")
+        raise ValueError(f"{name} must be a valid DICOM UID.")
     return result
+
+
+def _validate_series_uid(value: str | None) -> str | None:
+    return _validate_dicom_uid(value, name="series_uid")
+
+
+def _validate_study_uid(value: str | None) -> str | None:
+    return _validate_dicom_uid(value, name="study_uid")
 
 
 @dataclass(frozen=True)
@@ -114,6 +124,7 @@ class CaseInput:
     input_path: Path
     case_id: str | None = None
     series_uid: str | None = None
+    study_uid: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "input_path", Path(self.input_path))
@@ -124,6 +135,9 @@ class CaseInput:
                 validate_public_id(str(self.case_id), name="case_id"),
             )
         object.__setattr__(self, "series_uid", _validate_series_uid(self.series_uid))
+        object.__setattr__(self, "study_uid", _validate_study_uid(self.study_uid))
+        if self.series_uid is not None and self.study_uid is not None:
+            raise ValueError("A case input cannot select both a series_uid and study_uid.")
 
     @classmethod
     def model_validate(cls, value: CaseInput | str | Path | Mapping[str, Any]) -> CaseInput:
@@ -132,7 +146,7 @@ class CaseInput:
         if isinstance(value, (str, Path)):
             return cls(Path(value))
         if isinstance(value, Mapping):
-            unknown = set(value) - {"input_path", "case_id", "series_uid"}
+            unknown = set(value) - {"input_path", "case_id", "series_uid", "study_uid"}
             if unknown:
                 raise ValueError(f"Unknown case input values: {sorted(unknown)}.")
             if "input_path" not in value:
@@ -145,6 +159,9 @@ class CaseInput:
                 str(case_id) if case_id is not None else None,
                 _validate_series_uid(
                     str(value["series_uid"]) if value.get("series_uid") is not None else None
+                ),
+                _validate_study_uid(
+                    str(value["study_uid"]) if value.get("study_uid") is not None else None
                 ),
             )
         raise TypeError("Case input must be a path, mapping, or CaseInput.")
@@ -171,9 +188,7 @@ def _input_snapshot_digest(path: Path) -> str:
 
     source = path.resolve(strict=False)
     lowered = source.name.lower()
-    is_nifti = source.is_file() and (
-        lowered.endswith(".nii") or lowered.endswith(".nii.gz")
-    )
+    is_nifti = source.is_file() and (lowered.endswith(".nii") or lowered.endswith(".nii.gz"))
     entries: list[dict[str, Any]] = []
 
     def append(candidate: Path, relative: str) -> None:
@@ -200,9 +215,7 @@ def _input_snapshot_digest(path: Path) -> str:
     if is_nifti:
         append(source, source.name)
         suffix_length = len(".nii.gz") if lowered.endswith(".nii.gz") else len(".nii")
-        sidecar = source.with_name(
-            f"{source.name[:-suffix_length]}.bodycomposition.json"
-        )
+        sidecar = source.with_name(f"{source.name[:-suffix_length]}.bodycomposition.json")
         append(sidecar, sidecar.name)
     else:
         directory = source.parent if source.is_file() else source
@@ -233,6 +246,7 @@ def _preflight_request_digest(cases: Sequence[CaseInput]) -> str:
                     "ordinal": ordinal,
                     "case_id": case.case_id,
                     "series_uid": case.series_uid,
+                    "study_uid": case.study_uid,
                     "input_snapshot_sha256": _input_snapshot_digest(case.input_path),
                 }
                 for ordinal, case in enumerate(cases)
@@ -249,11 +263,10 @@ def _build_input_preflight(cases: Sequence[CaseInput]) -> tuple[_InputPreflight,
             _, input_summary = image_summary(
                 case.input_path,
                 series_uid=case.series_uid,
+                study_uid=case.study_uid,
             )
         except Exception as error:
-            content_digest = (
-                file_sha256(case.input_path) if case.input_path.is_file() else None
-            )
+            content_digest = file_sha256(case.input_path) if case.input_path.is_file() else None
             pseudo_pixel_digest = canonical_digest(
                 {
                     "invalid_input": content_digest,
@@ -265,9 +278,7 @@ def _build_input_preflight(cases: Sequence[CaseInput]) -> tuple[_InputPreflight,
                 "source_reference": "content-addressed-local-input",
                 "source_content_sha256": content_digest,
                 "source_byte_size": (
-                    case.input_path.stat().st_size
-                    if case.input_path.is_file()
-                    else None
+                    case.input_path.stat().st_size if case.input_path.is_file() else None
                 ),
                 "input_pixel_sha256": pseudo_pixel_digest,
                 "input_format": "unreadable_or_missing",
@@ -313,8 +324,7 @@ def _load_input_preflight(
                 or item.get("ordinal") != ordinal
                 or not isinstance(item.get("input_summary"), Mapping)
                 or (
-                    item.get("failure") is not None
-                    and not isinstance(item.get("failure"), Mapping)
+                    item.get("failure") is not None and not isinstance(item.get("failure"), Mapping)
                 )
             ):
                 return None
@@ -322,9 +332,7 @@ def _load_input_preflight(
                 _InputPreflight(
                     input_summary=dict(item["input_summary"]),
                     failure=(
-                        dict(item["failure"])
-                        if isinstance(item.get("failure"), Mapping)
-                        else None
+                        dict(item["failure"]) if isinstance(item.get("failure"), Mapping) else None
                     ),
                 )
             )
@@ -340,12 +348,7 @@ def _cached_input_preflight(
     """Read each batch input once across compatible concurrent workers."""
 
     request_digest = _preflight_request_digest(cases)
-    path = (
-        output
-        / ".bodycomposition"
-        / "preflight"
-        / f"{request_digest}.json"
-    )
+    path = output / ".bodycomposition" / "preflight" / f"{request_digest}.json"
     lock_path = path.with_suffix(".lock")
     with shared_file_guard(lock_path):
         cached = _load_input_preflight(
@@ -469,9 +472,7 @@ def _json_native(value: Any) -> Any:
         for key, item in value.items():
             normalized_key = _json_mapping_key(key)
             if normalized_key in normalized:
-                raise TypeError(
-                    "QC evidence mapping keys collide after JSON normalization."
-                )
+                raise TypeError("QC evidence mapping keys collide after JSON normalization.")
             normalized[normalized_key] = _json_native(item)
         return normalized
     if isinstance(value, Sequence) and not isinstance(
@@ -522,6 +523,122 @@ def _atomic_text(value: str, destination: Path) -> Path:
     return destination
 
 
+def _run_plan(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "run_id": value.get("run_id"),
+        "ordered_cases": value.get("ordered_cases"),
+        "configuration_sha256": value.get("configuration_sha256"),
+    }
+
+
+def _active_plan_payload(plan: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "plan_sha256": canonical_digest(plan),
+        "plan": dict(plan),
+    }
+
+
+def _prepare_run_generation(
+    output_root: Path,
+    run_id: str,
+    plan: Mapping[str, Any],
+    *,
+    update: bool,
+) -> Path:
+    """Create or join one run generation, optionally advancing a stable run ID."""
+
+    run_root = output_root / "runs" / run_id
+    active_plan_path = run_root / ".active-plan.json"
+    requested_payload = _active_plan_payload(plan)
+    requested_digest = str(requested_payload["plan_sha256"])
+    guard = output_root / ".bodycomposition" / "guards" / f"run-generation-{run_id}.lock"
+
+    with shared_file_guard(guard):
+        manifest_path = run_root / "run_manifest.json"
+        if manifest_path.is_file():
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(previous, Mapping):
+                raise ExistingRunError("The existing run manifest is unreadable.")
+            validate_payload(previous, "run_manifest.schema.json")
+            previous_plan = _run_plan(previous)
+            if previous_plan == dict(plan):
+                if not active_plan_path.is_file():
+                    _atomic_json(requested_payload, active_plan_path)
+                return run_root
+            if not update:
+                raise ExistingRunError(
+                    "The requested run_id already belongs to a different immutable "
+                    "input/configuration plan. Use --update only when this "
+                    "completed run should become the prior generation of the same cohort."
+                )
+            if previous_plan.get("configuration_sha256") != plan.get("configuration_sha256"):
+                raise ExistingRunError(
+                    "--update may refresh cohort inputs, but it cannot change the "
+                    "queue-compatible configuration. Omit --update for a new immutable "
+                    "run, use another output root, or choose an advanced new run ID."
+                )
+
+            previous_digest = canonical_digest(previous_plan)
+            generation = (
+                f"{previous_digest[:24]}-"
+                f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-"
+                f"{uuid4().hex[:8]}"
+            )
+            archive_root = output_root / "superseded" / run_id / generation
+            archive_root.parent.mkdir(parents=True, exist_ok=True)
+            run_root.rename(archive_root)
+
+            state_root = output_root / ".bodycomposition" / "execution" / run_id
+            state_archive = (
+                output_root / ".bodycomposition" / "execution-history" / run_id / generation
+            )
+            try:
+                if state_root.exists():
+                    state_archive.parent.mkdir(parents=True, exist_ok=True)
+                    state_root.rename(state_archive)
+            except OSError:
+                archive_root.rename(run_root)
+                raise
+
+            _atomic_json(
+                {
+                    "schema_version": 1,
+                    "run_id": run_id,
+                    "plan_sha256": previous_digest,
+                    "superseded_at": _utc_now(),
+                    "superseded_by_plan_sha256": requested_digest,
+                },
+                archive_root / ".superseded.json",
+            )
+            run_root.mkdir(parents=True, exist_ok=False)
+            _atomic_json(requested_payload, active_plan_path)
+            return run_root
+
+        if run_root.exists():
+            if active_plan_path.is_file():
+                active = json.loads(active_plan_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(active, Mapping)
+                    and active.get("plan_sha256") == requested_digest
+                    and active.get("plan") == dict(plan)
+                ):
+                    return run_root
+                raise ExistingRunError(
+                    "The requested run_id has an active incomplete run for another plan. "
+                    "Finish or recover that run before replacing it."
+                )
+            if any(run_root.iterdir()):
+                raise ExistingRunError(
+                    "The requested run_id has incomplete legacy state without a verifiable "
+                    "plan marker; it cannot be replaced automatically."
+                )
+        else:
+            run_root.mkdir(parents=True)
+        _atomic_json(requested_payload, active_plan_path)
+        return run_root
+
+
 def _check_writable(directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     probe = directory / f".write-check-{uuid4().hex}"
@@ -533,10 +650,18 @@ def _check_writable(directory: Path) -> None:
         probe.unlink(missing_ok=True)
 
 
-def _safe_case_id(requested: str | None, pixel_digest: str) -> str:
+def _safe_case_id(
+    requested: str | None,
+    input_summary: Mapping[str, Any],
+) -> str:
     if requested is not None:
         return validate_public_id(requested, name="case_id")
-    return f"case-{pixel_digest[:16]}"
+    dicom = input_summary.get("dicom")
+    if isinstance(dicom, Mapping):
+        study_digest = dicom.get("study_instance_uid_sha256")
+        if isinstance(study_digest, str) and len(study_digest) == 64:
+            return f"case-{study_digest[:16]}"
+    return f"case-{str(input_summary['input_pixel_sha256'])[:16]}"
 
 
 def _normalise_flag(value: Any, *, default_stage: str) -> dict[str, Any]:
@@ -759,6 +884,7 @@ def load_batch_manifest(path: str | Path) -> tuple[CaseInput, ...]:
                 input_path=input_path,
                 case_id=case.case_id,
                 series_uid=case.series_uid,
+                study_uid=case.study_uid,
             )
         )
     return tuple(result)
@@ -805,8 +931,8 @@ def discover_case_inputs(
     """Map one file or directory to deterministic CT case inputs.
 
     Files remain single-case inputs. Directories prefer a conversion-generated
-    batch manifest, otherwise accept verified conversion sidecars or recursively
-    discovered DICOM CT series. Multiple arbitrary NIfTI files are rejected so
+    batch manifest, otherwise accept verified conversion sidecars or one selected
+    DICOM CT stack per recursively discovered study. Multiple arbitrary NIfTI files are rejected so
     segmentation masks cannot be mistaken for source CTs.
     """
 
@@ -831,12 +957,10 @@ def discover_case_inputs(
         return _auto_manifest_inputs(source, generated_manifest)
 
     nifti_paths = _directory_nifti_paths(source)
-    dicom_sources = tuple(
-        item
-        for item in discover_dicom_series_sources(source)
-        if item.modality == "CT"
+    dicom_series_sources = tuple(
+        item for item in discover_dicom_series_sources(source) if item.modality == "CT"
     )
-    if nifti_paths and dicom_sources:
+    if nifti_paths and dicom_series_sources:
         raise InputDiscoveryError(
             "The input directory contains both NIfTI files and DICOM CT series. "
             "Point analyze at one collection or use an explicit batch manifest."
@@ -846,9 +970,7 @@ def discover_case_inputs(
             raise InputDiscoveryError(
                 "A DICOM Series Instance UID cannot be used with NIfTI inputs."
             )
-        staged = tuple(
-            path for path in nifti_paths if conversion_metadata_path(path).is_file()
-        )
+        staged = tuple(path for path in nifti_paths if conversion_metadata_path(path).is_file())
         if len(nifti_paths) == 1:
             return (CaseInput(nifti_paths[0]),)
         if len(staged) != len(nifti_paths):
@@ -862,22 +984,32 @@ def discover_case_inputs(
     selected_uid = _validate_series_uid(series_uid)
     if selected_uid is not None:
         selected = tuple(
-            item for item in dicom_sources if item.series_instance_uid == selected_uid
+            item for item in dicom_series_sources if item.series_instance_uid == selected_uid
         )
         if not selected:
-            available = ", ".join(item.series_instance_uid for item in dicom_sources)
+            available = ", ".join(item.series_instance_uid for item in dicom_series_sources)
             raise InputDiscoveryError(
                 f"Series Instance UID {selected_uid!r} was not found. Available CT "
                 f"series: {available or 'none'}."
             )
-        dicom_sources = selected
-    if not dicom_sources:
+        return (
+            CaseInput(
+                selected[0].input_path,
+                series_uid=selected[0].series_instance_uid,
+            ),
+        )
+    study_sources = discover_dicom_study_sources(source)
+    if not study_sources:
         raise InputDiscoveryError(
             "No NIfTI CT, converted NIfTI/sidecar pair, or DICOM CT series was found."
         )
     return tuple(
-        CaseInput(item.input_path, series_uid=item.series_instance_uid)
-        for item in dicom_sources
+        CaseInput(
+            item.input_path,
+            series_uid=(item.series_instance_uids[0] if item.study_instance_uid is None else None),
+            study_uid=item.study_instance_uid,
+        )
+        for item in study_sources
     )
 
 
@@ -938,7 +1070,11 @@ class PipelineService:
         case_id: str | None = None,
         run_id: str | None = None,
         series_uid: str | None = None,
-    ) -> CaseResult | BatchResult:
+        update: bool = False,
+        worker_mode: bool = False,
+        drain_requested: Callable[[], bool] | None = None,
+        drain_reason: str = "requested",
+    ) -> CaseResult | BatchResult | BatchWorkerResult:
         """Analyze one CT or every safely discovered case in a directory."""
 
         cases = discover_case_inputs(input_path, series_uid=series_uid)
@@ -954,13 +1090,22 @@ class PipelineService:
                     selected.input_path,
                     case_id=case_id,
                     series_uid=selected.series_uid,
+                    study_uid=selected.study_uid,
                 ),
             )
         result = cast(
-            BatchResult,
-            self.analyze_batch(cases, output_root, run_id=run_id),
+            BatchResult | BatchWorkerResult,
+            self.analyze_batch(
+                cases,
+                output_root,
+                run_id=run_id,
+                update=update,
+                worker_mode=worker_mode,
+                drain_requested=drain_requested,
+                drain_reason=drain_reason,
+            ),
         )
-        return result.cases[0] if len(cases) == 1 else result
+        return result.cases[0] if len(cases) == 1 and not worker_mode else result
 
     def analyze_case(
         self,
@@ -970,11 +1115,13 @@ class PipelineService:
         case_id: str | None = None,
         run_id: str | None = None,
         series_uid: str | None = None,
+        update: bool = False,
     ) -> CaseResult:
         return self.analyze_batch(
             [CaseInput(Path(input_path), case_id, series_uid)],
             output_root,
             run_id=run_id,
+            update=update,
         ).cases[0]
 
     def analyze_batch(
@@ -983,6 +1130,7 @@ class PipelineService:
         output_root: str | Path = DEFAULT_OUTPUT_ROOT,
         *,
         run_id: str | None = None,
+        update: bool = False,
         worker_mode: bool = False,
         drain_requested: Callable[[], bool] | None = None,
         drain_reason: str = "requested",
@@ -1006,7 +1154,7 @@ class PipelineService:
             input_info = input_result.input_summary
             resolved_case_id = _safe_case_id(
                 case.case_id,
-                str(input_info["input_pixel_sha256"]),
+                input_info,
             )
             analysis_id, provenance = analysis_identity(
                 input_summary=input_info,
@@ -1032,16 +1180,25 @@ class PipelineService:
         ]
         queue_configuration_sha256 = self.config.queue_digest()
         selected_run_id = validate_public_id(
-            run_id or _default_run_id(ordered_cases, queue_configuration_sha256),
+            run_id
+            or (
+                IMPLICIT_UPDATE_RUN_ID
+                if update
+                else _default_run_id(ordered_cases, queue_configuration_sha256)
+            ),
             name="run_id",
         )
-        run_root = output / "runs" / selected_run_id
-        run_root.mkdir(parents=True, exist_ok=True)
         plan = {
             "run_id": selected_run_id,
             "ordered_cases": ordered_cases,
             "configuration_sha256": queue_configuration_sha256,
         }
+        run_root = _prepare_run_generation(
+            output,
+            selected_run_id,
+            plan,
+            update=update,
+        )
         existing_manifest = run_root / "run_manifest.json"
         reuse_completed_run = existing_manifest.is_file()
         if reuse_completed_run:
@@ -1164,9 +1321,7 @@ class PipelineService:
                     for value in previous.get("cases", ())
                 )
                 if len(previous_results) != len(prepared):
-                    raise ExistingRunError(
-                        "The existing run manifest has an incomplete case list."
-                    )
+                    raise ExistingRunError("The existing run manifest has an incomplete case list.")
                 previous_aggregate_paths = {
                     name: resolve_bundle_path(
                         run_root,
@@ -1210,8 +1365,7 @@ class PipelineService:
                     started_at=started_at,
                 )
             case_payloads = [
-                json.loads(result.manifest_path.read_text(encoding="utf-8"))
-                for result in results
+                json.loads(result.manifest_path.read_text(encoding="utf-8")) for result in results
             ]
             ended_at, duration_seconds = _elapsed_run_period(
                 started_at,
@@ -1231,25 +1385,17 @@ class PipelineService:
                 "duration_seconds": duration_seconds,
                 "execution_status": (
                     "cancelled"
-                    if any(
-                        item.execution_status == ExecutionStatus.CANCELLED
-                        for item in results
-                    )
+                    if any(item.execution_status == ExecutionStatus.CANCELLED for item in results)
                     else "failed"
                     if (
-                        any(
-                            item.execution_status == ExecutionStatus.FAILED
-                            for item in results
-                        )
+                        any(item.execution_status == ExecutionStatus.FAILED for item in results)
                         or reporting is not None
                         and reporting.get("status") == "failed"
                     )
                     else "succeeded"
                 ),
                 "case_counts": {
-                    status.value: sum(
-                        item.execution_status == status for item in results
-                    )
+                    status.value: sum(item.execution_status == status for item in results)
                     for status in ExecutionStatus
                     if status not in {ExecutionStatus.PENDING, ExecutionStatus.RUNNING}
                 },
@@ -1260,9 +1406,7 @@ class PipelineService:
                         "attempt_id": result.attempt_id,
                         "execution_status": result.execution_status.value,
                         "qc_status": result.qc_status.value,
-                        "manifest": result.manifest_path.relative_to(
-                            run_root
-                        ).as_posix(),
+                        "manifest": result.manifest_path.relative_to(run_root).as_posix(),
                     }
                     for result in results
                 ],
@@ -1336,9 +1480,7 @@ class PipelineService:
                         output_directory=result.output_path / "reports",
                         settings=settings,
                         failure_stage=str(failure.get("stage") or "reporting"),
-                        failure_code=str(
-                            failure.get("code") or "case_report_unavailable"
-                        ),
+                        failure_code=str(failure.get("code") or "case_report_unavailable"),
                     )
                     report = load_case_report_result(report_manifest)
                 reports.append(report)
@@ -1415,17 +1557,14 @@ class PipelineService:
         from BodyComposition.reporting.service import run_cover_configuration_rows
 
         payloads = [
-            json.loads(result.manifest_path.read_text(encoding="utf-8"))
-            for result in results
+            json.loads(result.manifest_path.read_text(encoding="utf-8")) for result in results
         ]
 
         def joined(values: Sequence[Any]) -> str | None:
             unique = [
                 value
                 for value in dict.fromkeys(
-                    str(item).strip()
-                    for item in values
-                    if item is not None and str(item).strip()
+                    str(item).strip() for item in values if item is not None and str(item).strip()
                 )
                 if value
             ]
@@ -1440,9 +1579,7 @@ class PipelineService:
             return value
 
         case_counts = {
-            status.value: sum(
-                result.execution_status == status for result in results
-            )
+            status.value: sum(result.execution_status == status for result in results)
             for status in (
                 ExecutionStatus.SUCCEEDED,
                 ExecutionStatus.FAILED,
@@ -1505,16 +1642,12 @@ class PipelineService:
             {"role": "Body surface", "identifier": config["body_surface"]["backend"]},
         ]
         if landmark_config["enabled"]:
-            models.append(
-                {"role": "Landmarks", "identifier": landmark_config["backend"]}
-            )
+            models.append({"role": "Landmarks", "identifier": landmark_config["backend"]})
         package_versions = [
-            nested(payload, "provenance", "code", "package_version")
-            for payload in payloads
+            nested(payload, "provenance", "code", "package_version") for payload in payloads
         ]
         source_revisions = [
-            nested(payload, "provenance", "code", "git_commit")
-            for payload in payloads
+            nested(payload, "provenance", "code", "git_commit") for payload in payloads
         ]
         output_root = run_root.parents[1]
         return {
@@ -1527,12 +1660,9 @@ class PipelineService:
             "case_counts": case_counts,
             "qc_counts": qc_counts,
             "manual_review_case_count": sum(
-                result.qc_status in {QCStatus.REVIEW, QCStatus.FAIL}
-                for result in results
+                result.qc_status in {QCStatus.REVIEW, QCStatus.FAIL} for result in results
             ),
-            "mean_runtime_seconds": (
-                sum(durations) / len(durations) if durations else None
-            ),
+            "mean_runtime_seconds": (sum(durations) / len(durations) if durations else None),
             "runtime_case_count": len(durations),
             "started_at": started_at,
             "ended_at": analysis_ended_at,
@@ -1562,10 +1692,7 @@ class PipelineService:
                 )
                 or str(config["runtime"]["device"]),
                 "hardware": joined(
-                    [
-                        nested(payload, "provenance", "runtime", "gpu_name")
-                        for payload in payloads
-                    ]
+                    [nested(payload, "provenance", "runtime", "gpu_name") for payload in payloads]
                 ),
                 "cuda": joined(
                     [
@@ -1586,10 +1713,7 @@ class PipelineService:
                     ]
                 ),
                 "strategy": joined(
-                    [
-                        nested(payload, "provenance", "execution", "strategy")
-                        for payload in payloads
-                    ]
+                    [nested(payload, "provenance", "execution", "strategy") for payload in payloads]
                 ),
             },
             "technical_errors": [
@@ -1603,9 +1727,7 @@ class PipelineService:
                 "output_directory": run_id,
                 "case_folder_pattern": "cases/<case-id>/<analysis-id>",
                 "failed_folder_pattern": "failed/<case-id>/<attempt-id>",
-                "combined_pdf": (
-                    f"aggregate/reports/{run_id}/case_reports.pdf"
-                ),
+                "combined_pdf": (f"aggregate/reports/{run_id}/case_reports.pdf"),
             },
         }
 
@@ -1636,11 +1758,7 @@ class PipelineService:
                 manifest = state.result_manifest(item.case_id)
                 if manifest is not None and manifest.is_file():
                     current[item.case_id] = CaseResult.from_manifest(manifest)
-            ordered = [
-                current[item.case_id]
-                for item in prepared
-                if item.case_id in current
-            ]
+            ordered = [current[item.case_id] for item in prepared if item.case_id in current]
             if not ordered:
                 return None
             return self._collate_run_reports(
@@ -1703,9 +1821,7 @@ class PipelineService:
         hardware_profile = dict(
             self._hardware_provider(getattr(executor, "device", self.config.device))
         )
-        requested = bool(
-            self.config.normalized()["runtime"]["unload_models_between_stages"]
-        )
+        requested = bool(self.config.normalized()["runtime"]["unload_models_between_stages"])
         if not requested and not state.low_memory_enabled(hardware_profile):
             return False, hardware_profile
         enable = getattr(executor, "enable_low_memory_mode", None)
@@ -1721,6 +1837,119 @@ class PipelineService:
     @staticmethod
     def _canonical_case_manifest(run_root: Path, item: _PreparedCase) -> Path:
         return run_root / "cases" / item.case_id / item.analysis_id / "case_manifest.json"
+
+    @staticmethod
+    def _superseded_case_manifests(
+        run_root: Path,
+        item: _PreparedCase,
+    ) -> tuple[Path, ...]:
+        output_root = run_root.parents[1]
+        history = output_root / "superseded" / run_root.name
+        if not history.is_dir():
+            return ()
+        candidates = tuple(
+            history.glob(f"*/cases/{item.case_id}/{item.analysis_id}/case_manifest.json")
+        )
+        return tuple(
+            sorted(
+                candidates,
+                key=lambda path: path.stat().st_mtime_ns,
+                reverse=True,
+            )
+        )
+
+    def _reuse_superseded_case(
+        self,
+        *,
+        item: _PreparedCase,
+        run_root: Path,
+        lease: CaseLease,
+    ) -> CaseResult | None:
+        """Promote an identical prior generation without rerunning inference."""
+
+        source_manifest: Path | None = None
+        source_result: CaseResult | None = None
+        for candidate in self._superseded_case_manifests(run_root, item):
+            try:
+                result = CaseResult.from_manifest(candidate)
+            except (FileNotFoundError, ValueError):
+                logging.warning(
+                    "Ignored an invalid superseded result for %s.",
+                    item.case_id,
+                )
+                continue
+            if (
+                result.succeeded
+                and result.run_id == run_root.name
+                and result.case_id == item.case_id
+                and result.analysis_id == item.analysis_id
+            ):
+                source_manifest = candidate
+                source_result = result
+                break
+        if source_manifest is None or source_result is None:
+            return None
+
+        final = run_root / "cases" / item.case_id / item.analysis_id
+        final_manifest = final / "case_manifest.json"
+        if final_manifest.is_file():
+            return self._as_skipped_identical(CaseResult.from_manifest(final_manifest))
+
+        attempt_id = _new_id("attempt-reuse")
+        attempt_root = run_root / ".attempts" / attempt_id
+        bundle = attempt_root / "bundle"
+        bundle.mkdir(parents=True)
+        try:
+            source_payload = json.loads(source_manifest.read_text(encoding="utf-8"))
+            validate_payload(source_payload, "case_manifest.schema.json")
+            for index, artifact in enumerate(source_payload["artifacts"]):
+                relative = str(artifact["relative_path"])
+                source_artifact = resolve_bundle_path(
+                    source_manifest.parent,
+                    relative,
+                    field=f"artifacts[{index}].relative_path",
+                )
+                destination = bundle / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.link(source_artifact.resolve(strict=True), destination)
+                except OSError:
+                    shutil.copy2(source_artifact, destination, follow_symlinks=True)
+
+            reused_at = _utc_now()
+            source_execution = source_result.provenance.get("execution")
+            source_execution = source_execution if isinstance(source_execution, Mapping) else {}
+            source_payload.update(
+                {
+                    "attempt_id": attempt_id,
+                    "execution_status": ExecutionStatus.SUCCEEDED.value,
+                    "started_at": reused_at,
+                    "ended_at": reused_at,
+                    "duration_seconds": 0.0,
+                    "input": dict(item.input_summary),
+                    "provenance": {
+                        **dict(item.provenance),
+                        "execution": {
+                            "strategy": "reused_identical_case_bundle",
+                            "worker_id": lease.state.worker_id,
+                            "claim_token": lease.token,
+                            "reused_outputs": True,
+                            "source_attempt_id": source_result.attempt_id,
+                            "source_manifest_sha256": file_sha256(source_manifest),
+                            "source_execution_strategy": source_execution.get("strategy"),
+                        },
+                    },
+                }
+            )
+            validate_payload(source_payload, "case_manifest.schema.json")
+            _atomic_json(source_payload, bundle / "case_manifest.json")
+            lease.assert_owned()
+            final.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(bundle, final)
+        finally:
+            shutil.rmtree(attempt_root, ignore_errors=True)
+
+        return self._as_skipped_identical(CaseResult.from_manifest(final_manifest))
 
     def _record_coordination_failure(
         self,
@@ -1838,7 +2067,11 @@ class PipelineService:
                         orphan,
                     )
                     return None
-            return result
+            return (
+                self._as_skipped_identical(result)
+                if isinstance(execution, Mapping) and execution.get("reused_outputs")
+                else result
+            )
 
         manifest = state.result_manifest(item.case_id)
         if manifest is not None and manifest.is_file():
@@ -1851,7 +2084,12 @@ class PipelineService:
                 raise ExistingRunError(
                     f"Filesystem queue state does not match the immutable plan for {item.case_id}."
                 )
-            return result
+            execution = result.provenance.get("execution")
+            return (
+                self._as_skipped_identical(result)
+                if isinstance(execution, Mapping) and execution.get("reused_outputs")
+                else result
+            )
 
         terminal = state.terminal_failure_record(item.case_id)
         if terminal is not None:
@@ -2000,6 +2238,21 @@ class PipelineService:
                             state.request_stop(reason="fail_fast_input_failure")
                         continue
 
+                    lease.set_stage("reuse_identical_result")
+                    reused = self._reuse_superseded_case(
+                        item=item,
+                        run_root=run_root,
+                        lease=lease,
+                    )
+                    if reused is not None:
+                        state.mark_completed(
+                            lease,
+                            manifest_path=reused.manifest_path,
+                            reused_outputs=True,
+                        )
+                        remember(reused)
+                        continue
+
                     low_memory_mode, hardware_profile = self._ensure_runtime_strategy(state)
                     if should_drain():
                         continue
@@ -2095,11 +2348,7 @@ class PipelineService:
                 if len(results) == len(prepared):
                     break
                 return (
-                    [
-                        results[item.case_id]
-                        for item in prepared
-                        if item.case_id in results
-                    ],
+                    [results[item.case_id] for item in prepared if item.case_id in results],
                     latest_reporting,
                     False,
                     active_unfinished_count(),
@@ -2109,11 +2358,7 @@ class PipelineService:
                 active_case_count = active_unfinished_count()
                 if worker_mode and active_case_count:
                     return (
-                        [
-                            results[item.case_id]
-                            for item in prepared
-                            if item.case_id in results
-                        ],
+                        [results[item.case_id] for item in prepared if item.case_id in results],
                         latest_reporting,
                         False,
                         active_case_count,
@@ -2206,6 +2451,7 @@ class PipelineService:
                 patient_metadata = dicom_report_patient_metadata(
                     case.input_path,
                     series_uid=case.series_uid,
+                    study_uid=case.study_uid,
                 )
             except Exception as error:
                 logging.warning(
@@ -2240,6 +2486,7 @@ class PipelineService:
                     case.input_path,
                     analysis_input,
                     series_uid=case.series_uid,
+                    study_uid=case.study_uid,
                 )
                 if not isinstance(conversion, DicomConversionResult):
                     raise RuntimeError(
@@ -2822,9 +3069,7 @@ def export_result_csv(
     source_root = result.output_path.resolve()
     output_root = Path(destination).resolve()
     if output_root == source_root or output_root.is_relative_to(source_root):
-        raise ValueError(
-            "CSV export destination must be outside the immutable case bundle."
-        )
+        raise ValueError("CSV export destination must be outside the immutable case bundle.")
     tables = load_measurement_tables(result.output_path / "tables")
     return write_csv_mirrors(
         tables,
@@ -2843,9 +3088,7 @@ def _analysis_config(
         tissue_backend = resolve_tissue_backend(tissue_backend)
     selected_config = (
         low_resource_config(
-            PipelineConfig.load(config)
-            if isinstance(config, (str, Path))
-            else config
+            PipelineConfig.load(config) if isinstance(config, (str, Path)) else config
         )
         if low_resource
         else config
@@ -2875,6 +3118,7 @@ def analyze(
     case_id: str | None = None,
     run_id: str | None = None,
     series_uid: str | None = None,
+    update: bool = False,
     low_resource: bool = False,
     tissue_backend: str | None = None,
 ) -> CaseResult | BatchResult:
@@ -2885,12 +3129,16 @@ def analyze(
         low_resource=low_resource,
         tissue_backend=tissue_backend,
     )
-    return PipelineService(selected_config).analyze(
-        input_path,
-        output_root,
-        case_id=case_id,
-        run_id=run_id,
-        series_uid=series_uid,
+    return cast(
+        CaseResult | BatchResult,
+        PipelineService(selected_config).analyze(
+            input_path,
+            output_root,
+            case_id=case_id,
+            run_id=run_id,
+            series_uid=series_uid,
+            update=update,
+        ),
     )
 
 
@@ -2902,6 +3150,7 @@ def analyze_case(
     case_id: str | None = None,
     run_id: str | None = None,
     series_uid: str | None = None,
+    update: bool = False,
     low_resource: bool = False,
     tissue_backend: str | None = None,
 ) -> CaseResult:
@@ -2918,6 +3167,7 @@ def analyze_case(
         case_id=case_id,
         run_id=run_id,
         series_uid=series_uid,
+        update=update,
     )
 
 
@@ -2927,6 +3177,7 @@ def analyze_batch(
     *,
     config: PipelineConfig | Mapping[str, Any] | str | Path | None = None,
     run_id: str | None = None,
+    update: bool = False,
     low_resource: bool = False,
     tissue_backend: str | None = None,
 ) -> BatchResult:
@@ -2943,6 +3194,7 @@ def analyze_batch(
             inputs,
             output_root,
             run_id=run_id,
+            update=update,
         ),
     )
 

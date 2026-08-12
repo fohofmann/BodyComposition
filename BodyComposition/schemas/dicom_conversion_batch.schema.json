@@ -9,16 +9,18 @@
     "report_type",
     "execution_status",
     "discovered_series_count",
+    "discovered_study_count",
     "converted_count",
     "failed_count",
     "analysis_manifest",
     "cases"
   ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "1.1.0"},
     "report_type": {"const": "bodycomposition-dicom-conversion-batch"},
     "execution_status": {"enum": ["succeeded", "failed"]},
     "discovered_series_count": {"type": "integer", "minimum": 1},
+    "discovered_study_count": {"type": "integer", "minimum": 1},
     "converted_count": {"type": "integer", "minimum": 0},
     "failed_count": {"type": "integer", "minimum": 0},
     "analysis_manifest": {
@@ -64,7 +66,8 @@
             "required": [
               "case_id",
               "status",
-              "series_instance_uid_sha256",
+              "source_group_sha256",
+              "candidate_series_instance_uid_sha256",
               "nifti",
               "metadata",
               "failure"
@@ -72,7 +75,13 @@
             "properties": {
               "case_id": {"type": "null"},
               "status": {"const": "failed"},
-              "series_instance_uid_sha256": {"$ref": "#/$defs/sha256"},
+              "source_group_sha256": {"$ref": "#/$defs/sha256"},
+              "candidate_series_instance_uid_sha256": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"$ref": "#/$defs/sha256"}
+              },
               "nifti": {"type": "null"},
               "metadata": {"type": "null"},
               "failure": {

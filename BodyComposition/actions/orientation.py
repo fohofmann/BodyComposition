@@ -70,6 +70,49 @@ class AssessOrientation(PipelineAction):
             uncertain_reasons.append(
                 "The selected DICOM series has incomplete ImagePositionPatient metadata."
             )
+        excluded_instances = (
+            dicom_summary.get("excluded_instance_count", 0) if dicom_summary else 0
+        )
+        if isinstance(excluded_instances, int) and excluded_instances > 0:
+            if dicom_summary.get("instance_selection") in {
+                "exclude-single-orthogonal-localizer",
+                "exclude-tagged-accessory-instances",
+            }:
+                uncertain_reasons.append(
+                    f"{excluded_instances} tagged DICOM accessory instance(s) were "
+                    "excluded before axial volume assembly."
+                )
+            else:
+                uncertain_reasons.append(
+                    f"{excluded_instances} DICOM instance(s) were excluded by axial-stack "
+                    "selection before volume assembly."
+                )
+        selection = dicom_summary.get("selection", {}) if dicom_summary else {}
+        if isinstance(selection, Mapping):
+            series_count = selection.get("evaluated_ct_series_count")
+            stack_count = selection.get("eligible_stack_count")
+            if (
+                isinstance(series_count, int)
+                and isinstance(stack_count, int)
+                and (series_count > 1 or stack_count > 1)
+            ):
+                uncertain_reasons.append(
+                    "DICOM stack selection considered "
+                    f"{series_count} CT series and {stack_count} eligible axial stack(s); "
+                    "confirm the selected reconstruction during review."
+                )
+            repairs = selection.get("header_repairs")
+            if isinstance(repairs, list) and repairs:
+                repair_codes = [
+                    str(value.get("code"))
+                    for value in repairs
+                    if isinstance(value, Mapping) and value.get("code")
+                ]
+                uncertain_reasons.append(
+                    "Minor DICOM header rounding was normalized before volume assembly"
+                    + (f" ({', '.join(repair_codes)})" if repair_codes else "")
+                    + "."
+                )
         if uncertain_reasons:
             case_config = copy.deepcopy(self.config)
             case_config["orientation"]["header_uncertain_reasons"] = [

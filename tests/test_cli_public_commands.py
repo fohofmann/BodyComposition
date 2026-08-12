@@ -48,6 +48,7 @@ def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_pat
             output,
             *,
             run_id,
+            update,
             worker_mode,
             drain_requested=None,
             drain_reason="requested",
@@ -56,6 +57,7 @@ def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_pat
                 cases=cases,
                 output=output,
                 run_id=run_id,
+                update=update,
                 worker_mode=worker_mode,
                 drain_requested=drain_requested,
                 drain_reason=drain_reason,
@@ -86,6 +88,7 @@ def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_pat
     assert calls["cases"] == ("a", "b")
     assert calls["output"] == tmp_path / "output"
     assert calls["run_id"] == "run-1"
+    assert calls["update"] is False
     assert calls["worker_mode"] is False
     assert isinstance(calls["config"], PipelineConfig)
     assert calls["config"].device == "cpu"
@@ -101,6 +104,21 @@ def test_batch_cli_preserves_ordered_service_result(monkeypatch, capsys, tmp_pat
     assert callable(calls["drain_requested"])
     assert calls["drain_reason"] == "sigterm"
     assert calls["drain_seen"] is True
+
+    assert (
+        cli.main(
+            [
+                "batch",
+                "cases.json",
+                "--update",
+                "--json",
+            ]
+        )
+        == cli.EXIT_OK
+    )
+    capsys.readouterr()
+    assert calls["run_id"] is None
+    assert calls["update"] is True
 
     result.execution_status = ExecutionStatus.FAILED
     assert cli.main(["batch", "cases.json", "--json"]) == cli.EXIT_EXECUTION
@@ -166,22 +184,14 @@ def test_model_cli_lists_verifies_and_synchronizes_selected_assets(
         return (ready,)
 
     monkeypatch.setattr(cli, "sync_models", sync)
-    assert (
-        cli.main(
-            ["models", "sync", "--tissue-backend", "boa", "--json"]
-        )
-        == cli.EXIT_OK
-    )
+    assert cli.main(["models", "sync", "--tissue-backend", "boa", "--json"]) == cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["ready"]
     assert synchronized == [(BOA_BACKEND_ID, None)]
 
 
 def test_config_cli_roundtrips_default_yaml(capsys, tmp_path):
     output = tmp_path / "nested" / "bodycomposition.yaml"
-    assert (
-        cli.main(["config", "show-default", "--output", str(output), "--json"])
-        == cli.EXIT_OK
-    )
+    assert cli.main(["config", "show-default", "--output", str(output), "--json"]) == cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["output"] == str(output)
     assert output.is_file()
 
@@ -436,9 +446,7 @@ def test_main_maps_public_errors_to_stable_json_exit_codes(
     def fail(_args):
         raise error
 
-    parser = SimpleNamespace(
-        parse_args=lambda _argv: argparse.Namespace(handler=fail, json=True)
-    )
+    parser = SimpleNamespace(parse_args=lambda _argv: argparse.Namespace(handler=fail, json=True))
     monkeypatch.setattr(cli, "build_parser", lambda: parser)
 
     assert cli.main([]) == expected

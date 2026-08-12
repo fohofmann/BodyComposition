@@ -125,9 +125,7 @@ def _worker_sigterm_drain(enabled: bool) -> Iterator[threading.Event]:
 def _tissue_backend_argument(value: str) -> str:
     backend = resolve_tissue_backend(value)
     if backend not in TISSUE_BACKEND_IDS:
-        raise argparse.ArgumentTypeError(
-            "tissue backend must be boa, resencl, or resencm"
-        )
+        raise argparse.ArgumentTypeError("tissue backend must be boa, resencl, or resencm")
     return backend
 
 
@@ -174,37 +172,60 @@ def _report_result(value: Any) -> dict[str, Any]:
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
-    result = PipelineService(_config(args)).analyze(
-        args.input,
-        args.output,
-        case_id=args.case_id,
-        run_id=args.run_id,
-        series_uid=args.series_uid,
+    with _worker_sigterm_drain(args.worker) as drain_requested:
+        options: dict[str, Any] = {
+            "case_id": args.case_id,
+            "run_id": args.run_id,
+            "series_uid": args.series_uid,
+            "update": args.update,
+            "worker_mode": args.worker,
+        }
+        if args.worker:
+            options.update(
+                drain_requested=drain_requested.is_set,
+                drain_reason="sigterm",
+            )
+        result = PipelineService(_config(args)).analyze(
+            args.input,
+            args.output,
+            **options,
+        )
+    human = (
+        f"worker drained; shared run continues: {result.output_path}"
+        if result.execution_status == ExecutionStatus.RUNNING
+        else f"{result.execution_status.value}: {result.manifest_path}"
     )
     _emit(
         result.as_dict(),
         json_output=args.json,
-        human=f"{result.execution_status.value}: {result.manifest_path}",
+        human=human,
     )
     return (
         EXIT_OK
         if result.execution_status
-        in {ExecutionStatus.SUCCEEDED, ExecutionStatus.SKIPPED_IDENTICAL}
+        in {
+            ExecutionStatus.RUNNING,
+            ExecutionStatus.SUCCEEDED,
+            ExecutionStatus.SKIPPED_IDENTICAL,
+        }
         else EXIT_EXECUTION
     )
 
 
 def _cmd_convert(args: argparse.Namespace) -> int:
-    result = convert_dicom(
-        args.input,
-        args.output,
-        series_uid=args.series_uid,
-        overwrite=args.overwrite,
-    )
+    options: dict[str, Any] = {
+        "series_uid": args.series_uid,
+        "overwrite": args.overwrite,
+    }
+    if args.acquisition_number is not None:
+        options["acquisition_number"] = args.acquisition_number
+    result = convert_dicom(args.input, args.output, **options)
     if isinstance(result, DicomConversionBatchResult):
         human = (
             f"{result.execution_status}: converted {len(result.conversions)} of "
-            f"{result.discovered_series_count} CT series to {result.output_path}\n"
+            f"{result.discovered_study_count} DICOM studies "
+            f"({result.discovered_series_count} candidate CT series) to "
+            f"{result.output_path}\n"
             f"analysis manifest: {result.manifest_path}\n"
             f"conversion report: {result.report_path}"
         )
@@ -223,6 +244,7 @@ def _cmd_batch(args: argparse.Namespace) -> int:
     with _worker_sigterm_drain(args.worker) as drain_requested:
         options: dict[str, Any] = {
             "run_id": args.run_id,
+            "update": args.update,
             "worker_mode": args.worker,
         }
         if args.worker:
@@ -493,10 +515,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     else:
         ready = payload["operational_ready"]
         human = (
-            "ready"
-            if payload["release_ready"]
-            else "ready for analysis; release checks remain"
-        ) if ready else "not ready"
+            ("ready" if payload["release_ready"] else "ready for analysis; release checks remain")
+            if ready
+            else "not ready"
+        )
     _emit(payload, json_output=args.json, human=human)
     return EXIT_OK if ready else EXIT_ENVIRONMENT
 
@@ -612,7 +634,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--case-id",
         help="optional pseudonymous identifier when INPUT resolves to one CT",
     )
-    analyze.add_argument("--run-id", help="optional stable run identifier")
+    analyze.add_argument(
+        "--run-id",
+        help="advanced: named run lineage; --update uses 'current' when omitted",
+    )
+    analyze.add_argument(
+        "--update",
+        action="store_true",
+        help=(
+            "refresh the current cohort: archive its completed prior generation, reuse "
+            "unchanged cases, and process added or changed cases"
+        ),
+    )
+    analyze.add_argument(
+        "--worker",
+        action="store_true",
+        help=(
+            "scheduler worker mode for a shared directory run; SIGTERM finishes the "
+            "current case and then drains"
+        ),
+    )
     analyze.add_argument(
         "--series",
         dest="series_uid",
@@ -630,11 +671,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     convert = commands.add_parser(
         "convert",
-        help="convert one DICOM CT or a directory of series",
+        help="convert the best complete axial DICOM CT stack or a cohort",
         description=(
-            "Convert one DICOM CT to a NIfTI file, or recursively convert every CT "
-            "series to an output directory. Cohort conversion writes adjacent technical "
-            "sidecars and a manifest that analyze discovers automatically."
+            "Select and convert the best complete axial CT stack in one DICOM study, "
+            "or recursively convert a cohort to an output directory. Selection is "
+            "automatic for ordinary use. Every NIfTI receives an adjacent technical "
+            "sidecar, and cohort conversion writes a manifest that analyze discovers "
+            "automatically."
         ),
     )
     convert.add_argument("input", metavar="DICOM", type=Path, help="DICOM file or directory")
@@ -642,12 +685,22 @@ def build_parser() -> argparse.ArgumentParser:
         "output",
         metavar="OUTPUT",
         type=Path,
-        help="output .nii/.nii.gz for one series, or directory for all discovered series",
+        help=(
+            "output .nii/.nii.gz for one study's selected stack, or a directory for "
+            "cohort conversion"
+        ),
     )
     convert.add_argument(
         "--series",
         dest="series_uid",
-        help="convert only this DICOM Series Instance UID",
+        help="override automatic selection with this exact DICOM Series Instance UID",
+    )
+    convert.add_argument(
+        "--acquisition-number",
+        help=(
+            "advanced override for one Acquisition Number inside the selected series; "
+            "ordinary conversions choose the best complete axial stack automatically"
+        ),
     )
     convert.add_argument(
         "--overwrite",
@@ -669,7 +722,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help=f"result root (default: {DEFAULT_OUTPUT_ROOT})",
     )
-    batch.add_argument("--run-id", help="optional stable run identifier")
+    batch.add_argument(
+        "--run-id",
+        help="advanced: named run lineage; --update uses 'current' when omitted",
+    )
+    batch.add_argument(
+        "--update",
+        action="store_true",
+        help=(
+            "refresh the current cohort: archive its completed prior generation, reuse "
+            "unchanged cases, and process added or changed cases"
+        ),
+    )
     batch.add_argument(
         "--worker",
         action="store_true",

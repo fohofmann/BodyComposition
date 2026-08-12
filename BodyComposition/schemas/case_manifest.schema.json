@@ -80,10 +80,95 @@
           "properties": {
             "series_instance_uid_sha256": {"$ref": "#/$defs/sha256"},
             "instance_count": {"type": "integer", "minimum": 1},
+            "discovered_instance_count": {"type": "integer", "minimum": 1},
+            "excluded_instance_count": {"type": "integer", "minimum": 0},
+            "instance_selection": {
+              "enum": [
+                "all-series-instances",
+                "exclude-single-orthogonal-localizer",
+                "exclude-tagged-accessory-instances",
+                "automatic-best-axial-stack",
+                "explicit-acquisition-number"
+              ]
+            },
+            "excluded_instance_content_sha256": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/sha256"}
+            },
             "modality": {"const": "CT"},
             "scanner_manufacturer": {"type": ["string", "null"], "maxLength": 80},
             "scanner_model": {"type": ["string", "null"], "maxLength": 80},
             "slice_thickness_mm": {"type": ["number", "null"], "exclusiveMinimum": 0},
+            "selection": {
+              "type": "object",
+              "required": [
+                "series_strategy",
+                "acquisition_strategy",
+                "evaluated_ct_series_count",
+                "eligible_stack_count",
+                "manual_review_recommended",
+                "selected_metrics",
+                "header_repairs",
+                "eligible_candidates",
+                "rejected_candidates"
+              ],
+              "properties": {
+                "header_repairs": {"type": "array"}
+              }
+            },
+            "acquisition_date": {"type": ["string", "null"]},
+            "acquisition_datetime": {"type": ["string", "null"], "maxLength": 80},
+            "study_date": {"type": ["string", "null"]},
+            "series_date": {"type": ["string", "null"]},
+            "content_date": {"type": ["string", "null"]},
+            "instance_creation_date": {"type": ["string", "null"]},
+            "instance_creation_time": {"type": ["string", "null"], "maxLength": 80},
+            "series_number": {"type": ["string", "null"], "maxLength": 80},
+            "acquisition_number": {"type": ["string", "null"], "maxLength": 80},
+            "series_description": {"type": ["string", "null"], "maxLength": 240},
+            "protocol_name": {"type": ["string", "null"], "maxLength": 240},
+            "study_description": {"type": ["string", "null"], "maxLength": 240},
+            "body_part_examined": {"type": ["string", "null"], "maxLength": 240},
+            "patient_position": {"type": ["string", "null"], "maxLength": 80},
+            "contrast_bolus_agent": {"type": ["string", "null"], "maxLength": 240},
+            "contrast_bolus_route": {"type": ["string", "null"], "maxLength": 240},
+            "contrast_bolus_volume_ml": {"type": ["number", "null"]},
+            "study_instance_uid_sha256": {
+              "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+            },
+            "frame_of_reference_uid_sha256": {
+              "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+            },
+            "sop_instance_uid_sha256": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {"$ref": "#/$defs/sha256"},
+                  "uniqueItems": true
+                },
+                {"type": "null"}
+              ]
+            },
+            "image_type_values": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1}
+            },
+            "convolution_kernel": {"type": ["string", "null"], "maxLength": 80},
+            "kvp": {"type": ["number", "null"]},
+            "pixel_spacing_row_column_mm": {
+              "oneOf": [
+                {"type": "array", "minItems": 2, "maxItems": 2},
+                {"type": "null"}
+              ]
+            },
+            "spacing_between_slices_mm": {"type": ["number", "null"]},
+            "reconstruction_diameter_mm": {"type": ["number", "null"]},
+            "rescale_intercept": {"type": ["number", "null"]},
+            "rescale_slope": {"type": ["number", "null"]},
+            "gantry_detector_tilt_degrees": {"type": ["number", "null"]},
+            "exposure_time_ms": {"type": ["number", "null"]},
+            "xray_tube_current_ma": {"type": ["number", "null"]},
+            "exposure_mas": {"type": ["number", "null"]},
             "image_orientation_patient_complete": {"type": "boolean"},
             "image_position_patient_complete": {"type": "boolean"},
             "conversion_backend": {"type": "string", "minLength": 1},
@@ -99,13 +184,25 @@
             "sidecar_content_sha256"
           ],
           "properties": {
-            "schema_version": {"const": "1.1.0"},
+            "schema_version": {
+              "enum": ["1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0"]
+            },
             "sidecar_type": {"const": "bodycomposition-dicom-conversion"},
             "source_format": {"const": "dicom"},
             "source_content_sha256": {"$ref": "#/$defs/sha256"},
             "source_byte_size": {"type": "integer", "minimum": 1},
-            "sidecar_content_sha256": {"$ref": "#/$defs/sha256"}
-          }
+            "sidecar_content_sha256": {"$ref": "#/$defs/sha256"},
+            "conversion_created_at": {"type": "string", "minLength": 20}
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {"schema_version": {"const": "1.5.0"}},
+                "required": ["schema_version"]
+              },
+              "then": {"required": ["conversion_created_at"]}
+            }
+          ]
         }
       },
       "allOf": [

@@ -761,6 +761,86 @@ def test_orientation_action_receives_incomplete_dicom_header_provenance(
     assert "ORIENTATION_HEADER_UNCERTAIN" in {flag.code for flag in result.review_flags}
 
 
+def test_orientation_action_flags_automatic_dicom_accessory_exclusion(
+    pipeline_stub,
+    container_factory,
+    tmp_path,
+):
+    source = container_factory(
+        tmp_path / "attempt/input/converted_input.nii.gz",
+        sitk.GetArrayFromImage(_ct_image()),
+    )
+    action = AssessOrientation(pipeline_stub)
+    action._predictor = FakePredictor(identity_class_index())
+    memory = {
+        "id": "case-001",
+        "workspace": tmp_path / "workspace",
+        "tmp/index": source,
+        "tmp/input_summary": {
+            "input_format": "dicom",
+            "dicom": {
+                "image_orientation_patient_complete": True,
+                "image_position_patient_complete": True,
+                "excluded_instance_count": 2,
+                "instance_selection": "exclude-tagged-accessory-instances",
+            },
+        },
+    }
+
+    action(memory)
+
+    result = memory["tmp/orientation_result"]
+    assert result.state is OrientationState.HEADER_UNCERTAIN
+    assert not result.orientation_changed
+    assert "ORIENTATION_HEADER_UNCERTAIN" in {flag.code for flag in result.review_flags}
+    assert any(
+        "2 tagged DICOM accessory" in flag.reason
+        for flag in result.review_flags
+    )
+
+
+def test_orientation_action_flags_recorded_dicom_header_normalization(
+    pipeline_stub,
+    container_factory,
+    tmp_path,
+):
+    source = container_factory(
+        tmp_path / "attempt/input/converted_input.nii.gz",
+        sitk.GetArrayFromImage(_ct_image()),
+    )
+    action = AssessOrientation(pipeline_stub)
+    action._predictor = FakePredictor(identity_class_index())
+    memory = {
+        "id": "case-001",
+        "workspace": tmp_path / "workspace",
+        "tmp/index": source,
+        "tmp/input_summary": {
+            "input_format": "dicom",
+            "dicom": {
+                "image_orientation_patient_complete": True,
+                "image_position_patient_complete": True,
+                "excluded_instance_count": 0,
+                "selection": {
+                    "evaluated_ct_series_count": 1,
+                    "eligible_stack_count": 1,
+                    "header_repairs": [
+                        {"code": "normalize_slice_position_rounding"}
+                    ],
+                },
+            },
+        },
+    }
+
+    action(memory)
+
+    result = memory["tmp/orientation_result"]
+    assert result.state is OrientationState.HEADER_UNCERTAIN
+    assert any(
+        "normalize_slice_position_rounding" in flag.reason
+        for flag in result.review_flags
+    )
+
+
 def test_orientation_action_uses_canonical_case_bundle_paths(pipeline_stub):
     action = AssessOrientation(pipeline_stub)
     assert action.io_persisted_outputs == [
