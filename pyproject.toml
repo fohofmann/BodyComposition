@@ -29,7 +29,7 @@ dependencies = [
     "opencv-python-headless",
     "pandas",
     "pyarrow",
-    "pypdf>=6,<7",
+    "pypdf>=6.15.0,<7",
     "reportlab>=4.4,<5",
     "psutil",
     "PyYAML>=6,<7",
