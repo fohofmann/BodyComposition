@@ -21,6 +21,7 @@ RELEASE_OUTPUT_NAMES = {
     "clean-install-doctor.json",
     "coverage.xml",
     "distribution-audit.json",
+    "repository-audit.json",
     "release-checks.json",
     "reproducibility-report.json",
     "runtime-requirements.txt",
@@ -175,6 +176,15 @@ def main() -> int:
     source_date_epoch = _source_date_epoch()
     git_commit = _git_commit()
 
+    _run(
+        [
+            sys.executable,
+            "scripts/audit_repository.py",
+            "--history",
+            "--output",
+            "dist/repository-audit.json",
+        ]
+    )
     _run(["uv", "lock", "--check"])
     _run(["uv", "sync", "--frozen", "--extra", "test", "--extra", "release"])
     _run(["uv", "run", "--no-sync", "ruff", "check", "BodyComposition", "tests", "scripts"])

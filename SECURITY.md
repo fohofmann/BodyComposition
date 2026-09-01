@@ -36,6 +36,8 @@ verified model cache read-only during inference where practical.
 - model assets are synchronized only from recorded original sources and
   verified by byte size/SHA-256;
 - inference-time downloads and silent model fallback are forbidden;
+- the complete reachable Git history is checked for forbidden medical-data,
+  model, study-output, credential, and private-development artifacts;
 - built archives are scanned for weights, images, secrets, private paths, and
   unintended large files; and
 - release artifacts receive checksums, a CycloneDX SBOM, and a dependency
