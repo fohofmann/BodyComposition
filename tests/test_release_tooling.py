@@ -7,7 +7,7 @@ import re
 import tarfile
 import tomllib
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import numpy as np
@@ -509,6 +509,25 @@ def test_local_development_material_is_ignored():
     gitignore = Path(".gitignore").read_text(encoding="utf-8").splitlines()
 
     assert "/dev/" in gitignore
+
+
+def test_repository_audit_rejects_data_and_private_development_paths():
+    from scripts.audit_repository import audit_path
+
+    assert audit_path(PurePosixPath("data/cohort.nii.gz"), 128)
+    assert audit_path(PurePosixPath("analysis/results.csv"), 128)
+    assert audit_path(PurePosixPath("planning/plan.md"), 128)
+    assert audit_path(PurePosixPath("docs/assets/pipeline-overview.png"), 480257) == []
+
+
+def test_repository_audit_passes_current_tree_and_reachable_history():
+    from scripts.audit_repository import audit_repository
+
+    result = audit_repository(include_history=True)
+
+    assert result["history_checked"] is True
+    assert result["findings"] == []
+    assert result["passed"] is True
 
 
 def _source_archive(path: Path, *, mtime: int) -> Path:
