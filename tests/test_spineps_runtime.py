@@ -8,7 +8,7 @@ import pytest
 import SimpleITK as sitk
 
 from BodyComposition.orientation.core import OrientationOutcome
-from BodyComposition.utils.geometry import ImageGeometry
+from BodyComposition.utils.geometry import GeometryError, ImageGeometry
 from BodyComposition.vertebral import ExecutionStatus, SpinepsRuntime, spineps_runtime
 
 
@@ -38,6 +38,27 @@ def _prepared(path):
     return OrientationOutcome(
         result=SimpleNamespace(to_dict=lambda: {"state": "PASS_METADATA_MATCH"}),
         prepared_image=sitk.ReadImage(str(path)),
+    )
+
+
+def _rotated_geometry(reference, angle_radians):
+    cosine = float(np.cos(angle_radians))
+    sine = float(np.sin(angle_radians))
+    return ImageGeometry(
+        size_xyz=reference.size_xyz,
+        spacing_xyz=reference.spacing_xyz,
+        origin_lps_xyz=reference.origin_lps_xyz,
+        direction_lps=(
+            cosine,
+            -sine,
+            0.0,
+            sine,
+            cosine,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ),
     )
 
 
@@ -122,6 +143,109 @@ def test_runtime_precomputes_vibeseg_and_adapts_sitk_outputs(tmp_path):
             "cpu",
         )
     ]
+
+
+def test_runtime_normalizes_bounded_upstream_header_rounding_without_resampling(
+    tmp_path,
+):
+    geometry = _geometry((4, 512, 512))
+    rounded_geometry = _rotated_geometry(geometry, 5e-4)
+    ct = np.zeros((4, 512, 512), dtype=np.int16)
+    input_path = tmp_path / "sub-test_ct.nii.gz"
+    _write_image(input_path, ct, geometry)
+    paths = {
+        "out_vibeseg": tmp_path / "derivatives/vibeseg.nii.gz",
+        "out_spine": tmp_path / "derivatives/spine.nii.gz",
+        "out_vert": tmp_path / "derivatives/vert.nii.gz",
+    }
+    crop = np.zeros(ct.shape, dtype=np.uint8)
+    crop[1:3, 64:448, 80:432] = 1
+
+    def run_vibeseg(_model, _input_nii, output, _device):
+        _write_image(output, crop, rounded_geometry)
+
+    def run_spineps(_img_ref, _models, _derivative_name):
+        persisted_crop = sitk.ReadImage(str(paths["out_vibeseg"]))
+        assert persisted_crop.GetDirection() == pytest.approx(geometry.direction_lps)
+        assert np.array_equal(sitk.GetArrayFromImage(persisted_crop), crop)
+        semantic = np.zeros(ct.shape, dtype=np.uint8)
+        vertebra = np.zeros(ct.shape, dtype=np.uint8)
+        semantic[1:3, 128:384, 144:368] = 49
+        vertebra[1:3, 128:384, 144:368] = 22
+        return (
+            _image(semantic, rounded_geometry),
+            _image(vertebra, rounded_geometry),
+            None,
+            SimpleNamespace(name="OK"),
+        )
+
+    runtime = SpinepsRuntime(
+        FakeSession(),
+        tmp_path / "verified-dataset100",
+        make_bids_file=lambda path: SimpleNamespace(
+            format="ct",
+            open_nii=lambda: "input-nii",
+        ),
+        derive_output_paths=lambda ref, name: paths,
+        run_vibeseg=run_vibeseg,
+        run_spineps=run_spineps,
+    )
+
+    result = runtime.run(
+        _prepared(input_path),
+        attempt_directory=tmp_path / "attempt",
+        case_id="case-rounded",
+    )
+
+    assert result.execution_status == ExecutionStatus.SUCCEEDED
+    crop_record = result.provenance["required_crop_model"]["geometry_normalization"]
+    assert crop_record["id"] == "tptbox-nifti-header-rounding-v1"
+    assert crop_record["pixel_data_modified"] is False
+    assert crop_record["maximum_corner_displacement_mm"] <= crop_record[
+        "maximum_allowed_corner_displacement_mm"
+    ]
+    output_records = result.provenance["output_geometry_normalizations"]
+    assert [record["component"] for record in output_records] == [
+        "SPINEPS semantic output",
+        "SPINEPS vertebra output",
+    ]
+    assert set(np.unique(result.vertebral_body_labels)) == {0, 22}
+
+
+def test_runtime_rejects_material_upstream_direction_change(tmp_path):
+    geometry = _geometry((4, 32, 32))
+    changed_geometry = _rotated_geometry(geometry, 0.05)
+    ct = np.zeros((4, 32, 32), dtype=np.int16)
+    input_path = tmp_path / "sub-test_ct.nii.gz"
+    output_path = tmp_path / "derivatives/vibeseg.nii.gz"
+    _write_image(input_path, ct, geometry)
+
+    def run_vibeseg(_model, _input_nii, output, _device):
+        _write_image(output, np.zeros(ct.shape, dtype=np.uint8), changed_geometry)
+
+    runtime = SpinepsRuntime(
+        FakeSession(),
+        tmp_path / "verified-dataset100",
+        make_bids_file=lambda path: SimpleNamespace(
+            format="ct",
+            open_nii=lambda: "input-nii",
+        ),
+        derive_output_paths=lambda ref, name: {"out_vibeseg": output_path},
+        run_vibeseg=run_vibeseg,
+        run_spineps=lambda *args: (_ for _ in ()).throw(
+            AssertionError("SPINEPS must not run after a material geometry change")
+        ),
+    )
+
+    with pytest.raises(GeometryError, match="Header-only normalization was rejected"):
+        runtime.run(
+            _prepared(input_path),
+            attempt_directory=tmp_path / "attempt",
+            case_id="case-material-change",
+        )
+
+    persisted = sitk.ReadImage(str(output_path))
+    assert persisted.GetDirection() == pytest.approx(changed_geometry.direction_lps)
 
 
 def test_runtime_returns_explicit_failure_for_upstream_error(tmp_path):

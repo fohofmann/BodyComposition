@@ -170,6 +170,14 @@ returned mask to match the orientation-prepared CT physical domain. The
 selected compatibility policy is recorded in vertebral provenance; no image is
 stretched or independently reoriented by the adapter.
 
+The pinned TPTBox NIfTI writer can round direction cosines while preserving the
+input index grid. BodyComposition copies the prepared CT header onto such a
+label only when size is identical, spacing and origin already satisfy the
+normal geometry tolerance, and the maximum corner displacement is no greater
+than both 0.5 mm and half the smallest voxel spacing. Label voxels are not
+resampled or changed, and the normalization is recorded in provenance. Any
+larger or different geometry mismatch still fails closed.
+
 SPINEPS places derived intervertebral-disc and endplate instances in the same
 upstream instance image using its documented +100 and +200 label ranges.
 BodyComposition preserves that native file when requested, but removes those

@@ -11,14 +11,21 @@ import re
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from itertools import product
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import SimpleITK as sitk
 from psutil import virtual_memory
 
 from BodyComposition.orientation.core import OrientationOutcome
-from BodyComposition.utils.geometry import ImageGeometry, assert_same_physical_domain
+from BodyComposition.utils.geometry import (
+    GEOMETRY_ATOL,
+    GeometryError,
+    ImageGeometry,
+    assert_same_physical_domain,
+)
 from BodyComposition.vertebral.contracts import VertebralResult
 from BodyComposition.vertebral.spineps_adapter import (
     adapt_spineps_outputs,
@@ -38,10 +45,11 @@ from BodyComposition.vertebral.spineps_session import SpinepsModelSession
 
 _CITATION_REMINDER_CONFIGURED = False
 _TPTBOX_INFERENCE_LOCK = threading.RLock()
+_TPTBOX_SOURCE_REVISION = "acaaf16f74fb0fe8fc555b23cf4e0230efc49753"
 _TPTBOX_CPU_TELEMETRY_ADAPTER = {
     "id": "tptbox-0.7.5-cpu-memory-telemetry",
     "upstream_repository": "https://github.com/Hendrik-code/TPTBox",
-    "upstream_revision": "acaaf16f74fb0fe8fc555b23cf4e0230efc49753",
+    "upstream_revision": _TPTBOX_SOURCE_REVISION,
     "upstream_function": (
         "TPTBox.segmentation.nnUnet_utils.predictor."
         "nnUNetPredictor.predict_sliding_window_return_logits"
@@ -49,6 +57,9 @@ _TPTBOX_CPU_TELEMETRY_ADAPTER = {
     "reason": "Pinned TPTBox 0.7.5 calls CUDA memory telemetry for a CPU device.",
     "effect": "Disable GPU waiting and use available host memory on CPU only.",
 }
+
+_UPSTREAM_HEADER_NORMALIZATION_ID = "tptbox-nifti-header-rounding-v1"
+_UPSTREAM_HEADER_MAX_DISPLACEMENT_MM = 0.5
 
 
 def _configure_upstream_citation_reminder() -> None:
@@ -185,6 +196,136 @@ def _geometry_from_sitk(image: sitk.Image) -> ImageGeometry:
         origin_lps_xyz=tuple(float(value) for value in image.GetOrigin()),
         direction_lps=tuple(float(value) for value in image.GetDirection()),
     )
+
+
+def _maximum_corner_displacement_mm(
+    reference: ImageGeometry,
+    candidate: ImageGeometry,
+) -> float:
+    corners = np.asarray(
+        list(product(*((0, size - 1) for size in reference.size_xyz))),
+        dtype=float,
+    )
+    reference_points = reference.physical_point(corners)
+    candidate_points = candidate.physical_point(corners)
+    return float(np.max(np.linalg.norm(reference_points - candidate_points, axis=1)))
+
+
+def _normalize_upstream_output_header(
+    image: sitk.Image,
+    reference: ImageGeometry,
+    *,
+    candidate_name: str,
+) -> tuple[sitk.Image, Mapping[str, Any] | None]:
+    """Normalize bounded TPTBox NIfTI direction rounding without resampling."""
+
+    candidate = _geometry_from_sitk(image)
+    try:
+        assert_same_physical_domain(
+            reference,
+            candidate,
+            reference_name="prepared CT",
+            candidate_name=candidate_name,
+        )
+        return image, None
+    except GeometryError as mismatch:
+        if reference.size_xyz != candidate.size_xyz:
+            raise
+        if not np.allclose(
+            reference.spacing_xyz,
+            candidate.spacing_xyz,
+            atol=GEOMETRY_ATOL,
+            rtol=0,
+        ):
+            raise
+        if not np.allclose(
+            reference.origin_lps_xyz,
+            candidate.origin_lps_xyz,
+            atol=GEOMETRY_ATOL,
+            rtol=0,
+        ):
+            raise
+        if np.allclose(
+            reference.direction_lps,
+            candidate.direction_lps,
+            atol=GEOMETRY_ATOL,
+            rtol=0,
+        ):
+            raise
+
+        maximum_displacement_mm = _maximum_corner_displacement_mm(reference, candidate)
+        allowed_displacement_mm = min(
+            _UPSTREAM_HEADER_MAX_DISPLACEMENT_MM,
+            0.5 * min(reference.spacing_xyz),
+        )
+        if maximum_displacement_mm > allowed_displacement_mm:
+            raise GeometryError(
+                f"{mismatch} Header-only normalization was rejected because the maximum "
+                f"corner displacement is {maximum_displacement_mm:.6g} mm "
+                f"(allowed {allowed_displacement_mm:.6g} mm)."
+            ) from mismatch
+
+        normalized = sitk.Image(image)
+        normalized.SetSpacing(reference.spacing_xyz)
+        normalized.SetOrigin(reference.origin_lps_xyz)
+        normalized.SetDirection(reference.direction_lps)
+        normalized_geometry = _geometry_from_sitk(normalized)
+        assert_same_physical_domain(
+            reference,
+            normalized_geometry,
+            reference_name="prepared CT",
+            candidate_name=f"normalized {candidate_name}",
+        )
+        fields_normalized = [
+            field
+            for field in ("spacing_xyz", "origin_lps_xyz", "direction_lps")
+            if getattr(reference, field) != getattr(candidate, field)
+        ]
+        return normalized, {
+            "id": _UPSTREAM_HEADER_NORMALIZATION_ID,
+            "component": candidate_name,
+            "upstream_package": "TPTBox",
+            "upstream_version": "0.7.5",
+            "upstream_revision": _TPTBOX_SOURCE_REVISION,
+            "reason": "Bounded NIfTI direction-cosine rounding on an unchanged index grid.",
+            "method": "Copy the prepared CT header without resampling or changing label voxels.",
+            "fields_normalized": fields_normalized,
+            "maximum_corner_displacement_mm": maximum_displacement_mm,
+            "maximum_allowed_corner_displacement_mm": allowed_displacement_mm,
+            "pixel_data_modified": False,
+        }
+
+
+def _normalize_upstream_output_path(
+    path: Path,
+    reference: ImageGeometry,
+    *,
+    candidate_name: str,
+) -> tuple[sitk.Image, Mapping[str, Any] | None]:
+    image = sitk.ReadImage(str(path))
+    normalized, record = _normalize_upstream_output_header(
+        image,
+        reference,
+        candidate_name=candidate_name,
+    )
+    if record is None:
+        return image, None
+
+    if path.name.endswith(".nii.gz"):
+        base = path.name.removesuffix(".nii.gz")
+        temporary = path.with_name(f".{base}.header.partial.nii.gz")
+    else:
+        temporary = path.with_name(f".{path.stem}.header.partial{path.suffix}")
+    sitk.WriteImage(normalized, str(temporary))
+    os.replace(temporary, path)
+    restored = sitk.ReadImage(str(path))
+    assert_same_physical_domain(
+        reference,
+        _geometry_from_sitk(restored),
+        reference_name="prepared CT",
+        candidate_name=f"persisted {candidate_name}",
+    )
+    return restored, record
 
 
 def _as_sitk_image(image: Any) -> sitk.Image:
@@ -344,7 +485,7 @@ class SpinepsRuntime:
         img_ref: Any,
         output_path: Path,
         reference: ImageGeometry,
-    ) -> Mapping[str, str] | None:
+    ) -> tuple[Mapping[str, str] | None, Mapping[str, Any] | None]:
         runtime_adapter: Mapping[str, str] | None = None
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if not output_path.is_file():
@@ -365,14 +506,12 @@ class SpinepsRuntime:
                 self._run_vibeseg(*arguments)
         if not output_path.is_file():
             raise RuntimeError("VibeSeg did not create the required SPINEPS crop segmentation.")
-        crop_geometry = _geometry_from_sitk(sitk.ReadImage(str(output_path)))
-        assert_same_physical_domain(
+        _crop_image, geometry_normalization = _normalize_upstream_output_path(
+            output_path,
             reference,
-            crop_geometry,
-            reference_name="prepared CT",
             candidate_name="VibeSeg crop output",
         )
-        return runtime_adapter
+        return runtime_adapter, geometry_normalization
 
     def run(
         self,
@@ -406,7 +545,7 @@ class SpinepsRuntime:
             }
             if "out_vibeseg" not in output_paths:
                 raise RuntimeError("SPINEPS did not define its required VibeSeg output path.")
-            runtime_adapter = self._ensure_vibeseg_crop(
+            runtime_adapter, crop_geometry_normalization = self._ensure_vibeseg_crop(
                 img_ref,
                 output_paths["out_vibeseg"],
                 reference_geometry,
@@ -424,6 +563,8 @@ class SpinepsRuntime:
         }
         if runtime_adapter is not None:
             crop_model["runtime_adapter"] = dict(runtime_adapter)
+        if crop_geometry_normalization is not None:
+            crop_model["geometry_normalization"] = dict(crop_geometry_normalization)
         provenance["required_crop_model"] = crop_model
         provenance.update(
             {
@@ -441,9 +582,26 @@ class SpinepsRuntime:
             raise TypeError("SPINEPS returned an unexpected response object.")
         if len(response) == 4:
             semantic, vertebra, _centroids, error_code = response
-            return adapt_spineps_sitk_outputs(
+            semantic_image, semantic_normalization = _normalize_upstream_output_header(
                 _as_sitk_image(semantic),
+                reference_geometry,
+                candidate_name="SPINEPS semantic output",
+            )
+            vertebra_image, vertebra_normalization = _normalize_upstream_output_header(
                 _as_sitk_image(vertebra),
+                reference_geometry,
+                candidate_name="SPINEPS vertebra output",
+            )
+            output_normalizations = [
+                dict(record)
+                for record in (semantic_normalization, vertebra_normalization)
+                if record is not None
+            ]
+            if output_normalizations:
+                provenance["output_geometry_normalizations"] = output_normalizations
+            return adapt_spineps_sitk_outputs(
+                semantic_image,
+                vertebra_image,
                 reference_geometry,
                 upstream_error_code=_error_code_name(error_code),
                 native_outputs=native_outputs,
@@ -461,9 +619,26 @@ class SpinepsRuntime:
                 raise RuntimeError("SPINEPS succeeded without defining its saved outputs.")
             if not semantic_path.is_file() or not vertebra_path.is_file():
                 raise RuntimeError("SPINEPS succeeded without creating its saved label outputs.")
+            semantic_image, semantic_normalization = _normalize_upstream_output_path(
+                semantic_path,
+                reference_geometry,
+                candidate_name="SPINEPS semantic output",
+            )
+            vertebra_image, vertebra_normalization = _normalize_upstream_output_path(
+                vertebra_path,
+                reference_geometry,
+                candidate_name="SPINEPS vertebra output",
+            )
+            output_normalizations = [
+                dict(record)
+                for record in (semantic_normalization, vertebra_normalization)
+                if record is not None
+            ]
+            if output_normalizations:
+                provenance["output_geometry_normalizations"] = output_normalizations
             return adapt_spineps_sitk_outputs(
-                sitk.ReadImage(str(semantic_path)),
-                sitk.ReadImage(str(vertebra_path)),
+                semantic_image,
+                vertebra_image,
                 reference_geometry,
                 upstream_error_code=error_name,
                 native_outputs=native_outputs,
