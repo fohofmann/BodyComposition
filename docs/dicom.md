@@ -178,14 +178,17 @@ metadata.
 ## Geometry and orientation contract
 
 Conversion does not call `DICOMOrient`, transpose arrays, or infer an anatomical
-orientation. GDCM orders and assembles the selected stack. Small numeric
-rounding differences in per-instance orientation, pixel spacing, declared
-slice thickness, or slice positions may be normalized to a median orthonormal
-grid when they remain within fixed tolerances. The source DICOM is never
-modified, every normalization is recorded in `selection.header_repairs`, and
-material inconsistencies fail. The written NIfTI is read back and rejected
-unless its pixels and full size, spacing, origin, and direction match that
-assembled physical domain.
+orientation. GDCM establishes the physical through-plane direction; retained
+instances are then ordered deterministically by `ImagePositionPatient` along
+that direction before final assembly. This also handles scanners that declare a
+negative through-plane axis and keeps localizer or acquisition subsetting from
+changing physical slice order. Small numeric rounding differences in
+per-instance orientation, pixel spacing, declared slice thickness, or slice
+positions may be normalized to a median orthonormal grid when they remain
+within fixed tolerances. The source DICOM is never modified, every normalization
+is recorded in `selection.header_repairs`, and material inconsistencies fail.
+The written NIfTI is read back and rejected unless its pixels and full size,
+spacing, origin, and direction match that assembled physical domain.
 
 For classic CT input, finite Rescale Intercept and Rescale Slope values are
 required on every retained instance. The slope must be positive and both values

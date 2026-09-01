@@ -351,6 +351,61 @@ def test_conversion_automatically_excludes_tagged_accessory_image(
     ]
 
 
+@pytest.mark.parametrize(
+    ("spacing_between_slices", "expected_values", "expected_positions", "expected_axis"),
+    (
+        ("1", [1, 2, 3], [0.0, 1.0, 2.0], 1.0),
+        ("-1", [3, 2, 1], [2.0, 1.0, 0.0], -1.0),
+    ),
+)
+def test_selected_instances_follow_gdcm_physical_slice_axis(
+    tmp_path,
+    spacing_between_slices,
+    expected_values,
+    expected_positions,
+    expected_axis,
+):
+    source = tmp_path / "dicom"
+    uid = "1.2.826.0.1.3680043.10.999.139"
+    for index, z_position in enumerate((0.0, 1.0, 2.0), start=1):
+        path = _write_dicom_instance(
+            source / f"slice-{index:04d}.dcm",
+            np.full((5, 6), index, dtype=np.int16),
+            series_uid=uid,
+            sop_instance_suffix=index,
+            orientation_lps=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+            position_lps_xyz=(10.0, 20.0, z_position),
+            image_type="ORIGINAL\\PRIMARY\\AXIAL",
+        )
+        if spacing_between_slices == "-1":
+            payload = bytearray(path.read_bytes())
+            tag = b"\x18\x00\x88\x00\x02\x00\x00\x00"
+            offset = payload.index(tag) + len(tag)
+            assert payload[offset : offset + 2] == b"1 "
+            payload[offset : offset + 2] = b"-1"
+            path.write_bytes(payload)
+    _write_dicom_instance(
+        source / "orthogonal-localizer.dcm",
+        np.full((5, 6), 900, dtype=np.int16),
+        series_uid=uid,
+        sop_instance_suffix=999,
+        orientation_lps=(1.0, 0.0, 0.0, 0.0, 0.0, -1.0),
+        position_lps_xyz=(10.0, 20.0, 0.0),
+        image_type="DERIVED\\SECONDARY\\REFORMATTED",
+    )
+
+    result = convert_dicom(source, tmp_path / "ct.nii.gz")
+    image = sitk.ReadImage(str(result.output_path))
+    array = sitk.GetArrayFromImage(image)
+
+    assert array[:, 0, 0].tolist() == expected_values
+    assert image.GetDirection()[8] == pytest.approx(expected_axis)
+    assert [
+        image.TransformIndexToPhysicalPoint((0, 0, index))[2] for index in range(image.GetSize()[2])
+    ] == pytest.approx(expected_positions)
+    assert result.input_summary["dicom"]["excluded_instance_count"] == 1
+
+
 def test_axial_selection_fails_when_orientation_outlier_is_not_tagged(tmp_path):
     source = tmp_path / "dicom"
     uid = "1.2.826.0.1.3680043.10.999.103"

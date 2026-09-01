@@ -7,7 +7,7 @@ import json
 import os
 import unicodedata
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -322,8 +322,9 @@ def _numeric_metadata_tuple(
     key: str,
     *,
     count: int,
+    index: int | None = None,
 ) -> tuple[float, ...] | None:
-    raw = _metadata(reader, key)
+    raw = _metadata(reader, key, index=index)
     if raw is None:
         return None
     try:
@@ -1549,6 +1550,81 @@ def _apply_minor_header_repairs(
     return repaired
 
 
+def _execute_selected_dicom_series(
+    files: tuple[Path, ...],
+) -> tuple[sitk.ImageSeriesReader, sitk.Image]:
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames([str(path) for path in files])
+    reader.MetaDataDictionaryArrayUpdateOn()
+    reader.LoadPrivateTagsOff()
+    try:
+        image = reader.Execute()
+    except RuntimeError as error:
+        raise DicomInputError("GDCM could not assemble the selected DICOM CT series.") from error
+    if image.GetDimension() != 3:
+        raise DicomInputError("The selected DICOM CT series is not three-dimensional.")
+    return reader, image
+
+
+def _read_selected_dicom_series(
+    selection: _DicomInstanceSelection,
+) -> tuple[sitk.ImageSeriesReader, sitk.Image, _DicomInstanceSelection]:
+    """Read selected instances in the reader's physical through-plane order.
+
+    GDCM preserves the file-name order supplied to ``ImageSeriesReader``, but
+    its output slice direction can legitimately oppose the orientation normal
+    when a scanner declares negative Spacing Between Slices. Discovery order
+    is therefore insufficient after a localizer or acquisition subset has been
+    removed. Read once to obtain GDCM's physical slice axis, then reorder the
+    selected instances by Image Position Patient along that axis when needed.
+    """
+
+    reader, image = _execute_selected_dicom_series(selection.files)
+    direction = np.asarray(image.GetDirection(), dtype=float).reshape(3, 3)
+    slice_axis = direction[:, 2]
+    positions = []
+    for index in range(len(selection.files)):
+        position = _numeric_metadata_tuple(
+            reader,
+            "0020|0032",
+            count=3,
+            index=index,
+        )
+        if position is None:
+            raise DicomInputError(
+                "The selected axial DICOM stack requires complete Image Position Patient metadata."
+            )
+        positions.append(position)
+    projections = np.asarray(positions, dtype=float) @ slice_axis
+    order = tuple(int(value) for value in np.argsort(projections, kind="stable"))
+    identity_order = tuple(range(len(selection.files)))
+    if order != identity_order:
+        ordered_files = tuple(selection.files[index] for index in order)
+        reader, image = _execute_selected_dicom_series(ordered_files)
+        selection = replace(selection, files=ordered_files)
+        direction = np.asarray(image.GetDirection(), dtype=float).reshape(3, 3)
+        slice_axis = direction[:, 2]
+        positions = []
+        for index in range(len(selection.files)):
+            position = _numeric_metadata_tuple(
+                reader,
+                "0020|0032",
+                count=3,
+                index=index,
+            )
+            if position is None:
+                raise DicomInputError(
+                    "The selected axial DICOM stack requires complete Image Position Patient metadata."
+                )
+            positions.append(position)
+        projections = np.asarray(positions, dtype=float) @ slice_axis
+    if np.any(np.diff(projections) <= SLICE_POSITION_DUPLICATE_ATOL_MM):
+        raise DicomInputError(
+            "GDCM could not assemble the selected DICOM CT series in physical slice order."
+        )
+    return reader, image, selection
+
+
 def dicom_image_summary(
     source: str | Path,
     *,
@@ -1566,16 +1642,7 @@ def dicom_image_summary(
     )
     candidate = decision.candidate
     selection = decision.instances
-    reader = sitk.ImageSeriesReader()
-    reader.SetFileNames([str(path) for path in selection.files])
-    reader.MetaDataDictionaryArrayUpdateOn()
-    reader.LoadPrivateTagsOff()
-    try:
-        image = reader.Execute()
-    except RuntimeError as error:
-        raise DicomInputError("GDCM could not assemble the selected DICOM CT series.") from error
-    if image.GetDimension() != 3:
-        raise DicomInputError("The selected DICOM CT series is not three-dimensional.")
+    reader, image, selection = _read_selected_dicom_series(selection)
     image = _apply_minor_header_repairs(image, selection.metrics)
 
     pixels = sitk.GetArrayViewFromImage(image)
