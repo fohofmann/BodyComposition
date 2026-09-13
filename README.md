@@ -1,3 +1,5 @@
+
+
 # BodyComposition
 
 BodyComposition is a research pipeline for reproducible CT body-composition
@@ -67,7 +69,7 @@ Model weights remain outside Git, packages, and containers. See
 | --- | --- |
 | Analyze one CT or a directory of cases | `uv run bodycomposition analyze INPUT --json` |
 | Analyze only one DICOM series | add `--series SERIES_INSTANCE_UID` |
-| Convert DICOM for transfer | `uv run bodycomposition convert /path/to/dicom CT.nii.gz` and transfer the adjacent sidecar too |
+| Convert DICOM for transfer | `uv run bodycomposition convert /path/to/dicom CT.nii.gz` and transfer the adjacent `CT.bodycomposition.json` sidecar too |
 | Convert a DICOM cohort for transfer | `uv run bodycomposition convert /path/to/import /path/to/converted` |
 | Run L3-only on limited hardware | synchronize and analyze with `--low-resource` |
 | Use the optional BOA tissue backend | run `models sync --tissue-backend boa`, then analyze with `--tissue-backend boa` |
