@@ -17,6 +17,12 @@ Model weights and clinical data must remain outside the repository. Unit tests
 use synthetic arrays. The opt-in real-world fixture downloads a checksum-pinned
 public CT under its documented license into a temporary/external location.
 
+Study protocols, cohort manifests, linkage tables, notebooks, local validation
+receipts, and generated results belong in a separate governed analysis
+workspace. This repository contains only reusable pipeline code, tests,
+schemas, release tooling, and public documentation. Public documentation assets
+require explicit source, license, and derivative attribution.
+
 ## Required checks
 
 ```bash
@@ -25,6 +31,7 @@ uv run mypy
 uv run pytest
 uv run pytest --cov
 uv run python -m build
+uv run python scripts/audit_repository.py --history
 uv run python scripts/audit_distribution.py dist/*.whl dist/*.tar.gz
 ```
 

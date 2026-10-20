@@ -21,6 +21,43 @@ models/
 **/*.pt
 **/*.ckpt
 **/*.onnx
+**/*.sif
+**/*.img
+**/*.csv
+**/*.tsv
+**/*.xls
+**/*.xlsx
+**/*.sav
+**/*.feather
+**/*.h5
+**/*.hdf5
+**/*.npy
+**/*.npz
+**/*.pkl
+**/*.pickle
+**/*.ipynb
+**/*.Rmd
+**/*.RData
+**/*.rds
+**/*.pdf
+**/*.html
+**/*.doc
+**/*.docx
+**/*.ppt
+**/*.pptx
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.tif
+**/*.tiff
+**/*.jsonl
+**/case_manifest.json
+**/run_manifest.json
+**/bodycomposition-batch.json
+**/bodycomposition-conversion.json
+**/*.bodycomposition.json
+**/orientation_report.json
+**/report_manifest.json
 
 # Ignore temporary files
 *.log
@@ -63,3 +100,5 @@ htmlcov/
 
 # Local development material
 dev/
+private/
+research/

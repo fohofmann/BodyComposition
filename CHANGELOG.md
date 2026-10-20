@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- Update vulnerable PDF, HTTP, package-management, MONAI, and PyTorch Lightning
+  dependencies, with minimum patched versions enforced during resolution.
+- Audit optional test and release dependencies as well as the runtime.
+- Check the repository and reachable history for private data, study outputs,
+  credentials, and unintended development artifacts before release.
+
 ## 1.0.0rc1 — 2026-08-05
 
 This is a deliberate breaking release candidate.

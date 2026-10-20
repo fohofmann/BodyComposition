@@ -59,6 +59,53 @@ MANIFEST
 *.pth
 *.ckpt
 *.onnx
+*.sif
+*.img
+
+# Study tables, notebooks, reports, and review images
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.sav
+*.feather
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.ipynb
+*.Rmd
+*.RData
+*.rds
+*.pdf
+*.html
+*.doc
+*.docx
+*.ppt
+*.pptx
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.jsonl
+
+# The two licensed public documentation figures are deliberate exceptions.
+!/docs/assets/pipeline-overview.png
+!/docs/assets/pipeline-report-example.png
+
+# Common generated result manifests and transfer sidecars
+case_manifest.json
+run_manifest.json
+bodycomposition-batch.json
+bodycomposition-conversion.json
+*.bodycomposition.json
+orientation_report.json
+report_manifest.json
 
 # Local development material
 /dev/
+/private/
+/research/
