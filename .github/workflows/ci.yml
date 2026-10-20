@@ -69,5 +69,6 @@ jobs:
             dist/*.tar.gz
             dist/*.json
             dist/runtime-requirements.txt
+            dist/all-requirements.txt
           if-no-files-found: error
           retention-days: 14

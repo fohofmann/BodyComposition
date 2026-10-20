@@ -31,7 +31,8 @@ verified model cache read-only during inference where practical.
 
 ## Software supply chain
 
-- dependencies are frozen by `uv.lock`;
+- dependencies are frozen by `uv.lock`, with patched minimum versions for
+  known vulnerable direct and transitive dependencies;
 - container bases and CI actions are pinned by immutable digest/SHA;
 - model assets are synchronized only from recorded original sources and
   verified by byte size/SHA-256;
@@ -40,8 +41,8 @@ verified model cache read-only during inference where practical.
   model, study-output, credential, and private-development artifacts;
 - built archives are scanned for weights, images, secrets, private paths, and
   unintended large files; and
-- release artifacts receive checksums, a CycloneDX SBOM, and a dependency
-  vulnerability report.
+- release artifacts receive checksums, a CycloneDX SBOM, and dependency
+  vulnerability reports for both runtime and optional test/release tools.
 
 Never publish an artifact when a required gate is unresolved. A vulnerability
 scan is evidence for known dependency advisories, not proof that the package is

@@ -17,6 +17,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_OUTPUT_NAMES = {
+    "all-requirements.txt",
+    "all-vulnerability-report.json",
     "artifact-checksums.json",
     "clean-install-doctor.json",
     "coverage.xml",
@@ -234,34 +236,45 @@ def main() -> int:
     )
     _run(["uv", "run", "--no-sync", "python", "scripts/generate_sbom.py"])
     runtime_requirements = ROOT / "dist/runtime-requirements.txt"
-    _run(
-        [
-            "uv",
-            "export",
-            "--frozen",
-            "--no-dev",
-            "--no-emit-project",
-            "--output-file",
-            str(runtime_requirements),
-        ]
-    )
-    _run(
-        [
-            "uv",
-            "run",
-            "--no-sync",
-            "pip-audit",
-            "--requirement",
-            str(runtime_requirements),
-            "--no-deps",
-            "--disable-pip",
-            "--strict",
-            "--format",
-            "json",
-            "--output",
-            "dist/vulnerability-report.json",
-        ]
-    )
+    # Keep the runtime installation minimal, but audit test/release tools too.
+    # Their dependencies are also shipped in uv.lock and tracked by Dependabot.
+    for requirements, report, extras in (
+        (runtime_requirements, "dist/vulnerability-report.json", []),
+        (
+            ROOT / "dist/all-requirements.txt",
+            "dist/all-vulnerability-report.json",
+            ["--all-extras"],
+        ),
+    ):
+        _run(
+            [
+                "uv",
+                "export",
+                "--frozen",
+                "--no-dev",
+                "--no-emit-project",
+                *extras,
+                "--output-file",
+                str(requirements),
+            ]
+        )
+        _run(
+            [
+                "uv",
+                "run",
+                "--no-sync",
+                "pip-audit",
+                "--requirement",
+                str(requirements),
+                "--no-deps",
+                "--disable-pip",
+                "--strict",
+                "--format",
+                "json",
+                "--output",
+                report,
+            ]
+        )
     wheel = next(path for path in distributions if path.suffix == ".whl")
     doctor_payload: dict[str, object]
     with tempfile.TemporaryDirectory(prefix="bodycomposition-wheel-") as temporary:
